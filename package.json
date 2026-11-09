@@ -1,5 +1,5 @@
 {
-  "name": "internal-rt-test-agent-skills",
+  "name": "test-agent-skills",
   "version": "0.1.0",
   "description": "测试 Agent Skill 套件：把测试用例设计等测试能力以 Agent Skill 形式安装到用户级 skill 目录",
   "keywords": [
@@ -12,7 +12,7 @@
   "license": "MIT",
   "type": "module",
   "bin": {
-    "internal-rt-test-agent-skills": "bin/internal-rt-test-agent-skills.mjs"
+    "test-agent-skills": "bin/test-agent-skills.mjs"
   },
   "files": [
     "skills/",

@@ -1,4 +1,4 @@
-# internal-rt-test-agent-skills
+# test-agent-skills
 
 > Full Test —— 测试 Agent Skill 套件（首期能力域：**需求 → 测试用例设计**）
 
@@ -12,15 +12,15 @@
 ## 安装
 
 ```bash
-npm install -g internal-rt-test-agent-skills
-internal-rt-test-agent-skills install
+npm install -g test-agent-skills
+test-agent-skills install
 ```
 
 或安装到某个项目内：
 
 ```bash
-npm install internal-rt-test-agent-skills
-npx internal-rt-test-agent-skills install
+npm install test-agent-skills
+npx test-agent-skills install
 ```
 
 安装后：
@@ -36,7 +36,7 @@ npx internal-rt-test-agent-skills install
 ## CLI
 
 ```
-internal-rt-test-agent-skills <command> [options]
+test-agent-skills <command> [options]
 ```
 
 | 命令 | 说明 |
@@ -47,7 +47,7 @@ internal-rt-test-agent-skills <command> [options]
 
 | 选项 | 说明 |
 |------|------|
-| `--root <dir>` | 指定安装根目录，优先级高于 `INTERNAL_RT_SKILLS_DIR` |
+| `--root <dir>` | 指定安装根目录，优先级高于 `TEST_AGENT_SKILLS_DIR` |
 | `-h, --help` | 帮助 |
 | `-v, --version` | 版本号 |
 
@@ -56,13 +56,13 @@ internal-rt-test-agent-skills <command> [options]
 优先级从高到低：
 
 1. 命令行 `--root <dir>`
-2. 环境变量 `INTERNAL_RT_SKILLS_DIR`
+2. 环境变量 `TEST_AGENT_SKILLS_DIR`
 3. 默认 `~/.agents`
 
-> ⚠️ `INTERNAL_RT_SKILLS_DIR` 覆盖的是 **`~/.agents` 这一层**，不是 `~/.agents/skills` 这一层。
+> ⚠️ `TEST_AGENT_SKILLS_DIR` 覆盖的是 **`~/.agents` 这一层**，不是 `~/.agents/skills` 这一层。
 >
 > ```bash
-> INTERNAL_RT_SKILLS_DIR=/tmp/sandbox internal-rt-test-agent-skills install
+> TEST_AGENT_SKILLS_DIR=/tmp/sandbox test-agent-skills install
 > # → skill 落在 /tmp/sandbox/skills/<name>/
 > # → 锁文件落在 /tmp/sandbox/.skill-lock.json
 > ```
@@ -78,9 +78,9 @@ internal-rt-test-agent-skills <command> [options]
   "version": 3,
   "skills": {
     "test-case-design": {
-      "source": "internal-rt-test-agent-skills@0.1.0",
+      "source": "test-agent-skills@0.1.0",
       "sourceType": "npm",
-      "sourceUrl": "https://registry.npmjs.org/internal-rt-test-agent-skills/-/internal-rt-test-agent-skills-0.1.0.tgz",
+      "sourceUrl": "https://registry.npmjs.org/test-agent-skills/-/test-agent-skills-0.1.0.tgz",
       "skillPath": "SKILL.md",
       "skillFolderHash": "",
       "installedAt": "2026-11-09T08:00:00.000Z",
@@ -120,9 +120,9 @@ internal-rt-test-agent-skills <command> [options]
 npm pack --dry-run
 
 # 在隔离目录验证安装行为
-INTERNAL_RT_SKILLS_DIR=/tmp/sandbox node bin/internal-rt-test-agent-skills.mjs install
-INTERNAL_RT_SKILLS_DIR=/tmp/sandbox node bin/internal-rt-test-agent-skills.mjs list
-INTERNAL_RT_SKILLS_DIR=/tmp/sandbox node bin/internal-rt-test-agent-skills.mjs uninstall
+TEST_AGENT_SKILLS_DIR=/tmp/sandbox node bin/test-agent-skills.mjs install
+TEST_AGENT_SKILLS_DIR=/tmp/sandbox node bin/test-agent-skills.mjs list
+TEST_AGENT_SKILLS_DIR=/tmp/sandbox node bin/test-agent-skills.mjs uninstall
 ```
 
 ## 发布

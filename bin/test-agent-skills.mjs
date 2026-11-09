@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * internal-rt-test-agent-skills —— 测试 Agent Skill 套件的安装器 CLI。
+ * test-agent-skills —— 测试 Agent Skill 套件的安装器 CLI。
  *
  * 职责：把本 npm 包 `skills/` 下的各 skill 复制到用户级 skill 目录，
  * 并与该目录的 `.skill-lock.json` 协同（只增改本包自己的条目）。
@@ -29,7 +29,7 @@ const LOCK_VERSION = 3;
 /** 本包在 lock 文件中的 sourceType。 */
 const SOURCE_TYPE = 'npm';
 /** 本包名（用于在 node_modules 内反查包根目录）。 */
-const PKG_NAME = 'internal-rt-test-agent-skills';
+const PKG_NAME = 'test-agent-skills';
 
 /**
  * 定位包根目录：优先取 bin/ 的上一级；若该目录不是本包（例如被软链/拷贝到别处），
@@ -69,10 +69,10 @@ function readPkgMeta() {
 }
 
 /**
- * 解析安装根目录。优先级：命令行 `--root` > 环境变量 `INTERNAL_RT_SKILLS_DIR` > `~/.agents`。
+ * 解析安装根目录。优先级：命令行 `--root` > 环境变量 `TEST_AGENT_SKILLS_DIR` > `~/.agents`。
  *
- * 注意：`INTERNAL_RT_SKILLS_DIR` 覆盖的是**安装根目录**这一层（默认 `~/.agents`），
- * 而不是 `~/.agents/skills` 这一层。即 `INTERNAL_RT_SKILLS_DIR=/tmp/x` 时：
+ * 注意：`TEST_AGENT_SKILLS_DIR` 覆盖的是**安装根目录**这一层（默认 `~/.agents`），
+ * 而不是 `~/.agents/skills` 这一层。即 `TEST_AGENT_SKILLS_DIR=/tmp/x` 时：
  *   skill 落在 `/tmp/x/skills/<name>/`，锁文件落在 `/tmp/x/.skill-lock.json`。
  *
  * @param {string|undefined} cliRoot 命令行传入的根目录
@@ -80,7 +80,7 @@ function readPkgMeta() {
  */
 function resolveRoot(cliRoot) {
   if (cliRoot) return path.resolve(cliRoot);
-  const env = process.env.INTERNAL_RT_SKILLS_DIR;
+  const env = process.env.TEST_AGENT_SKILLS_DIR;
   if (env && env.trim()) return path.resolve(env.trim());
   return path.join(os.homedir(), '.agents');
 }
@@ -371,10 +371,10 @@ function cmdList(root) {
  * 打印帮助信息。
  */
 function printHelp() {
-  console.log(`internal-rt-test-agent-skills —— 测试 Agent Skill 套件安装器
+  console.log(`test-agent-skills —— 测试 Agent Skill 套件安装器
 
 用法:
-  internal-rt-test-agent-skills <command> [options]
+  test-agent-skills <command> [options]
 
 命令:
   install     把本包 skills/ 下的各 skill 安装到 <安装根>/skills/<name>/（幂等）
@@ -382,19 +382,19 @@ function printHelp() {
   list        列出本包管理的 skill 及其安装状态
 
 选项:
-  --root <dir>  指定安装根目录（默认 ~/.agents）；优先级高于 INTERNAL_RT_SKILLS_DIR
+  --root <dir>  指定安装根目录（默认 ~/.agents）；优先级高于 TEST_AGENT_SKILLS_DIR
   -h, --help    显示本帮助
   -v, --version 显示版本号
 
 安装根目录解析顺序:
   1. 命令行 --root
-  2. 环境变量 INTERNAL_RT_SKILLS_DIR（覆盖的是 ~/.agents 这一层，不是 ~/.agents/skills）
+  2. 环境变量 TEST_AGENT_SKILLS_DIR（覆盖的是 ~/.agents 这一层，不是 ~/.agents/skills）
   3. 默认 ~/.agents
 
 示例:
-  internal-rt-test-agent-skills install
-  INTERNAL_RT_SKILLS_DIR=/tmp/sandbox internal-rt-test-agent-skills install
-  INTERNAL_RT_SKILLS_DIR=/tmp/sandbox internal-rt-test-agent-skills list`);
+  test-agent-skills install
+  TEST_AGENT_SKILLS_DIR=/tmp/sandbox test-agent-skills install
+  TEST_AGENT_SKILLS_DIR=/tmp/sandbox test-agent-skills list`);
 }
 
 /**
