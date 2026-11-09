@@ -6,8 +6,8 @@
 - **前置条件**: 仓库处于 `feature/REQ-001` 分支，npm 可用
 - **测试步骤**:
   1. 在包根执行 `npm pack`，产出 `.tgz`
-  2. 在隔离目录执行 `INTERNAL_RT_SKILLS_DIR=<tmp> npm install <tgz>`
-  3. 执行 `INTERNAL_RT_SKILLS_DIR=<tmp> npx internal-rt-test-agent-skills install`
+  2. 在隔离目录执行 `TEST_AGENT_SKILLS_DIR=<tmp> npm install <tgz>`
+  3. 执行 `TEST_AGENT_SKILLS_DIR=<tmp> npx test-agent-skills install`
   4. 执行 `ls <tmp>/skills/`
 - **预期结果**:
   - `npm pack` 退出码 0，生成 tarball

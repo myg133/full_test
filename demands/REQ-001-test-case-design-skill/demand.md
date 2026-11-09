@@ -161,11 +161,11 @@ test-case-design/
 
 ### F5 npm 包
 
-- 包名 `internal-rt-test-agent-skills`（`registry.npmmirror.com` 与 `registry.npmjs.org` 均未被占用，已核查）；
-- `bin/internal-rt-test-agent-skills` 提供 CLI，至少支持 `install` / `uninstall` / `list`；
+- 包名 `test-agent-skills`（`registry.npmmirror.com` 与 `registry.npmjs.org` 均未被占用，已核查）；
+- `bin/test-agent-skills` 提供 CLI，至少支持 `install` / `uninstall` / `list`；
 - `install` 把 `skills/` 下各 skill 复制到 `~/.agents/skills/<name>/`，**幂等**（重复执行不产生重复目录、不报错）；
 - `install` 同步更新 `~/.agents/skills/.skill-lock.json`：新增 `sourceType: "npm"` 的条目，**保留其他 skill 的既有条目不变**；
-- 支持环境变量 `INTERNAL_RT_SKILLS_DIR` 覆盖安装根目录（便于测试隔离，避免污染真实 skill 目录）；
+- 支持环境变量 `TEST_AGENT_SKILLS_DIR` 覆盖安装根目录（便于测试隔离，避免污染真实 skill 目录）；
 - `package.json` 的 `files` 字段显式声明打包内容。
 
 ### F6 安装行为约束

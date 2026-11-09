@@ -21,9 +21,9 @@
 
 ## 交付位置
 
-- **npm 包**: `internal-rt-test-agent-skills@0.1.0`（包根在 develop 分支，即 `code/` worktree）
+- **npm 包**: `test-agent-skills@0.1.0`（包根在 develop 分支，即 `code/` worktree）
 - **skill 安装目标**: `~/.agents/skills/test-case-design/`
-- **安装命令**: `npm install -g internal-rt-test-agent-skills && internal-rt-test-agent-skills install`
+- **安装命令**: `npm install -g test-agent-skills && test-agent-skills install`
 - **发布**: 未执行（需用户 `npm login` 后自行 `npm publish`）
 
 ## 范围外备忘
