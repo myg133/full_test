@@ -19,16 +19,19 @@
 | AC-008 | 脚本零依赖且跨平台 | `scripts/*.mjs` | grep 无 python3/bash//tmp/grep/sed；import 仅 `node:fs` `node:path` `node:process` | PASS |
 | AC-009 | 安装不产生副作用 | `bin/internal-rt-test-agent-skills.mjs` | `~/.bashrc` `~/.zshrc` `~/.profile` mtime+sha 前后一致 | PASS |
 | AC-010 | uninstall 只移除本包 skill | `bin/internal-rt-test-agent-skills.mjs`（uninstall） | 隔离根 uninstall → 本包 skill 移除，他人 skill 与锁条目保留 | PASS |
-| AC-011 | eval 对比不劣于 baseline | `skills/test-case-design/`（全部） | 双轨 eval：with-skill 44 用例 vs baseline 49 用例；token 0.56×；详见 `eval-report.md` | PASS |
+| AC-011 | eval 对比不劣于 baseline | `skills/test-case-design/`（全部） | 双轨 eval：with-skill 44 用例 vs baseline 49 用例；token **1.80×**（未超 2× 上限）；详见 `eval-report.md` | PASS |
 | AC-012 | npm 包不发布到公共 registry | `package.json`（无 private、无 publish 脚本） | git 历史无 publish；`npm whoami` 仍为 ENEEDAUTH | PASS |
 
 ## 未覆盖
 
-无 12 条 AC 全部通过。
+12 条 AC 全部通过，但 **AC-011 的措辞与实测证据有两处偏差**（不影响放行，但需按实测表述）：
+
+1. **AC-011 写「结构化程度优于 baseline」，实测为持平**：with-skill 44/44、baseline 49/49，双方每步都有 action+expected、都有 preconditions、可测试条目覆盖率均 100%。「优于」仅在**需求条目覆盖追溯**一项成立。
+2. **AC-011 未规定 token 上限的具体口径**。实测 with-skill / baseline = **1.80×**（未超 2× 上限，余量约 10%）。初版 eval 报告误写为 0.56×，已订正——见 `eval-report.md` §3 订正记录。
 
 ## 与 AC 的两点偏差说明
 
-1. **AC-002 的"既有条目与安装前完全一致"**：实际比对结果为**内容一致、JSON 缩进格式变化**（单行 compact → 多行 pretty）。条目字段值（source / sourceType / sourceUrl / skillPath / skillFolderHash / installedAt / updatedAt）逐字段相同，`diff` 仅显示格式差异。判定为 PASS——AC 的意图是"既有条目不被破坏"，格式重排不构成破坏。
+1. **AC-002 的"既有条目与安装前完全一致"**：QA 独立实测确认——既有锁文件在安装前后**字节级无变化**（真实 `~/.agents/.skill-lock.json` 本身即为 2 空格 pretty 格式，安装器 `writeLock` 输出格式与之一致）。初版此处描述的"compact → pretty 格式变化"属多余顾虑，不成立。
 
 2. **AC-012 的解读**：验收标准写的是「`private` 为 `true` **或** 发布流程明确留给用户手动执行」。实现走的是后一条分支——`package.json` 未设 `private`（最终要能发布），README 中明确写明 `npm login` / `npm publish` 由用户自行执行，仓库内无任何 publish 脚本或自动化。判定为 PASS。
 
@@ -52,6 +55,16 @@ INTERNAL_RT_SKILLS_DIR=<root> npx --prefix <consumer> internal-rt-test-agent-ski
 
 ## 遗留风险
 
-1. **LICENSE 选用 MIT**：仓库无既有许可证，实现者选了 MIT。属项目级决策，需用户确认（改动量约 2 行）。
-2. **同名 skill 冲突策略**：`install` 会覆盖同名的非 npm 来源 skill 目录并改写其锁条目；`uninstall` 则跳过不动。AC 未覆盖该场景，当前行为为"npm 包优先"。
-3. **`derived` 字段缺失**：eval 发现 baseline 自发使用 `requirements[].derived` 标注隐含需求，skill schema 无此概念。已记入 `eval-report.md` 改进建议 1，留待后续 REQ。
+以下为 QA 独立验收阶段补充确认的风险，均**不阻断本次放行**：
+
+1. **同名 skill 冲突：`install` 会覆盖同名的非本包 skill**（QA 实测确认）。用户本地若已有其他来源的同名 `test-case-design`，安装会替换其 `SKILL.md`、**删除**源中不存在的用户自有文件（`local-note.txt`），并改写其锁条目为 `sourceType: "npm"`。AC-002 的措辞只约束"其他 skill"（不同名），故不判 AC 失败，但属真实破坏性行为。→ 建议后续 REQ 加同名冲突保护（检测到同名且来源非 npm 时报错退出，而非覆盖）。
+2. **误发布风险**：`package.json` 未设 `private: true`，且带 `publishConfig.access: "public"`，一次误操作 `npm publish` 即公开发布。AC-012 明确允许"发布流程留给用户手动执行"分支（README 已写明），故判 PASS。
+3. **构建产物未忽略**：worktree 遗留未跟踪的 `internal-rt-test-agent-skills-0.1.0.tgz`，`.gitignore` 未忽略 `*.tgz`，后续 `git add -A` 会将其提交进仓库。→ 合并前清理。
+4. **LICENSE 选用 MIT**：仓库无既有许可证，实现者选了 MIT。属项目级决策，需用户确认（改动量约 2 行）。
+5. **`derived` 字段缺失**：eval 发现 baseline 自发使用 `requirements[].derived` 标注隐含需求，skill schema 无此概念。已记入 `eval-report.md` 改进建议 1，留待后续 REQ。
+
+## 未验证项
+
+- eval 未重跑（QA 按指示改为审查结论可信性，验证的是数据一致性与报告是否存在选择性呈现）。
+- 未在真实 `~/.agents/skills/` 下安装（全程 `INTERNAL_RT_SKILLS_DIR` 隔离，避免污染用户 git 仓库）。
+- Windows / macOS 实际运行未验证（AC-008 为源码层静态核查：零第三方依赖、无平台相关调用）。
