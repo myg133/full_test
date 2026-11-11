@@ -534,28 +534,33 @@ fi
 
 # ---------------------------------------------------------------- AC-023
 # QA P2: 推进器与校验器对 scopes_skipped 缺陷报告一致
+# 注意: 校验器对注入缺陷必须"拦"(退出码非0)。用 && 判"被放行"(退出码0)才是逃逸。
 D="$WORK/ac023"; mkdir -p "$D"
 INJ_OK=1
 for DEF in "delete o.scopes_skipped[0].at" "delete o.scopes_skipped[0].by" "o.scopes_skipped[0].reason=''"; do
   T="$D/$(echo "$DEF" | md5sum | cut -c1-8)"; mkdir -p "$T"
-  node "$CS" init "$T/R1-REQ-001" --cycle-id R1-REQ-001 --round R1 --round-type new-requirement \
-    --requirement REQ-001 --scope functional --by dev >/dev/null 2>&1
-  node "$CS" skip-scope "$T/R1-REQ-001" --scope load --reason "无阈值可依" --by dev-agent-1 >/dev/null 2>&1
+  # 造合法项目（轮次必须在 test-assets/cycles/ 下，否则校验器只会报 test-assets 缺失，
+  # 那样 fail 的原因就不是注入的缺陷，信号无效）
+  make_project "$T"
+  CYC2="$T/test-assets/cycles/R1-REQ-001"
   node -e "
 const fs=require('fs'),f=process.argv[1];const o=JSON.parse(fs.readFileSync(f,'utf8'));
+o.scopes_skipped=[{scope:'load',reason:'无阈值可依',at:'2026-11-11T18:00:00+08:00',by:'dev-agent-1'}];
 $DEF
 fs.writeFileSync(f,JSON.stringify(o,null,2));
-" "$T/R1-REQ-001/cycle.json"
-  # 校验器必须拦
-  node "$VL" "$T" >/dev/null 2>&1 || { INJ_OK=0; continue; }
-  # 推进器四个子命令必须全部拒绝，且不得写坏文件
-  SB="$(sha "$T/R1-REQ-001/cycle.json")"
-  node "$CS" show "$T/R1-REQ-001" --json >/dev/null 2>&1; [ $? -eq 0 ] && INJ_OK=0
-  node "$CS" advance "$T/R1-REQ-001" --to in_progress --by dev >/dev/null 2>&1; [ $? -eq 0 ] && INJ_OK=0
-  node "$CS" skip-scope "$T/R1-REQ-001" --scope load --reason "again" --by dev >/dev/null 2>&1; [ $? -eq 0 ] && INJ_OK=0
-  node "$CS" set-stage "$T/R1-REQ-001" --stage design --status done >/dev/null 2>&1; [ $? -eq 0 ] && INJ_OK=0
-  SA="$(sha "$T/R1-REQ-001/cycle.json")"
-  [ "$SB" = "$SA" ] || INJ_OK=0
+" "$CYC2/cycle.json"
+  # 校验器必须拦: 退出码 0 = 放行 = 逃逸
+  if node "$VL" "$T" >/dev/null 2>&1; then
+    INJ_OK=0; echo "    逃逸(校验器未拦): $DEF"; continue
+  fi
+  # 推进器四个子命令必须全部拒绝(退出码非0)，且不得写坏文件
+  SB="$(sha "$CYC2/cycle.json")"
+  node "$CS" show "$CYC2" --json >/dev/null 2>&1 && { INJ_OK=0; echo "    推进器未拦: show"; }
+  node "$CS" advance "$CYC2" --to completed --by dev >/dev/null 2>&1 && { INJ_OK=0; echo "    推进器未拦: advance"; }
+  node "$CS" skip-scope "$CYC2" --scope load --reason "again" --by dev >/dev/null 2>&1 && { INJ_OK=0; echo "    推进器未拦: skip-scope"; }
+  node "$CS" set-stage "$CYC2" --stage design --status done >/dev/null 2>&1 && { INJ_OK=0; echo "    推进器未拦: set-stage"; }
+  SA="$(sha "$CYC2/cycle.json")"
+  [ "$SB" = "$SA" ] || { INJ_OK=0; echo "    推进器写坏了文件: $DEF"; }
 done
 if [ $INJ_OK -eq 1 ]; then
   ok "AC-023 推进器与校验器对 scopes_skipped 缺陷报告一致"
@@ -574,7 +579,8 @@ const fs=require('fs'),f=process.argv[1];const o=JSON.parse(fs.readFileSync(f,'u
 $2
 fs.writeFileSync(f,JSON.stringify(o,null,2));
 " "$d/test-assets/cycles/R1-REQ-001/cycle.json" 2>/dev/null
-  node "$VL" "$d" >/dev/null 2>&1 || { TYP_OK=0; echo "    逃逸: $1"; }
+  # 校验器必须拦: 退出码 0 = 放行 = 逃逸
+  if node "$VL" "$d" >/dev/null 2>&1; then TYP_OK=0; echo "    逃逸: $1"; fi
 }
 run_mut "stages-status缺失"   "o.stages.design={};"
 run_mut "stages-status类型错" "o.stages.design.status=123;"
