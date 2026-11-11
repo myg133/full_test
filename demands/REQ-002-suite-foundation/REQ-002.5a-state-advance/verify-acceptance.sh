@@ -124,12 +124,12 @@ fi
 
 # ---------------------------------------------------------------- AC-002
 D="$WORK/ac002"; mkdir -p "$D"
-node "$CS" init "$D/c" --cycle-id R1-REQ-001 --round R1 --round-type new-requirement \
+node "$CS" init "$D/R1-REQ-001" --cycle-id R1-REQ-001 --round R1 --round-type new-requirement \
   --requirement REQ-001 --scope functional --by dev >/dev/null 2>&1
-if node "$CS" advance "$D/c" --to in_progress --by dev-agent-1 >/dev/null 2>&1; then
-  ST="$(jget "$D/c/cycle.json" status)"
-  LAST="$(jget "$D/c/cycle.json" history -1 2>/dev/null)"
-  N="$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).history.length)' "$D/c/cycle.json")"
+if node "$CS" advance "$D/R1-REQ-001" --to in_progress --by dev-agent-1 >/dev/null 2>&1; then
+  ST="$(jget "$D/R1-REQ-001/cycle.json" status)"
+  LAST="$(jget "$D/R1-REQ-001/cycle.json" history -1 2>/dev/null)"
+  N="$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).history.length)' "$D/R1-REQ-001/cycle.json")"
   if [ "$ST" = "in_progress" ] && echo "$LAST" | grep -q '"from":"planned"' && echo "$LAST" | grep -q '"to":"in_progress"' && [ "$N" = "2" ]; then
     ok "AC-002 合法推进同时更新 status 与 history"
   else
@@ -141,11 +141,11 @@ fi
 
 # ---------------------------------------------------------------- AC-003
 D="$WORK/ac003"; mkdir -p "$D"
-node "$CS" init "$D/c" --cycle-id R1-REQ-001 --round R1 --round-type new-requirement \
+node "$CS" init "$D/R1-REQ-001" --cycle-id R1-REQ-001 --round R1 --round-type new-requirement \
   --requirement REQ-001 --scope functional --by dev >/dev/null 2>&1
-BEFORE="$(sha "$D/c/cycle.json")"
-OUT="$(node "$CS" advance "$D/c" --to completed --by dev-agent-1 2>&1)"; RC=$?
-AFTER="$(sha "$D/c/cycle.json")"
+BEFORE="$(sha "$D/R1-REQ-001/cycle.json")"
+OUT="$(node "$CS" advance "$D/R1-REQ-001" --to completed --by dev-agent-1 2>&1)"; RC=$?
+AFTER="$(sha "$D/R1-REQ-001/cycle.json")"
 if [ $RC -eq 1 ] && [ "$BEFORE" = "$AFTER" ] && echo "$OUT" | grep -qi "in_progress"; then
   ok "AC-003 非法转移被拒绝且文件零改动"
 else
@@ -154,13 +154,13 @@ fi
 
 # ---------------------------------------------------------------- AC-004
 D="$WORK/ac004"; mkdir -p "$D"
-node "$CS" init "$D/c" --cycle-id R1-REQ-001 --round R1 --round-type new-requirement \
+node "$CS" init "$D/R1-REQ-001" --cycle-id R1-REQ-001 --round R1 --round-type new-requirement \
   --requirement REQ-001 --scope functional --by dev >/dev/null 2>&1
-node "$CS" advance "$D/c" --to in_progress --by dev >/dev/null 2>&1
-node "$CS" advance "$D/c" --to blocked --by dev >/dev/null 2>&1
-if node "$CS" advance "$D/c" --to in_progress --by dev-agent-1 >/dev/null 2>&1; then
-  ST="$(jget "$D/c/cycle.json" status)"
-  LAST="$(jget "$D/c/cycle.json" history -1 2>/dev/null)"
+node "$CS" advance "$D/R1-REQ-001" --to in_progress --by dev >/dev/null 2>&1
+node "$CS" advance "$D/R1-REQ-001" --to blocked --by dev >/dev/null 2>&1
+if node "$CS" advance "$D/R1-REQ-001" --to in_progress --by dev-agent-1 >/dev/null 2>&1; then
+  ST="$(jget "$D/R1-REQ-001/cycle.json" status)"
+  LAST="$(jget "$D/R1-REQ-001/cycle.json" history -1 2>/dev/null)"
   if [ "$ST" = "in_progress" ] && echo "$LAST" | grep -q '"to":"in_progress"'; then
     ok "AC-004 blocked → in_progress 允许解除阻塞"
   else
@@ -175,13 +175,13 @@ D="$WORK/ac005"; mkdir -p "$D"
 TERM_OK=1
 for TERM in completed cancelled; do
   T="$D/$TERM"; mkdir -p "$T"
-  node "$CS" init "$T/c" --cycle-id "R1-$TERM" --round R1 --round-type new-requirement \
+  node "$CS" init "$T/R1-$TERM" --cycle-id "R1-$TERM" --round R1 --round-type new-requirement \
     --requirement REQ-001 --scope functional --by dev >/dev/null 2>&1
-  node "$CS" advance "$T/c" --to in_progress --by dev >/dev/null 2>&1
-  node "$CS" advance "$T/c" --to "$TERM" --by dev >/dev/null 2>&1
-  BEFORE="$(sha "$T/c/cycle.json")"
-  node "$CS" advance "$T/c" --to in_progress --by dev >/dev/null 2>&1; RC=$?
-  AFTER="$(sha "$T/c/cycle.json")"
+  node "$CS" advance "$T/R1-$TERM" --to in_progress --by dev >/dev/null 2>&1
+  node "$CS" advance "$T/R1-$TERM" --to "$TERM" --by dev >/dev/null 2>&1
+  BEFORE="$(sha "$T/R1-$TERM/cycle.json")"
+  node "$CS" advance "$T/R1-$TERM" --to in_progress --by dev >/dev/null 2>&1; RC=$?
+  AFTER="$(sha "$T/R1-$TERM/cycle.json")"
   if [ $RC -ne 1 ] || [ "$BEFORE" != "$AFTER" ]; then
     TERM_OK=0
     bad "AC-005 终态不可离开" "$TERM 未被正确拒绝 (rc=$RC)"
@@ -191,13 +191,13 @@ done
 
 # ---------------------------------------------------------------- AC-006
 D="$WORK/ac006"; mkdir -p "$D"
-node "$CS" init "$D/c" --cycle-id R1-REQ-001 --round R1 --round-type new-requirement \
+node "$CS" init "$D/R1-REQ-001" --cycle-id R1-REQ-001 --round R1 --round-type new-requirement \
   --requirement REQ-001 --scope functional --by dev >/dev/null 2>&1
-BEFORE="$(sha "$D/c/cycle.json")"
-node "$CS" skip-scope "$D/c" --scope load >/dev/null 2>&1; RC1=$?
-node "$CS" skip-scope "$D/c" --scope load --reason "" >/dev/null 2>&1; RC2=$?
-AFTER="$(sha "$D/c/cycle.json")"
-SKIPPED="$(jget "$D/c/cycle.json" scopes_skipped)"
+BEFORE="$(sha "$D/R1-REQ-001/cycle.json")"
+node "$CS" skip-scope "$D/R1-REQ-001" --scope load >/dev/null 2>&1; RC1=$?
+node "$CS" skip-scope "$D/R1-REQ-001" --scope load --reason "" >/dev/null 2>&1; RC2=$?
+AFTER="$(sha "$D/R1-REQ-001/cycle.json")"
+SKIPPED="$(jget "$D/R1-REQ-001/cycle.json" scopes_skipped)"
 if [ $RC1 -eq 1 ] && [ $RC2 -eq 1 ] && [ "$BEFORE" = "$AFTER" ] && [ "$SKIPPED" = "[]" ] || [ -z "$SKIPPED" ]; then
   ok "AC-006 skip-scope 强制非空理由"
 else
@@ -206,10 +206,10 @@ fi
 
 # ---------------------------------------------------------------- AC-007
 D="$WORK/ac007"; mkdir -p "$D"
-node "$CS" init "$D/c" --cycle-id R1-REQ-001 --round R1 --round-type new-requirement \
+node "$CS" init "$D/R1-REQ-001" --cycle-id R1-REQ-001 --round R1 --round-type new-requirement \
   --requirement REQ-001 --scope functional --by dev >/dev/null 2>&1
-if node "$CS" skip-scope "$D/c" --scope load --reason "需求未给性能指标，无阈值可依" >/dev/null 2>&1; then
-  SK="$(jget "$D/c/cycle.json" scopes_skipped 0)"
+if node "$CS" skip-scope "$D/R1-REQ-001" --scope load --reason "需求未给性能指标，无阈值可依" >/dev/null 2>&1; then
+  SK="$(jget "$D/R1-REQ-001/cycle.json" scopes_skipped 0)"
   if echo "$SK" | grep -q '"scope":"load"' && echo "$SK" | grep -q '需求未给性能指标'; then
     ok "AC-007 skip-scope 正常写入"
   else
@@ -221,10 +221,10 @@ fi
 
 # ---------------------------------------------------------------- AC-008
 D="$WORK/ac008"; mkdir -p "$D"
-node "$CS" init "$D/c" --cycle-id R1-REQ-001 --round R1 --round-type new-requirement \
+node "$CS" init "$D/R1-REQ-001" --cycle-id R1-REQ-001 --round R1 --round-type new-requirement \
   --requirement REQ-001 --scope functional --by dev >/dev/null 2>&1
-if node "$CS" set-stage "$D/c" --stage design --status done >/dev/null 2>&1; then
-  SS="$(jget "$D/c/cycle.json" stages design status)"
+if node "$CS" set-stage "$D/R1-REQ-001" --stage design --status done >/dev/null 2>&1; then
+  SS="$(jget "$D/R1-REQ-001/cycle.json" stages design status)"
   if [ "$SS" = "done" ]; then
     ok "AC-008 set-stage 写入阶段状态"
   else
@@ -255,11 +255,11 @@ fi
 
 # ---------------------------------------------------------------- AC-010
 D="$WORK/ac010"; mkdir -p "$D"
-node "$CS" init "$D/c" --cycle-id R1-REQ-001 --round R1 --round-type new-requirement \
+node "$CS" init "$D/R1-REQ-001" --cycle-id R1-REQ-001 --round R1 --round-type new-requirement \
   --requirement REQ-001 --scope functional --by dev >/dev/null 2>&1
-node "$CS" advance "$D/c" --to in_progress --by dev >/dev/null 2>&1
-PARSE="$(node -e 'try{JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log("ok")}catch(e){console.log("fail")}' "$D/c/cycle.json")"
-LEFTOVER="$(ls -a "$D/c" | grep -Ev '^(\.|\.\.|cycle\.json)$' | tr '\n' ' ')"
+node "$CS" advance "$D/R1-REQ-001" --to in_progress --by dev >/dev/null 2>&1
+PARSE="$(node -e 'try{JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log("ok")}catch(e){console.log("fail")}' "$D/R1-REQ-001/cycle.json")"
+LEFTOVER="$(ls -a "$D/R1-REQ-001" | grep -Ev '^(\.|\.\.|cycle\.json)$' | tr '\n' ' ')"
 if [ "$PARSE" = "ok" ] && [ -z "$(echo "$LEFTOVER" | tr -d ' ')" ]; then
   ok "AC-010 原子写 —— 合法 JSON 且无残留临时文件"
 else
@@ -351,7 +351,7 @@ try{
   const o=execFileSync("node",[process.argv[1],"show",process.argv[2],"--json"],{encoding:"utf8",stdio:["ignore","pipe","ignore"]});
   JSON.parse(o);console.log("ok");
 }catch(e){console.log("fail");}
-' "$CS" "$WORK/ac016c" 2>/dev/null)"
+' "$CS" "$WORK/ac016c/R1-REQ-001" 2>/dev/null)"
 if [ "$DEPS" = "0" ] && [ "$EXT" = "0" ] && [ "$BASHY" = "0" ] && [ "$JSONOK" = "ok" ]; then
   ok "AC-016 零依赖 + 可移植 + agent 友好"
 else
