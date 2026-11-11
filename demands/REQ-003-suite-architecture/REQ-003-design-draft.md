@@ -410,139 +410,269 @@ R3-BUG-007/cycle.json
 
 **契约要求**：每条 `status: failed` 的用例，必须有对应的 `evidence/<case_id>/meta.json`，且 `meta.steps[].actual` 非空。否则视为"未留证"，报告生成时必须显式列出，不能悄悄算作普通失败。
 
-### 4.5 证据的生命周期
+### 4.5 证据的生命周期与归档（用户决策：不进 Git，脱敏进制品库）
 
 | 阶段 | 位置 | 进 Git? |
 |---|---|---|
 | 执行产生 | `.test-artifacts/` | ❌ |
-| 归档（附到 bug 单） | `test-assets/cycles/<cycle>/evidence/` 或 CI 制品 | 视密级定 |
+| **脱敏** | 原地生成脱敏副本 | ❌ |
+| **归档** | **CI 制品库**（脱敏后） | ❌（制品库存储） |
 | 复现验证后清理 | 按保留策略 | — |
 
-**默认不进 Git**——证据可能含敏感数据（token、真实用户 ID）。若需要随仓库留存，必须先脱敏（`meta.json` 里的 `redaction` 字段声明脱敏项）。
+**脱敏规则**（由 `collect-evidence.py` 执行，规则写在 `.tools/manifest.json` 的 `redaction` 段）：
+
+| 敏感类型 | 处理 |
+|---|---|
+| Authorization / Cookie / Token 头 | 值替换为 `<redacted:token>` |
+| 手机号 / 邮箱 / 身份证 | 保留前 3 位 + 后 2 位，中间掩码 |
+| 用户 ID / 订单号 | 哈希为稳定假名（同值映射到同假名，便于跨证据对照） |
+| URL 中的 query 参数 | 全部剥离 |
+| 响应体中的业务字段 | 按字段名白名单剥离 |
+
+**脱敏必须可审计**——`meta.json` 记录 `redaction` 段：
+
+```json
+{
+  "redaction": {
+    "applied_at": "2026-11-11T10:31:00+08:00",
+    "rules_version": "1.0",
+    "fields_redacted": [
+      { "path": "request.headers.Authorization", "type": "token", "count": 1 },
+      { "path": "response.body.data.phone", "type": "phone", "count": 1 }
+    ],
+    "pseudonym_map_ref": ".test-artifacts/.../pseudonyms.json"
+  }
+}
+```
+
+**制品库归档**：
+
+- 归档物 = 脱敏后的 `evidence/` + `results.json` + `report.md`；
+- 归档命名建议：`<project>-<cycle_id>-<run_id>-<timestamp>.tar.gz`；
+- **制品库需配置访问控制**——即使脱敏，测试数据仍可能透露业务逻辑；
+- `meta.json` 的 `sha256` 在归档后仍有效，可校验制品完整性。
+
+**为什么脱敏后仍不入 Git**：
+
+1. 证据体积大（截图、响应体），会让仓库膨胀；
+2. 二进制文件（截图）进 Git 不可维护；
+3. 脱敏规则会演进，历史证据用新规则解读可能出错；
+4. 制品库天然支持版本、过期、访问控制——Git 不具备这些。
+
+**反例：什么该进 Git**——用例集本身（`cases.json`）、环境配置（脱敏后）、报告的**结论摘要**（不含原始证据）。这些是"资产"，证据是"过程"。
 
 ---
 
 ## 5. 工具链与 `.tools` 目录
 
-### 5.1 `.tools` 与"可见名"规则的协调
+### 5.1 `.tools` 的定位（用户决策）
 
-agent-workspace 规范：**要进 Git 的目录用可见名，纯本地状态才用 `.` 前缀**。
+> "`.tools` 的设计是，测试过程中用到的依赖程序，如果环境中不存在，则安装到 `.tools` 里。不污染系统环境。"
 
-`.tools/` 是要进 Git 的（团队共享工具），但用了 `.` 前缀——这是**有意的例外**，理由：
+**这是一个"按需自举 + 环境隔离"机制**，不是简单的依赖目录。三个属性：
 
-- `.tools/` 是**工具**（工具链配置 + 脚本），不是**资产**（用例、环境）；
-- 与 `test-assets/` 语义区分；
-- 隐藏名让 IDE 和 `ls` 默认不展开，减少干扰。
+| 属性 | 含义 | 实现 |
+|---|---|---|
+| **按需** | 只有测试真正要用到的工具才装 | `manifest.json` 声明依赖，执行前检测 |
+| **不污染系统** | 不 `npm i -g`、不 `pip install` 到系统 site-packages | 本地目录 + 绝对路径调用 |
+| **可复现** | 同一项目在任何机器上跑出同结果 | 版本锁定 + `run.json` 记录 |
 
-**结论**：`.tools/` 进 Git，但需在项目 README 中显式声明此例外。`.gitignore` 内只忽略其内部的依赖与缓存目录。
-
-### 5.2 工具目录结构
+**与"可见名"规则的协调**：`agent-workspace` 规范要求"要进 Git 的目录用可见名，纯本地状态才用 `.` 前缀"。`.tools/` 是**混合体**——配置与锁文件进 Git，下载的二进制与虚拟环境不进。
 
 ```text
 <project-root>/.tools/
-├── README.md                 # 工具清单 + 调用约定
-├── pyproject.toml            # uv 依赖声明
-├── uv.lock                   # 锁文件（进 Git，保证可复现）
-├── package.json              # bun 依赖声明
-├── bun.lock                  # 锁文件
-├── bin/                      # 胶水脚本（薄封装，团队自维护）
-│   ├── run-suite.py          # 功能测试执行器
-│   ├── run-security.py       # 安全测试执行器
-│   ├── run-load.mjs          # 压测执行器（调 loadtest）
-│   ├── collect-evidence.py   # 证据采集与摘要
-│   └── verify-layout.mjs     # 目录契约校验
-├── python/
-│   └── qatest/               # 自研 Python 包
-│       ├── __init__.py
-│       ├── runner.py
-│       ├── evidence.py
-│       └── assertions.py
-└── js/
-    └── loadrunner.mjs        # 压测封装
+├── README.md                 # 工具清单 + 调用约定（进 Git）
+├── manifest.json             # 依赖声明：工具、版本、检测方式、安装方式（进 Git）
+├── pyproject.toml            # uv 依赖（进 Git）
+├── uv.lock                   # 锁文件（进 Git）
+├── package.json              # bun 依赖（进 Git）
+├── bun.lock                  # 锁文件（进 Git）
+├── bin/                      # 胶水脚本（进 Git）
+│   ├── qa                    # ★ 统一入口 + 自举器
+│   ├── run-suite.py
+│   ├── run-security.py
+│   ├── run-load.mjs
+│   ├── collect-evidence.py
+│   └── verify-layout.mjs
+├── python/qatest/            # 自研 Python 包（进 Git）
+├── js/loadrunner.mjs         # 自研 JS 胶水（进 Git）
+│
+├── .venv/                    # uv 虚拟环境（★ 不进 Git）
+├── node/node_modules/        # bun 依赖（★ 不进 Git）
+├── downloads/                # 单二进制工具（★ 不进 Git）
+└── state/installed.json      # 已安装记录（★ 不进 Git）
 ```
 
-### 5.3 工具选型
+`.gitignore` 只需排除四条：`.venv/`、`node/node_modules/`、`downloads/`、`state/`。
 
-| 用途 | 工具 | 运行时 | 理由 |
-|---|---|---|---|
-| 压测 | `loadtest@8.2.1` | **bun** | ab 兼容 + `--rps` 强制速率 + WebSocket；**本机实测 bun TCP 模式 42,255 rps vs node HTTP 模式 2,907 rps（快 14.5×）** |
-| HTTP 执行 | `httpx` | uv | 现代 async HTTP 客户端，uv 装极快 |
-| 数据校验 | `pydantic` | uv | schema 校验与序列化 |
-| 报告渲染 | `jinja2` | uv | HTML 报告模板 |
-| 静态安全扫描 | `bandit` / `semgrep` | uvx | 免安装，`uvx bandit` 直接跑 |
-| 依赖漏洞 | `trivy` / `osv-scanner` | 单二进制 | 单文件、跨平台 |
-| 目录契约校验 | 自研 | **bun**（`.mjs`） | 零依赖、跨平台 |
-| 编排胶水 | 自研 | uv (Python) | httpx + pydantic 生态更顺 |
+### 5.2 自举机制
 
-**压测运行时必须锁版本**。`run.json` 需记录：
+`manifest.json` 声明每个工具的"怎么找、怎么装、怎么跑"：
 
 ```json
 {
-  "tool_versions": {
-    "loadtest": "8.2.1",
-    "bun": "1.4.4",
-    "node": "26.10.0"
-  },
-  "command": ["bun", "run", "node_modules/loadtest/bin/loadtest.js", "http://...", "--cores", "1", "--tcp"]
+  "tools": {
+    "loadtest": {
+      "kind": "npm",
+      "version": "8.2.1",
+      "runtime": "bun",
+      "detect": { "type": "command", "cmd": "loadtest", "version_flag": "--version" },
+      "install": { "type": "npm", "cmd": ["bun", "add", "--no-save", "loadtest@8.2.1"], "cwd": "node" },
+      "run": { "cmd": ["bun", "run", "node_modules/loadtest/bin/loadtest.js"] }
+    },
+    "bandit": {
+      "kind": "uvx",
+      "version": "1.9.4",
+      "detect": { "type": "uvx", "pkg": "bandit", "version_flag": "--version" },
+      "install": { "type": "uvx", "pkg": "bandit==1.9.4" },
+      "run": { "cmd": ["uvx", "bandit"] }
+    },
+    "httpx": {
+      "kind": "uv",
+      "version": "0.28.1",
+      "detect": { "type": "python", "module": "httpx" },
+      "install": { "type": "uv", "cmd": ["uv", "sync", "--frozen"] },
+      "run": { "cmd": ["uv", "run", "--frozen"] }
+    }
+  }
 }
 ```
 
-压测结论（rps、延迟分位）只有在**工具版本 + 运行时版本 + 完整命令行**三者都可追溯时才有意义。bun 与 node 之间 14.5× 的差距就是最好的例证——换运行时不换记录，结论就废了。
+**`bin/qa` 统一入口的执行序**：
 
-### 5.4 调用约定
+```
+1. 读 manifest.json
+2. 对每个需要的工具：
+   a. detect → 系统已有且版本匹配 → 直接用系统的
+   b. 否则 → install 到 .tools/（本地副本），记入 state/installed.json
+3. 用解析出的绝对路径执行
+4. 把「用了哪个工具、哪个版本、哪条命令」写进 run.json
+```
+
+**为什么不直接用 `uvx` / `bunx` 裸调**：
+
+- `uvx` 每次都要解析依赖、每次都可能拿到新版本 → 结果不可复现；
+- `uv sync --frozen` 用锁文件 → 版本确定，第二次跑零网络开销；
+- 系统已有且版本匹配时才复用 → 尊重用户已有环境，不重复安装。
+
+### 5.3 实测结论（本机，2026-11-11）
+
+| 机制 | 实测结果 |
+|---|---|
+| `uv sync`（`UV_PROJECT_ENVIRONMENT=.venv`） | ✅ 装到 `.tools/.venv`，系统 `python3 -c "import httpx"` 仍报 `ModuleNotFoundError` → **未污染** |
+| `bun install`（cwd=`node/`） | ✅ 31 包装到 `.tools/node/node_modules`，`command -v loadtest` 无输出 → **未污染** |
+| `uvx bandit --version` | ✅ `bandit 1.9.4` 正常返回 |
+| `uvx semgrep` | ⚠️ 能下载依赖（拉了 cryptography、pydantic-core），Python 3.14 下兼容性待最终验证 |
+| bun 本地安装的 postinstall | ⚠️ `bun install` 报 `Blocked 1 postinstall` → 需在 manifest 里显式声明信任或改用免 postinstall 的包 |
+
+### 5.4 ⚠️ 硬约束：分发通道只有 PyPI 与 npm 两条
+
+实测（本机）：
+
+| 通道 | 可达性 | 影响 |
+|---|---|---|
+| `pypi.tuna.tsinghua.edu.cn` | ✅ 200 | `uvx` / `uv sync` 可用 |
+| `registry.npmmirror.com` | ✅ 200 | `bun install` 可用 |
+| `github.com/.../releases/download/` | ❌ 返回 `Not Found`（9 字节） | **单二进制直下不可用** |
+| `registry.npmmirror.com/-/binary/{trivy,semgrep,k6,vegeta}` | ❌ 全部 404 | 二进制镜像路径不可用 |
+| Docker daemon | ❌ `inactive`，无 `/var/run/docker.sock` | **容器通道不可用** |
+
+**结论**：**只有 PyPI 与 npm 两条分发通道可用**。
+
+**直接影响工具选型**：
+
+> 优先选**能在 PyPI 或 npm 上分发**的工具（`uvx` / `bun add` 即可拿到）；单二进制工具与容器化工具在本机不可用。
+
+安全工具的具体影响：
+
+| 工具 | 分发方式 | 本机可用性 |
+|---|---|---|
+| `bandit`（Python 静态扫描） | PyPI → `uvx bandit` | ✅ 实测 1.9.4 |
+| `semgrep`（跨语言静态扫描） | PyPI → `uvx semgrep` | ⚠️ 能装，Python 3.14 兼容性待验 |
+| `nuclei`（扫描器生态最全） | GitHub releases | ❌ 不可用 |
+| `trivy` / `osv-scanner`（依赖漏洞） | GitHub releases | ❌ 不可用 |
+| `pip-audit`（PyPI 依赖漏洞） | PyPI → `uvx pip-audit` | ⏳ 待验，**这是依赖漏洞扫描的可行替代** |
+| `npm audit`（npm 依赖漏洞） | 内置于 npm | ✅ 走 npmmirror |
+
+**因此"安全测试含依赖扫描"这一决策的实现路径是**：`bandit`（源码静态扫描）+ `pip-audit` / `npm audit`（依赖漏洞），而非 `nuclei` / `trivy`。若未来环境恢复 GitHub 访问，manifest 支持新增二进制工具即可，无需改设计。
+
+### 5.5 工具选型（据实测修正）
+
+| 用途 | 工具 | 运行时 | 状态 |
+|---|---|---|---|
+| 压测 | `loadtest@8.2.1` | **bun** | ✅ 实测 42,255 rps（bun TCP）vs 2,907（node HTTP），**快 14.5×** |
+| HTTP 执行 | `httpx` | uv | ✅ 实测本地安装不污染系统 |
+| 数据校验 | `pydantic` | uv | ✅ |
+| 报告渲染 | `jinja2` | uv | ✅ |
+| Python 静态安全扫描 | `bandit` | uvx | ✅ 实测 1.9.4 |
+| 跨语言静态扫描 | `semgrep` | uvx | ⚠️ Python 3.14 兼容性待验 |
+| Python 依赖漏洞 | `pip-audit` | uvx | ⏳ 待验（替代 trivy） |
+| npm 依赖漏洞 | `npm audit` | 内置 | ✅ 走 npmmirror |
+| 目录契约校验 | 自研 | **bun**（`.mjs`） | ✅ 零依赖跨平台 |
+| 编排胶水 | 自研 | uv (Python) | httpx + pydantic 生态 |
+
+### 5.6 关于 Python 压测工具
+
+用户原本倾向 Python 侧的压测工具（Locust 一类）。对比后仍推荐 `loadtest`，但**两者可共存**：
+
+| | `loadtest`（bun） | Locust（Python/uv） |
+|---|---|---|
+| 复杂业务流（登录→下单→支付） | ❌ 只能靠 `-P/-H` 参数化，流程受限 | ✅ 场景用 Python 写，任意编排 |
+| 分布式压测 | ❌ | ✅ master/worker |
+| 实时监控 UI | ❌ | ✅ Web UI |
+| 简单单接口压测 | ✅ 极简，一行命令 | 需写场景文件 |
+| 依赖 | npm（bun 本地装） | Python（uv 本地装） |
+
+**结论**：单接口/单端点压测（容量摸底、找拐点）用 `loadtest`；**多步骤业务流程压测**（真实下单链路）需要 Locust 或自研脚本。
+
+由于本项目定位是"通用框架"，建议 `load-profile` skill **生成负载模型 → 由执行器适配**：`load-scenario.json` 加一个 `runner` 字段（`loadtest` / `python`）区分即可，skill 本身不绑定工具。
+
+### 5.7 调用约定
 
 **统一入口，禁止直接调第三方工具**：
 
 ```bash
 # 功能测试
-uv run --project .tools/bin run-suite.py --suite REQ-001-coupon --env staging
+.tools/bin/qa run --suite REQ-001-coupon --env staging
 
 # 压测
-bun run .tools/bin/run-load.mjs --scenario checkout --env staging
+.tools/bin/qa load --scenario checkout --env staging
 
-# 安全静态扫描（免安装）
-uvx bandit -r src/ -f json
+# 安全扫描（自动自举 bandit）
+.tools/bin/qa scan --env staging
 ```
 
 **为什么坚持统一入口**：
 
 1. **参数一致性**——每次都手写 `-c 100 --rps 200 -k`，迟早有人漏参数导致结果不可比；
 2. **证据自动落盘**——直接调工具不会有证据，证据是执行器的责任；
-3. **参数可追溯**——`run.json` 记录完整命令行 + 工具版本，结果可复现；
-4. **单点适配**——换工具只改胶水脚本，用例与配置不动。
+3. **自举透明**——用户不需要知道工具装没装、装在哪，入口负责；
+4. **参数可追溯**——`run.json` 记录完整命令行 + 工具版本 + 运行时版本，结果可复现；
+5. **单点适配**——换工具只改 manifest 与胶水，用例与配置不动。
 
-### 5.5 "单二进制优先"的取舍
+### 5.8 "单二进制优先"的取舍
 
-用户原则是"尽量使用单二进制程序"。但实测下来：
+用户原则是"尽量使用单二进制程序"。结合实测，调整为：
 
-- **完全单二进制做不到**——HTTP 执行、证据采集、报告生成都需要胶水逻辑；
-- **可行的折中**：**第三方工具优先单二进制**（trivy、osv-scanner、nuclei 这类装了就完事），**胶合逻辑用 uv/bun 托管**（依赖锁进仓库，环境可复现）。
+> **第三方工具优先"单一分发单元"**——能 `uvx` 拿到就 `uvx`，能 `bun add` 拿到就 `bun add`，都是零全局污染的一次性获取。
+>
+> **胶合逻辑用 uv/bun 托管**——依赖锁进仓库，环境可复现。
 
-具体清单：
+完全单二进制做不到：HTTP 执行、证据采集、报告生成都需要胶水逻辑。且本机 GitHub 不可达，单二进制路径本就受限——**PyPI/npm 分发在当前网络环境下反而是"最接近单二进制"的可行形态**（一次获取、零全局污染）。
 
-| 类型 | 工具 | 形态 |
-|---|---|---|
-| 第三方独立工具 | `trivy`、`osv-scanner`、`nuclei` | 单二进制 |
-| 第三方库 | `httpx`、`pydantic`、`jinja2` | uv/bun 管理 |
-| 压测 | `loadtest` | npm，bun 运行 |
-| 自研胶水 | runner / evidence / verify | uv (Python) + bun (JS) |
-
-### 5.6 环境自举
+### 5.9 环境自举
 
 首次使用：
 
 ```bash
-cd .tools
-uv sync                      # 装 Python 依赖（按 uv.lock）
-bun install                  # 装 JS 依赖（按 bun.lock）
+.tools/bin/qa doctor          # 检查缺什么，报告将要安装什么
+.tools/bin/qa bootstrap       # 按 manifest 装齐（只装本地副本）
 ```
 
 **两条纪律**：
 
 - `uv.lock` / `bun.lock` **必须进 Git**——否则依赖漂移，测试结果不可比；
-- 工具版本记进 `run.json`（`tool_versions` 字段），保证结果可追溯。
-
----
+- 工具版本记进 `run.json` 的 `tool_versions`，保证结果可追溯。
 
 ## 6. 套件 skill 清单（修订）
 
@@ -571,14 +701,54 @@ load-profile (压测场景) ──┘
 
 ---
 
-## 7. 待确认项
+## 7. 决策状态（已对齐）
 
-| # | 问题 | 我的建议 |
-|---|------|---------|
-| Q1 | "loast" 确认是 npm `loadtest` 吗？ | 是（npm 上 `loast` 是 Lighthouse API 专用工具，与压测无关） |
-| Q2 | 压测运行时用 bun 还是 node？ | **bun**（实测 TCP 模式 62k vs node 19k rps） |
-| Q3 | 证据默认是否进 Git？ | **不进**（可能含敏感数据）；归档走 CI 制品或脱敏后入库 |
-| Q4 | 安全测试做到哪层——只测本应用，还是含依赖扫描？ | 含依赖扫描（trivy/osv-scanner），但作为独立子项而非用例 |
-| Q5 | `.tools/` 用 `.` 前缀的例外是否接受？ | 接受（工具 vs 资产的语义区分），需在 README 声明 |
-| Q6 | REQ-002 是否扩到包含 R2/R3/安全/压测？ | **不扩**——REQ-002 只做 R1 改造（地基），其余按 §6 顺序分 REQ |
-| Q7 | 轮次状态由谁写——BA 还是执行者？ | 执行者写轮次状态，BA 写用例生命周期状态（§3.2） |
+| # | 问题 | 决策 |
+|---|------|------|
+| Q1 | 压测工具 | ✅ **npm `loadtest`**（本机实测可跑，bun TCP 模式 42,255 rps） |
+| Q2 | 压测运行时 | ✅ **bun**（比 node 快 14.5×） |
+| Q3 | 证据是否进 Git | ✅ **不进 Git，脱敏后进制品库**（见 §4.5） |
+| Q4 | 安全测试是否含依赖扫描 | ✅ **含**（受分发通道限制，依赖扫描用 `pip-audit` + `npm audit` 替代 trivy/osv-scanner，见 §5.4） |
+| Q5 | `.tools/` 命名 | ✅ **特殊名称 `.tools/` 单独标识**（工具 vs 资产的语义区分，见 §5.1） |
+| Q6 | REQ-002 范围 | ✅ **扩展**——含 R1 改造 + R2/R3 + 安全 + 压测（见 §8） |
+| Q7 | 轮次状态写入者 | ✅ 执行者写轮次状态，BA 写用例生命周期状态（§3.2） |
+
+## 8. REQ-002 扩展后的拆分
+
+用户决策 REQ-002 扩展到覆盖全部能力域。但**7 个 skill 一次性做完不现实**——schema 还没稳定就并行分叉必然返工（这正是 REQ-001 eval 暴露的风险模式）。
+
+建议：**REQ-002 作为一个 Epic**，内部拆成子 REQ，共享同一套 schema v2 与目录契约：
+
+| 子 REQ | 内容 | 依赖 | 产出 |
+|---|---|---|---|
+| **REQ-002.1** | schema v2（`open_questions` / `method` / `coverage_matrix` / 用例生命周期状态）+ 校验器强制 | — | skill 改造 + 校验器 |
+| **REQ-002.2** | 方法库（`catalog.json` + M0–M4 详库）+ SKILL.md 重写（运行时工作区契约） | 002.1 | 方法库 + skill 本体 |
+| **REQ-002.3** | 目录契约（`test-assets/` + `environments/` + `cycles/`）+ `verify-layout.mjs` | 002.1 | 目录契约 + 校验器 |
+| **REQ-002.4** | `.tools` 自举机制（`manifest.json` + `bin/qa` + 统一入口） | 002.3 | 工具链 |
+| **REQ-002.5** | `test-execute` skill + 证据链（`meta.json` / `reproduction` / sha256） | 002.1, 002.4 | 执行 + 证据 |
+| **REQ-002.6** | `regression-plan` skill（R2：变更影响分析 + 用例选择） | 002.1, 002.2 | R2 能力 |
+| **REQ-002.7** | `defect-verify` skill（R3：复现用例生成） | 002.5 | R3 能力 |
+| **REQ-002.8** | `security-plan` skill（OWASP 全套 + 依赖扫描） | 002.2, 002.4 | 安全能力 |
+| **REQ-002.9** | `load-profile` skill（负载模型 + runner 适配） | 002.4 | 压测能力 |
+| **REQ-002.10** | `test-report` skill（消费所有轮次产出） | 002.5, 002.6 | 报告能力 |
+
+**并行批次划分**（文件所有权互斥）：
+
+| 批次 | 子 REQ | 可并行理由 |
+|---|---|---|
+| B1 | 002.1 + 002.3 | 002.1 改 `validate-cases.mjs`，002.3 新增 `verify-layout.mjs`，文件不重叠 |
+| B2 | 002.2 + 002.4 | 002.2 改 `SKILL.md`/`methods/`，002.4 改 `.tools/`，不重叠 |
+| B3 | 002.5 + 002.6 + 002.8 + 002.9 | 四个新 skill，各自独立目录 |
+| B4 | 002.7 + 002.10 | 依赖 B3 完成 |
+
+**关键约束**：002.1 必须最先完成并合并——它是所有后续子 REQ 的 schema 依赖。
+
+## 9. 遗留风险
+
+| 风险 | 影响 | 缓解 |
+|---|---|---|
+| **GitHub 不可达** | 单二进制安全工具（nuclei/trivy）不可用 | 已用 `bandit` + `pip-audit` + `npm audit` 替代；manifest 支持未来新增 |
+| **semgrep 在 Python 3.14 下兼容性未知** | 跨语言静态扫描可能不可用 | 已在 manifest 中锁 `requires-python`；不可用则降级为仅 bandit |
+| **bun 阻止 postinstall** | 部分需要编译的 npm 包装不上 | manifest 显式声明信任；优先选纯 JS 包 |
+| **Docker daemon 未运行** | 容器化压测/扫描不可用 | 当前设计不依赖 Docker |
+| **用例量可能膨胀** | Layer 0 = 6 条基线，每条目 ≥6 条用例 | 已配套 `skipped-with-reason` 机制；用 eval 实测密度对比裸模型 |
