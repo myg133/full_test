@@ -167,3 +167,10 @@
 - **预期结果**: 两者相等；用例非 `blocked` 时，`reproduction.steps` 里的每一步都必须对应一份真实证据
 - **理由**（D21）: 复现信息是证据链三要素之一。说"跑了两步"却只有一份证据，证据链自身就不可信
 - **类型**: 功能
+
+### AC-023: 用例级载体缺 `path` 判 `incomplete_request_carrier`（不得误诊为"冲突"）
+- **前置条件**: 一条用例带 `request: {query: {a: "1"}}`（**只有 query，没有 path**），`steps[]` 是 `GET /ok`
+- **测试步骤**: 执行后检查该用例的 `status` 与 `error.type`
+- **预期结果**: 判 `blocked`；`error.type` 为 `incomplete_request_carrier`（**不是** `conflicting_request_carrier` —— 缺路径与载体冲突是两种不同的修法：补齐 vs 二选一）
+- **理由**（D23）: 错误信息要指向**真正**的问题。误诊会让调用方去找一个不存在的冲突
+- **类型**: 功能
