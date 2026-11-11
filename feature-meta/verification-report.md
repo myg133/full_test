@@ -26,8 +26,22 @@ bash BA/demands/REQ-002-suite-foundation/REQ-002.4-tools-bootstrap/verify-accept
   <REPO_ROOT>/feature-REQ-002.4
 ```
 
-结果：**16 PASS / 0 FAIL**（AC-001 ~ AC-016 全通过，含真实安装、隔离负向验证、
-幂等、404→failed / 连接被拒→unavailable 的边界断言、分发链路核对）。
+结果：**18 PASS / 0 FAIL**（AC-001 ~ AC-018 全通过，含真实安装、隔离负向验证、
+幂等、404→failed / 连接被拒→unavailable 的边界断言、`doctor` 只读、
+`entry` 路径穿越拦截、分发链路核对）。
+
+### 第二轮：独立验收发现 → 修复复验
+
+第三方独立验收（`BA/.../verification-report.md`）实测出 1 个 P1 + 3 个 P2，本轮同批修复：
+
+| 编号 | 问题 | 修复后实测 |
+|---|---|---|
+| P1-1 | `entry: "../../evil.sh"` → `qa run` 执行了 `.tools/` 之外的脚本 | `qa run` 退出码 1、输出无 `PWNED`；`qa which` 不报越界路径；**四层防御**（清单校验 / `resolveExecutable` 断言 / `cmdRun` 兜底 / `cmdWhich` 拒报） |
+| P2-1 | 只设 `PIP_INDEX_URL` 时把它当来源上报（uv 根本不认） | 不再上报；来源按 uv 优先级解析并显式传给子进程，`state.json` 的来源 == 实际请求的来源 |
+| P2-2 | `install` 模板可跑任意可执行文件 | 第一个 token 不是该 kind 的包管理器 → 清单校验阶段拒绝（退出码 1） |
+| P2-4 | 索引源不可达时只表现为某工具 failed/unavailable | `qa doctor` / `qa install` 额外输出 `[env]` 环境级结论行；契约 §8 与 SKILL.md 写明索引源变量 |
+
+自验脚本同步加了 6 条断言（路径穿越 ×4、命令约束、来源上报）：**PASS=57 FAIL=0**。
 
 ## 2. 关键实测记录
 

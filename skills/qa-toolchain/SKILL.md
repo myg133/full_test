@@ -78,7 +78,7 @@ description: |
 `kind` 决定安装路线：`python` → `.tools/.venv/`（uv），`node` → `.tools/node/`（bun），
 `binary` → `.tools/bin/`（直链下载）。
 
-三条硬规则：
+四条硬规则：
 
 1. **版本必须锁定** —— 形态按 `kind` 分：`python` 用 `name==version`（`bandit==1.7.7`）、
    `node` 用 `name@version`（`semver@7.7.2`）、`binary` 用**纯版本号或完整下载 URL**
@@ -87,6 +87,26 @@ description: |
 2. **install 不得写到 `.tools/` 之外** —— `--user` / `--system` / `--prefix` /
    `.tools/` 外的绝对路径等一律拒绝安装（报"安装路径越界"）。
 3. **verify 必须存在** —— 装完不验证等于没装。
+4. **install 只能跑包管理器** —— 模板的第一个 token 必须是 `uv`/`pip`（python）或
+   `bun`/`npm`（node）；`sh -c ...` 之类一律拒绝安装。
+
+另外，可选字段 `entry` / `module` **只能是文件名 / 模块名**：不得含路径分隔符、
+`..`、绝对路径或 `~`。它们会参与路径拼装，越界即被拒（报"入口路径越界"）——
+白名单放行的是"名字"，真正被执行的文件必须再受一层约束。
+
+## 装 python 工具前先设索引源
+
+uv 默认走 `https://pypi.org/simple`（本机时通时不通），且**不认** `PIP_INDEX_URL`
+（也不读 `/etc/pip.conf`）。先设可达镜像：
+
+```bash
+export UV_DEFAULT_INDEX=https://mirrors.aliyun.com/pypi/simple
+export UV_INDEX_URL="$UV_DEFAULT_INDEX"      # 兼容老版本 uv
+```
+
+node 路线对应 `npm_config_registry`（默认 `https://registry.npmmirror.com`）。
+`qa` 上报的来源只采信包管理器**真正会用**的地址，并把它显式交给子进程 ——
+`state.json` 里记的来源 == 实际请求的来源。
 
 ## 工具装不上时怎么办（重要）
 
@@ -98,9 +118,16 @@ description: |
 > 理由（与整个套件一致）：**没有证据的"通过"比失败更危险。**
 > 工具没装成却报告"没发现问题"，是在制造假的安全感。
 
-先看 `qa doctor` 给出的原因再决定：网络/镜像不可达、缺运行时（uv / bun）、
-还是该 `kind` 在当前环境不可用。当前环境只有 PyPI 镜像与 npm 镜像可达，
-单二进制工具（GitHub releases 分发）装不上，不要写进清单。
+先看 `qa doctor` 给出的原因再决定改哪一边：
+
+| 根因 | 改哪边 |
+|---|---|
+| 索引/网络/运行时不可达（`[env]` 行） | 改**环境**：设 `UV_DEFAULT_INDEX` / `npm_config_registry`，或装 uv / bun |
+| 下载源返回 404/410 | 改**清单**：`install.url` 的地址或版本写错了 |
+| 版本未锁定 / 清单字段非法 | 改**清单** |
+
+当前环境只有 PyPI 镜像与 npm 镜像可达，单二进制工具（GitHub releases 分发）装不上，
+不要写进清单。
 
 ## 注意
 

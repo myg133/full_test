@@ -21,6 +21,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 // ---------------------------------------------------------------------------
@@ -47,6 +48,9 @@ const STATE_VERSION = 1;
 
 /** 每种工具 kind 对应的运行时与安装产物目录。 */
 const KIND_RUNTIME = { python: 'uv', node: 'bun', binary: null };
+
+/** 每种工具 kind 允许的包管理器（install 模板的第一个 token）。 */
+const KIND_PACKAGE_MANAGER = { python: ['uv', 'pip'], node: ['bun', 'npm'] };
 
 /** 项目根 `.gitignore` 必须包含的规则（顺序敏感，缺一不可）。 */
 const GITIGNORE_RULES = ['.tools/*', '!.tools/manifest.json'];
@@ -512,6 +516,76 @@ export function checkInstallBoundary(tool, root) {
 }
 
 /**
+ * 校验可选字段 `entry` / `module` 的合法性。
+ *
+ * 这两个字段会参与**文件路径**的拼装（入口文件名 / Python 模块名），
+ * 因此必须与 `name` 同级对待：不含任何路径语义（分隔符、`..`、绝对路径、`~`）。
+ * 否则白名单只约束了"名字"，真正被执行的文件却可以指向 `.tools/` 之外。
+ *
+ * @param {object} tool 清单条目
+ * @returns {string[]} 违规说明列表（空数组表示通过）
+ */
+export function checkEntryFields(tool) {
+  const problems = [];
+  const entry = tool.entry;
+  if (entry !== undefined && entry !== null) {
+    if (typeof entry !== 'string' || !entry.trim()) {
+      problems.push(`entry 必须是非空字符串（实际 ${JSON.stringify(entry)}）`);
+    } else if (/[\\/]/.test(entry)) {
+      problems.push(`entry 不得包含路径分隔符（实际 "${entry}"）`);
+    } else if (entry.includes('..')) {
+      problems.push(`entry 不得包含 ".."（实际 "${entry}"）`);
+    } else if (entry.startsWith('~')) {
+      problems.push(`entry 不得引用用户主目录（实际 "${entry}"）`);
+    } else if (path.isAbsolute(entry)) {
+      problems.push(`entry 不得是绝对路径（实际 "${entry}"）`);
+    } else if (!/^[A-Za-z0-9][A-Za-z0-9._+-]*$/.test(entry)) {
+      problems.push(`entry 只允许字母数字与 . _ + -（实际 "${entry}"）`);
+    }
+  }
+  const moduleName = tool.module;
+  if (moduleName !== undefined && moduleName !== null) {
+    if (typeof moduleName !== 'string' || !moduleName.trim()) {
+      problems.push(`module 必须是非空字符串（实际 ${JSON.stringify(moduleName)}）`);
+    } else if (/[\\/]/.test(moduleName)) {
+      problems.push(`module 不得包含路径分隔符（实际 "${moduleName}"）`);
+    } else if (moduleName.includes('..')) {
+      problems.push(`module 不得包含 ".."（实际 "${moduleName}"）`);
+    } else if (moduleName.startsWith('~')) {
+      problems.push(`module 不得引用用户主目录（实际 "${moduleName}"）`);
+    } else if (path.isAbsolute(moduleName)) {
+      problems.push(`module 不得是绝对路径（实际 "${moduleName}"）`);
+    } else if (!/^[A-Za-z0-9_][A-Za-z0-9._]*$/.test(moduleName)) {
+      problems.push(`module 只允许字母数字、下划线与点（实际 "${moduleName}"）`);
+    }
+  }
+  return problems;
+}
+
+/**
+ * 校验 install 模板的**第一个 token** —— 必须是该 kind 的包管理器。
+ *
+ * 只约束"写到哪儿"是不够的：模板若能跑任意可执行文件（`sh -c ...`），
+ * "只装包管理器"这条隐含约束就落空了。
+ *
+ * @param {object} tool 清单条目
+ * @returns {string|null} 违规说明；未违规时返回 null
+ */
+export function checkInstallCommand(tool) {
+  const runtimeKey = KIND_RUNTIME[tool.kind];
+  if (!runtimeKey) return null; // binary 走下载 URL 路线，没有命令模板
+  const template = String(tool.install?.[runtimeKey] ?? '').trim();
+  if (!template) return `install.${runtimeKey} 为空`;
+  const tokens = tokenize(template);
+  if (!tokens.length) return `install.${runtimeKey} 为空`;
+  const allowed = KIND_PACKAGE_MANAGER[tool.kind] || [];
+  if (!allowed.includes(tokens[0])) {
+    return `install.${runtimeKey} 的第一个 token 必须是 ${allowed.join(' / ')}（实际 "${tokens[0]}"）`;
+  }
+  return null;
+}
+
+/**
  * 校验整个清单。
  * @param {object} manifest 清单对象
  * @param {string} root 工具链根绝对路径
@@ -576,6 +650,11 @@ export function validateManifest(manifest, root) {
     if (tool.install && typeof tool.install === 'object' && tool.kind) {
       const violation = checkInstallBoundary(tool, root);
       if (violation) errors.push(`工具 ${label} 安装路径越界：${violation}`);
+      const commandViolation = checkInstallCommand(tool);
+      if (commandViolation) errors.push(`工具 ${label} install 命令非法：${commandViolation}`);
+    }
+    for (const problem of checkEntryFields(tool)) {
+      errors.push(`工具 ${label} 入口路径越界：${problem}`);
     }
   });
 
@@ -653,29 +732,46 @@ function findPythonModule(venvDir, moduleName) {
 
 /**
  * 解析工具的可执行入口。
+ *
+ * **越界即拒**：无论入口名来自 `name` 还是可选字段 `entry`，拼装出的路径
+ * 必须落在 `.tools/` 之内，否则返回 null（调用方据此判 `failed` / 拒绝执行）。
+ * 这一层是清单校验之外的兜底：白名单放行的是"名字"，真正被执行的文件必须再受约束。
+ *
  * @param {string} root 工具链根绝对路径
  * @param {object} tool 清单条目
- * @returns {{path: string, args: string[]}|null} 入口描述；未安装时为 null
+ * @returns {{path: string, args: string[]}|null} 入口描述；未安装或越界时为 null
  */
 export function resolveExecutable(root, tool) {
   const entryName = tool.entry || tool.name;
+  const inside = (candidate, args) => (isInsideTools(candidate, root) ? { path: candidate, args } : null);
   if (tool.kind === 'python') {
     const venvBin = path.join(root, '.venv', 'bin');
     const direct = path.join(venvBin, entryName);
-    if (fs.existsSync(direct)) return { path: direct, args: [] };
+    if (fs.existsSync(direct)) return inside(direct, []);
     const moduleName = tool.module || tool.name.replace(/-/g, '_');
     const python = path.join(venvBin, 'python');
     if (fs.existsSync(python) && findPythonModule(path.join(root, '.venv'), moduleName)) {
-      return { path: python, args: ['-m', moduleName] };
+      return inside(python, ['-m', moduleName]);
     }
     return null;
   }
   if (tool.kind === 'node') {
     const candidate = path.join(root, 'node', 'node_modules', '.bin', entryName);
-    return fs.existsSync(candidate) ? { path: candidate, args: [] } : null;
+    return fs.existsSync(candidate) ? inside(candidate, []) : null;
   }
   const candidate = path.join(root, 'bin', entryName);
-  return fs.existsSync(candidate) ? { path: candidate, args: [] } : null;
+  return fs.existsSync(candidate) ? inside(candidate, []) : null;
+}
+
+/**
+ * 判断工具的入口声明是否越界（`entry` / `module` 含路径语义）。
+ *
+ * @param {object} tool 清单条目
+ * @returns {string|null} 违规说明；未违规时返回 null
+ */
+export function entryViolation(tool) {
+  const problems = checkEntryFields(tool);
+  return problems.length ? problems[0] : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -718,6 +814,37 @@ function looksUnavailable(result) {
   return NETWORK_HINTS.some((pattern) => pattern.test(blob));
 }
 
+/**
+ * 判断一个工具状态是否属于"环境级阻塞"（索引/网络/运行时不可达）。
+ *
+ * 目的：让 `qa doctor` 把这类问题**汇总成环境级结论**，
+ * 而不是只表现为某个工具 failed/unavailable —— 前者指向"修环境"，后者指向"改清单"。
+ *
+ * @param {{status: string, reason: string|null}} status 工具状态
+ * @returns {boolean} 是否环境级阻塞
+ */
+function isEnvironmentBlocked(status) {
+  if (!status) return false;
+  if (status.status === STATUS_UNAVAILABLE) return true;
+  const reason = status.reason || '';
+  return NETWORK_HINTS.some((pattern) => pattern.test(reason));
+}
+
+/**
+ * 生成"该修环境"的提示（按 kind 给出对应的镜像/运行时变量）。
+ * @param {object} tool 清单条目
+ * @returns {string} 提示文本
+ */
+function environmentHint(tool) {
+  if (tool.kind === 'python') {
+    return 'python 路线请设置 UV_DEFAULT_INDEX（或 UV_INDEX_URL）指向可达镜像；PIP_INDEX_URL 对 uv 不生效。缺运行时则安装 uv。';
+  }
+  if (tool.kind === 'node') {
+    return 'node 路线请设置 npm_config_registry 指向可达镜像；缺运行时则安装 bun（或 npm）。';
+  }
+  return '请检查该下载源当前是否可达（地址/版本是否存在、来源服务是否在线）。';
+}
+
 // ---------------------------------------------------------------------------
 // 安装
 // ---------------------------------------------------------------------------
@@ -736,16 +863,112 @@ function renderInstallTemplate(tool, root) {
 }
 
 /**
- * 记录安装来源（用于可观测与 state.json）。
+ * 从 uv 配置文件里解析默认索引地址。
+ *
+ * 只做最小解析：uv.toml 的 `default-index` / `index` / `[[index]]` 的 `url`。
+ * 解析不出就返回 null（交给下一级或默认值）。
+ *
+ * @param {string} filePath uv.toml 路径
+ * @returns {string|null} 索引地址
+ */
+function parseUvIndexFile(filePath) {
+  let text;
+  try {
+    text = fs.readFileSync(filePath, 'utf8');
+  } catch {
+    return null;
+  }
+  const patterns = [/^\s*default-index\s*=\s*"([^"]+)"/m, /^\s*index\s*=\s*"([^"]+)"/m, /^\s*url\s*=\s*"([^"]+)"/m];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match) return match[1];
+  }
+  return null;
+}
+
+/**
+ * 从 .npmrc 里解析 registry。
+ * @param {string} filePath .npmrc 路径
+ * @returns {string|null} registry 地址
+ */
+function parseNpmrcRegistry(filePath) {
+  let text;
+  try {
+    text = fs.readFileSync(filePath, 'utf8');
+  } catch {
+    return null;
+  }
+  const match = text.match(/^\s*registry\s*=\s*(.+?)\s*$/m);
+  return match ? match[1] : null;
+}
+
+/**
+ * 解析 uv **实际会使用**的索引地址。
+ *
+ * 优先级与 uv 一致：环境变量 > 项目级 uv.toml > 用户级 uv.toml > 内置默认。
+ * 特别注意：`PIP_INDEX_URL` 对 uv **不生效**（uv 不读 pip 的环境变量与配置），
+ * 因此不能把它当作来源上报 —— 记一个没用过的地址，比不记更糟。
+ *
+ * @param {string} projectRoot 项目根
+ * @returns {{url: string, origin: string}} 索引地址与来源说明
+ */
+export function resolvePythonIndex(projectRoot) {
+  const env = process.env.UV_DEFAULT_INDEX || process.env.UV_INDEX_URL;
+  if (env && env.trim()) {
+    return { url: env.trim(), origin: process.env.UV_DEFAULT_INDEX ? 'UV_DEFAULT_INDEX' : 'UV_INDEX_URL' };
+  }
+  let dir = path.resolve(projectRoot);
+  for (let depth = 0; depth < 20; depth += 1) {
+    const candidate = path.join(dir, 'uv.toml');
+    if (fs.existsSync(candidate)) {
+      const url = parseUvIndexFile(candidate);
+      if (url) return { url, origin: `项目 uv.toml（${candidate}）` };
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  const configPath = process.env.UV_CONFIG_FILE
+    || path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'uv', 'uv.toml');
+  const userUrl = parseUvIndexFile(configPath);
+  if (userUrl) return { url: userUrl, origin: `用户 uv.toml（${configPath}）` };
+  return { url: 'https://pypi.org/simple', origin: 'uv 内置默认索引（未设置 UV_DEFAULT_INDEX / UV_INDEX_URL）' };
+}
+
+/**
+ * 解析 npm/bun **实际会使用**的 registry。
+ * @param {string} projectRoot 项目根
+ * @returns {{url: string, origin: string}} registry 与来源说明
+ */
+export function resolveNodeRegistry(projectRoot) {
+  const env = process.env.npm_config_registry || process.env.NPM_CONFIG_REGISTRY;
+  if (env && env.trim()) {
+    return { url: env.trim(), origin: process.env.npm_config_registry ? 'npm_config_registry' : 'NPM_CONFIG_REGISTRY' };
+  }
+  const project = parseNpmrcRegistry(path.join(projectRoot, '.npmrc'));
+  if (project) return { url: project, origin: '项目 .npmrc' };
+  const user = parseNpmrcRegistry(path.join(os.homedir(), '.npmrc'));
+  if (user) return { url: user, origin: '用户 .npmrc' };
+  return { url: 'https://registry.npmjs.org/', origin: 'npm 内置默认 registry（未设置 npm_config_registry）' };
+}
+
+/**
+ * 解析工具的**实际来源**（用于 state.json 与安装日志）。
+ *
+ * 上报的是包管理器真正会请求的地址，不是"环境里看起来像索引"的变量。
+ *
  * @param {object} tool 清单条目
+ * @param {string} projectRoot 项目根
  * @returns {string} 来源描述
  */
-function resolveSource(tool) {
+function resolveSource(tool, projectRoot) {
   if (tool.kind === 'python') {
-    return process.env.UV_DEFAULT_INDEX || process.env.UV_INDEX_URL || process.env.PIP_INDEX_URL || 'PyPI(默认源)';
+    const index = resolvePythonIndex(projectRoot);
+    return `${index.url}（${index.origin}）`;
   }
   if (tool.kind === 'node') {
-    return process.env.npm_config_registry || process.env.NPM_CONFIG_REGISTRY || 'npm(默认源)';
+    const registry = resolveNodeRegistry(projectRoot);
+    return `${registry.url}（${registry.origin}）`;
   }
   return String(tool.install?.url ?? '');
 }
@@ -867,11 +1090,14 @@ async function performInstall(ctx, tool) {
     const tokens = renderInstallTemplate(tool, root);
     if (!tokens.length) return { status: STATUS_FAILED, reason: 'install 命令为空', detail: {} };
 
+    // 把解析出的索引显式交给 uv：state.json 上报的来源 == uv 实际请求的来源
+    const index = resolvePythonIndex(ctx.projectRoot);
     const env = {
       ...process.env,
       VIRTUAL_ENV: path.join(root, '.venv'),
       UV_PROJECT_ENVIRONMENT: path.join(root, '.venv'),
       UV_CACHE_DIR: path.join(root, 'cache', 'uv'),
+      UV_DEFAULT_INDEX: index.url,
       PATH: [path.join(root, '.venv', 'bin'), process.env.PATH || ''].filter(Boolean).join(path.delimiter),
     };
 
@@ -913,7 +1139,7 @@ async function performInstall(ctx, tool) {
       detail: {
         command: `${command} ${args.join(' ')}`,
         durationMs: res.durationMs,
-        source: resolveSource(tool),
+        source: resolveSource(tool, ctx.projectRoot),
       },
     };
   }
@@ -923,10 +1149,13 @@ async function performInstall(ctx, tool) {
     const tokens = renderInstallTemplate(tool, root);
     if (!tokens.length) return { status: STATUS_FAILED, reason: 'install 命令为空', detail: {} };
 
+    // 同理：把解析出的 registry 显式交给 bun/npm，上报来源 == 实际请求来源
+    const registry = resolveNodeRegistry(ctx.projectRoot);
     const env = {
       ...process.env,
       BUN_INSTALL_CACHE_DIR: path.join(root, 'cache', 'bun'),
       npm_config_cache: path.join(root, 'cache', 'npm'),
+      npm_config_registry: registry.url,
     };
 
     let command = runtimeKey;
@@ -957,7 +1186,7 @@ async function performInstall(ctx, tool) {
       detail: {
         command: `${command} ${args.join(' ')}`,
         durationMs: res.durationMs,
-        source: resolveSource(tool),
+        source: resolveSource(tool, ctx.projectRoot),
       },
     };
   }
@@ -970,7 +1199,7 @@ async function performInstall(ctx, tool) {
   return {
     status: STATUS_OK,
     reason: null,
-    detail: { command: `download ${tool.install.url}`, durationMs: 0, source: resolveSource(tool), bytes: res.detail.bytes },
+    detail: { command: `download ${tool.install.url}`, durationMs: 0, source: resolveSource(tool, ctx.projectRoot), bytes: res.detail.bytes },
   };
 }
 
@@ -1011,6 +1240,18 @@ export function runVerify(projectRoot, tool) {
 function computeStatus(projectRoot, tool, state, verify) {
   const root = toolsRoot(projectRoot);
   const entry = state.tools[tool.name] || null;
+
+  // 入口声明越界（entry / module 含路径语义）：这是**配置错误**，不是"没装"
+  const violation = entryViolation(tool);
+  if (violation) {
+    return {
+      status: STATUS_FAILED,
+      reason: `入口路径越界：${violation}`,
+      executable: null,
+      entry,
+    };
+  }
+
   const executable = resolveExecutable(root, tool);
 
   if (!entry && !executable) {
@@ -1095,11 +1336,20 @@ function cmdDoctor(ctx) {
     return EXIT_FAIL;
   }
   let failed = 0;
+  const envBlocked = [];
   for (const tool of tools) {
     const status = computeStatus(ctx.projectRoot, tool, state, true);
     const suffix = status.reason ? `  —— ${status.reason}` : '';
     console.log(`[${status.status}] ${tool.name}（${tool.kind}, ${tool.spec}）${suffix}`);
     if (status.status !== STATUS_OK) failed += 1;
+    if (isEnvironmentBlocked(status)) envBlocked.push(tool);
+  }
+  // 环境级结论：索引/网络/运行时不可达时，先修环境，别改清单
+  if (envBlocked.length) {
+    const names = envBlocked.map((tool) => tool.name).join('、');
+    console.log(`[env] ${envBlocked.length} 个工具因**环境不可达**未就绪（${names}）—— 这是环境级结论，不是清单问题`);
+    console.log('       先修环境再重试：python 路线 export UV_DEFAULT_INDEX=<可达镜像>；node 路线 export npm_config_registry=<可达镜像>；');
+    console.log('       缺运行时则安装 uv（python）或 bun（node）。修好前，对应能力必须标为"不可用/未覆盖"。');
   }
   console.log(
     failed === 0
@@ -1141,7 +1391,7 @@ async function cmdInstall(ctx) {
     if (spec.error) {
       console.error(`[error] 工具 ${tool.name} 版本未锁定：${spec.error}`);
       console.error(`        请改成精确版本后再安装（例如 ${tool.name}==1.2.3 / ${tool.name}@1.2.3）`);
-      recordFailure(state, tool, STATUS_FAILED, `版本未锁定：${spec.error}`);
+      recordFailure(state, tool, STATUS_FAILED, `版本未锁定：${spec.error}`, ctx.projectRoot);
       problems += 1;
       continue;
     }
@@ -1150,7 +1400,16 @@ async function cmdInstall(ctx) {
     if (violation) {
       console.error(`[error] 工具 ${tool.name} 安装路径越界：${violation}`);
       console.error('        install 命令必须只写入 .tools/ 内部，否则会污染系统环境');
-      recordFailure(state, tool, STATUS_FAILED, `安装路径越界：${violation}`);
+      recordFailure(state, tool, STATUS_FAILED, `安装路径越界：${violation}`, ctx.projectRoot);
+      problems += 1;
+      continue;
+    }
+    // F2 硬规则 4：install 只能跑包管理器
+    const commandViolation = checkInstallCommand(tool);
+    if (commandViolation) {
+      console.error(`[error] 工具 ${tool.name} install 命令非法：${commandViolation}`);
+      console.error(`        install 的第一个 token 必须是该 kind 的包管理器（${(KIND_PACKAGE_MANAGER[tool.kind] || []).join(' / ')}）`);
+      recordFailure(state, tool, STATUS_FAILED, `install 命令非法：${commandViolation}`, ctx.projectRoot);
       problems += 1;
       continue;
     }
@@ -1174,12 +1433,15 @@ async function cmdInstall(ctx) {
     const result = await performInstall(ctx, tool);
     if (result.status !== STATUS_OK) {
       console.error(`[error] ${tool.name} 安装失败（状态：${result.status}）：${result.reason}`);
-      recordFailure(state, tool, result.status, result.reason);
+      if (result.status === STATUS_UNAVAILABLE || isEnvironmentBlocked({ status: result.status, reason: result.reason })) {
+        console.error(`[env] 这是**环境级**结论（不是清单问题）：${environmentHint(tool)}`);
+      }
+      recordFailure(state, tool, result.status, result.reason, ctx.projectRoot);
       problems += 1;
       continue;
     }
 
-    const source = result.detail.source || resolveSource(tool);
+    const source = result.detail.source || resolveSource(tool, ctx.projectRoot);
     console.log(`[install]   来源：${source}`);
     console.log(`[install]   命令：${result.detail.command}`);
     console.log(`[install]   耗时：${(result.detail.durationMs / 1000).toFixed(1)}s`);
@@ -1188,7 +1450,7 @@ async function cmdInstall(ctx) {
     if (!executable) {
       const reason = '安装完成但找不到可执行入口（检查工具的 entry / module 字段）';
       console.error(`[error] ${tool.name} ${reason}`);
-      recordFailure(state, tool, STATUS_FAILED, reason);
+      recordFailure(state, tool, STATUS_FAILED, reason, ctx.projectRoot);
       problems += 1;
       continue;
     }
@@ -1196,7 +1458,7 @@ async function cmdInstall(ctx) {
     const verified = runVerify(ctx.projectRoot, tool);
     if (!verified.ok) {
       console.error(`[error] ${tool.name} 验证未通过：${verified.reason}`);
-      recordFailure(state, tool, STATUS_FAILED, verified.reason);
+      recordFailure(state, tool, STATUS_FAILED, verified.reason, ctx.projectRoot);
       problems += 1;
       continue;
     }
@@ -1210,7 +1472,7 @@ async function cmdInstall(ctx) {
       kind: tool.kind,
       spec: tool.spec,
       version: spec.version,
-      source: tool.kind === 'binary' ? resolveSource(tool) : KIND_RUNTIME[tool.kind],
+      source: tool.kind === 'binary' ? resolveSource(tool, ctx.projectRoot) : KIND_RUNTIME[tool.kind],
       source_detail: {
         runtime: KIND_RUNTIME[tool.kind],
         command: result.detail.command,
@@ -1241,16 +1503,20 @@ async function cmdInstall(ctx) {
  * @param {object} tool 清单条目
  * @param {string} status 失败状态
  * @param {string} reason 原因
+ * @param {string} projectRoot 项目根（用于解析真实来源）
  */
-function recordFailure(state, tool, status, reason) {
+function recordFailure(state, tool, status, reason, projectRoot) {
   const previous = state.tools[tool.name] || {};
+  const source = previous.source
+    || (tool.kind === 'binary' && projectRoot ? resolveSource(tool, projectRoot) : KIND_RUNTIME[tool.kind])
+    || null;
   state.tools[tool.name] = {
     ...previous,
     name: tool.name,
     kind: tool.kind,
     spec: tool.spec,
     version: previous.version || null,
-    source: previous.source || KIND_RUNTIME[tool.kind] || null,
+    source,
     executable: previous.executable || null,
     checksum: previous.checksum || null,
     installed_at: previous.installed_at || null,
@@ -1295,6 +1561,14 @@ function cmdRun(ctx) {
   }
 
   const root = toolsRoot(ctx.projectRoot);
+
+  // 执行前最后一道闸：真正要跑的文件必须在 .tools/ 之内
+  if (!isInsideTools(status.executable.path, root)) {
+    console.error(`[error] 工具 ${name} 的可执行入口路径越界，拒绝执行：${status.executable.path}`);
+    console.error('        契约只允许执行 .tools/ 内的隔离副本');
+    return EXIT_FAIL;
+  }
+
   const env = isolatedEnv(root, tool);
   const argv = [...status.executable.args, ...ctx.passthrough];
   console.log(`[run] ${name} -> ${status.executable.path} ${argv.join(' ')}`.trimEnd());
@@ -1331,6 +1605,11 @@ function cmdWhich(ctx) {
   const status = computeStatus(ctx.projectRoot, tool, state, false);
   if (!status.executable) {
     console.error(`[error] 工具 ${name} 未安装（状态：${status.status}${status.reason ? ` —— ${status.reason}` : ''}）`);
+    return EXIT_FAIL;
+  }
+  // 越界入口绝不能被当成"隔离副本里的可执行文件"报出来
+  if (!isInsideTools(status.executable.path, toolsRoot(ctx.projectRoot))) {
+    console.error(`[error] 工具 ${name} 的可执行入口路径越界，拒绝报出：${status.executable.path}`);
     return EXIT_FAIL;
   }
   const suffix = status.executable.args.length ? ` ${status.executable.args.join(' ')}` : '';

@@ -98,11 +98,17 @@
 
 | 字段 | 适用 kind | 说明 |
 |---|---|---|
-| `entry` | 全部 | 可执行文件名与 `name` 不同时指定（如包 `build` 的入口是 `pyproject-build`） |
-| `module` | `python` | Python 模块名（默认取 `name`，连字符转下划线）。工具只提供模块入口时用它 |
+| `entry` | 全部 | 可执行文件名与 `name` 不同时指定（如包 `build` 的入口是 `pyproject-build`）。**只能是文件名**：不得含路径分隔符 / `..` / 绝对路径 / `~` |
+| `module` | `python` | Python 模块名（默认取 `name`，连字符转下划线）。工具只提供模块入口时用它。**只能是模块名**：同样不得含路径分隔符 / `..` / 绝对路径 / `~` |
 | `install.sha256` | `binary` | 下载产物的期望 sha256，不匹配则安装判为 `failed` |
 
-### 三条硬规则
+> `entry` / `module` 会参与**文件路径**的拼装，所以必须与 `name` 同级对待。
+> 白名单放行的是"名字"，但真正被执行的文件必须再受一层约束 ——
+> 否则 `entry: "../../evil.sh"` 就能让 `qa run` 执行 `.tools/` 之外的任意文件。
+> 越界的 `entry` / `module` 在**清单校验阶段**就被拒（退出码 1，报「入口路径越界」），
+> `resolveExecutable()` / `qa run` / `qa which` 三处另有兜底断言。
+
+### 四条硬规则
 
 1. **版本必须锁定** —— `spec` 必须是精确版本，形态按 `kind` 分列：
 
@@ -122,6 +128,16 @@
    *理由：污染系统后，"这个包到底装没装"会变成噩梦，CI 与本机行为也会分叉。*
 3. **`verify` 必须存在** —— 装完不验证等于没装。`verify.command` 必须**退出码 0** 且
    输出包含 `verify.match`。
+4. **`install` 只能跑包管理器** —— 模板的**第一个 token** 必须是该 kind 的包管理器：
+
+   | kind | 允许的第一个 token | 说明 |
+   |---|---|---|
+   | `python` | `uv` / `pip` | `pip` 是 `uv` 缺失时的合法回退（venv 自带 pip） |
+   | `node` | `bun` / `npm` | `npm` 是 `bun` 缺失时的合法回退 |
+   | `binary` | — | 走下载 URL 路线，没有命令模板 |
+
+   写成 `sh -c ...`、`curl ... | sh` 之类一律**拒绝安装**。
+   *理由：只约束"写到哪儿"是不够的 —— 命令本身不受限，"只装包管理器"这条隐含约束就落空了。*
 
 ### `install` 模板的两种写法
 
@@ -226,8 +242,18 @@ qa [--project <dir>] <子命令> [参数...]
 `qa doctor` 在有任一工具非 `ok` 时退出码为 1；`qa install` 在有任一工具未就绪时退出码为 1。
 
 > **清单校验错误是另一类**：清单本身不合法（缺必填字段、`install` 块缺对应键、
-> 版本未锁定、安装路径越界）时，`qa install` **在安装前**就整体退出码 1 并报
-> 「清单校验失败：…」，此时工具不会进入安装流程，状态表不适用。
+> 版本未锁定、安装路径越界、`entry` / `module` 越界、`install` 第一个 token 不是包管理器）时，
+> `qa install` **在安装前**就整体退出码 1 并报「清单校验失败：…」，
+> 此时工具不会进入安装流程，状态表不适用。
+
+### 环境级结论
+
+`qa doctor` 除了逐个工具给状态，还会把「索引/网络/运行时不可达」这类问题
+**汇总成环境级结论**单独报出来（`[env] …` 行）。理由：这类失败修的是**环境**，
+不是清单 —— 只看到"某个工具 failed"会让人去改清单，改完还是失败。
+
+`qa install` 遇到同类失败时也会给一行 `[env]` 提示。两者都**不写任何文件**
+（`qa doctor` 是只读体检：跑完 `.tools/` 目录树逐项不变）。
 
 ---
 
@@ -293,7 +319,42 @@ qa [--project <dir>] <子命令> [参数...]
 | 仅 PyPI 镜像与 npmmirror 可达，GitHub releases 不可达 | 单二进制工具（`nuclei` / `trivy` / `osv-scanner`）装不上 → 不要写进清单 |
 | npmmirror 的二进制镜像 404 | 纯 JS 工具可装；预编译二进制不可得 |
 | Docker daemon 未运行 | 容器化隔离不可用 → 只能靠目录级隔离 |
-| 索引源来自环境变量 | `UV_DEFAULT_INDEX` / `PIP_INDEX_URL`（Python）、`npm_config_registry`（Node）；`qa` 原样透传，不写死镜像地址 |
+| 索引源来自环境变量 | Python 路线：`UV_DEFAULT_INDEX` / `UV_INDEX_URL`；Node 路线：`npm_config_registry` / `NPM_CONFIG_REGISTRY`。`qa` 不写死镜像地址 |
+
+### 索引源：uv 认哪些变量（**别被 `PIP_INDEX_URL` 骗了**）
+
+| 路线 | 生效的环境变量 | 备注 |
+|---|---|---|
+| Python（uv） | `UV_DEFAULT_INDEX`、`UV_INDEX_URL` | **优先级高于** `uv.toml` 里的 `default-index` |
+| Python（pip 回退） | `PIP_INDEX_URL`、`PIP_EXTRA_INDEX_URL` | 仅当 `uv` 缺失、改用 venv 自带 `pip` 时才生效 |
+| Node（bun / npm） | `npm_config_registry`、`NPM_CONFIG_REGISTRY` | 其次是项目 `.npmrc`、用户 `~/.npmrc` 的 `registry=` |
+
+> ⚠️ **`PIP_INDEX_URL` 对 uv 路线不生效** —— uv 不读 pip 的环境变量，也不读
+> `/etc/pip.conf`。`qa` 上报的来源只采信包管理器**真正会用的**地址：
+> 解析顺序为 `环境变量 > 项目 uv.toml > 用户 uv.toml > 内置默认`，
+> 并把解析结果显式交给子进程（uv 路线设 `UV_DEFAULT_INDEX`，node 路线设
+> `npm_config_registry`），**保证 `state.json` 上报的来源 == 实际请求的来源**。
+>
+> 记一个没用过的地址，比不记更糟 —— 那会让证据链说谎。
+
+### python 路线需要可达镜像
+
+uv 默认走 `https://pypi.org/simple`，本机时通时不通。**装 python 工具前先设索引源**：
+
+```bash
+export UV_DEFAULT_INDEX=https://mirrors.aliyun.com/pypi/simple   # 或任何可达镜像
+export UV_INDEX_URL="$UV_DEFAULT_INDEX"                            # 兼容老版本 uv
+```
+
+索引不可达时，`qa install` 会报 `unavailable`，`qa doctor` 会把它**汇总成环境级结论**：
+
+```
+[env] 1 个工具因**环境不可达**未就绪（bandit）—— 这是环境级结论，不是清单问题
+       先修环境再重试：python 路线 export UV_DEFAULT_INDEX=<可达镜像>；…
+```
+
+**分界**：索引/网络/运行时不可达 → 修**环境**；404/410、版本未锁定、清单字段非法 →
+修**清单**。搞错方向会白折腾（见 §5 的分界表）。
 
 **已知限制**：
 
