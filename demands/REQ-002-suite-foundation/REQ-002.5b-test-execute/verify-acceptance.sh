@@ -357,6 +357,43 @@ else
   bad "AC-020 多步用例全通过" "执行未产出结果"
 fi
 
+# ---------------------------------------------------------------- 共用比对器
+# 「reproduction.steps 的路径序列」vs「evidence/<case>/ 里各证据的 request.path 序列」
+# —— AC-022 与 AC-026b 都要用，抽成一份，避免同一类风险在两条 AC 上留敞口
+# （独立验收 P2-2：AC-022 原先只是纯计数，挡不住"条数对但内容错位"）。
+cat > "$WORK/align-check.mjs" <<'ALIGNEOF'
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+const [runDir, caseId] = process.argv.slice(2);
+let results = [];
+try { results = JSON.parse(readFileSync(join(runDir, 'results.json'), 'utf8')); } catch (e) {}
+const r = results.find((x) => x && x.case_id === caseId);
+if (!r) { console.log('missing=1'); process.exit(0); }
+const repro = (r.reproduction && Array.isArray(r.reproduction.steps) ? r.reproduction.steps : [])
+  .map((s) => { const m = String(s).match(/^[A-Z]+\s+(\S+)/); return m ? m[1] : null; })
+  .filter(Boolean);
+const dir = join(runDir, 'evidence', caseId);
+let files = [];
+try { files = readdirSync(dir).filter((f) => f.endsWith('.json')).sort(); } catch (e) {}
+const evid = [];
+for (const f of files) {
+  let p = null;
+  try {
+    const o = JSON.parse(readFileSync(join(dir, f), 'utf8'));
+    if (o && o.request && typeof o.request.path === 'string') p = o.request.path;
+  } catch (e) {
+    const m = readFileSync(join(dir, f), 'utf8').match(/"path"\s*:\s*"([^"]+)"/);
+    if (m) p = m[1];
+  }
+  evid.push(p);
+}
+console.log('missing=0');
+console.log('repro_paths=' + repro.join(','));
+console.log('evidence_paths=' + evid.join(','));
+console.log('same=' + (repro.length === evid.length && repro.every((v, i) => v === evid[i]) ? 'yes' : 'no'));
+ALIGNEOF
+
 # ---------------------------------------------------------------- AC-021 / AC-022
 # D20/D21：显式用例级载体 + step 级请求，是原 P0「半个用例报通过」的**另一个入口**。
 # 场景：用例声明 request=GET /ok，steps 却是两条不同端点的可执行步骤。
@@ -440,10 +477,17 @@ if run_suite "$D22" >/dev/null 2>&1 && [ -n "$RUN_DIR" ]; then
   console.log(s.length);
   ' "$RUN_DIR/results.json" 2>/dev/null)"
 fi
-if [ "$S22" != "blocked" ] && [ "${EV22:-0}" -ge 1 ] && [ "${EV22:-0}" = "${RP22:-x}" ]; then
-  ok "AC-022 reproduction.steps 如实（证据条数 $EV22 == 复现步骤数 $RP22）"
+# 路径序列比对（不只是条数）：条数对但内容指向别的步骤，同样是"复现信息不实"
+AL22="$(node "$WORK/align-check.mjs" "$RUN_DIR" "TC-001" 2>/dev/null)"
+SAME22="$(printf '%s\n' "$AL22" | sed -n 's/^same=//p')"
+RP22P="$(printf '%s\n' "$AL22" | sed -n 's/^repro_paths=//p')"
+EP22P="$(printf '%s\n' "$AL22" | sed -n 's/^evidence_paths=//p')"
+if [ "$S22" != "blocked" ] && [ "${EV22:-0}" -ge 1 ] && [ "${EV22:-0}" = "${RP22:-x}" ] \
+   && [ "${SAME22:-no}" = "yes" ]; then
+  ok "AC-022 reproduction.steps 如实（证据条数 $EV22 == 复现步骤数 $RP22，且路径序列逐项一致）"
 else
-  bad "AC-022 reproduction.steps 如实" "status=$S22 证据条数=$EV22 复现步骤数=$RP22（两者必须相等：说跑了几步就得有几份证据）"
+  bad "AC-022 reproduction.steps 如实" \
+      "status=$S22 证据条数=$EV22 复现步骤数=$RP22 复现路径=[$RP22P] 证据路径=[$EP22P]（条数必须相等，且路径序列必须逐项一致：说跑了几步就得有几份对得上的证据）"
 fi
 
 # ---------------------------------------------------------------- AC-023
@@ -595,18 +639,27 @@ if run_suite "$D13" >/dev/null 2>&1 && [ -n "$RUN_DIR" ]; then
   LEAK="$(grep -rl "secret-value" "$RUN_DIR" 2>/dev/null | wc -l)"
   RED="$(jget "$RUN_DIR/meta.json" redaction)"
   EVD13="$(find "$RUN_DIR/evidence" -type f 2>/dev/null | wc -l)"
+  # 脱敏**字段数**：不能只查 rules_applied 这个**键名** ——
+  # 键名在、数组为空，同样是"没东西可脱敏"（独立验收 P2-1 / M13）。
+  REDFIELDS="$(jget "$RUN_DIR/meta.json" redaction redacted_fields)"
+  [ -z "$REDFIELDS" ] && REDFIELDS=0
+  # 证据里的脱敏痕迹（真实留痕的证据）
+  MARKS="$(grep -rho "REDACTED[^\"]*" "$RUN_DIR/evidence" 2>/dev/null | head -1)"
   # 场景有效性闸：没有证据 = /token 根本没被请求 = 脱敏场景是空的，断言会恒真
   if [ "$EVD13" -eq 0 ]; then
     bad "AC-013 脱敏在写入前完成，且留痕" "场景无效：证据 0 份，/token 未被请求（脱敏场景被掏空，断言恒真）"
-  elif [ "$LEAK" -eq 0 ] && echo "$RED" | grep -q "rules_applied" \
-       && grep -rq "REDACTED" "$RUN_DIR/evidence" 2>/dev/null; then
-    # 必须看到**脱敏痕迹**，不能只查 rules_applied 这个键名 ——
-    # 否则 mock 端点不再返回敏感字段时，会因为"没东西可脱敏"而判绿（独立验收 M13）。
-    ok "AC-013 脱敏在写入前完成，且留痕（证据 $EVD13 份，场景非空且有脱敏痕迹）"
   elif [ "$LEAK" -ne 0 ]; then
-    bad "AC-013 脱敏在写入前完成，且留痕" "产物里出现了 secret-value（$LEAK 个文件）"
+    bad "AC-013 脱敏在写入前完成，且留痕" "产物里出现了 secret-value（$LEAK 个文件）—— 脱敏没在写入前生效"
+  elif [ "$REDFIELDS" -le 0 ] 2>/dev/null; then
+    # ⚠️ 文案必须指向**真实原因**：可能是"响应里已经没有敏感字段可脱敏"（场景被掏空），
+    #    而不是"meta.json 缺 redaction 段" —— 键名其实一直都在（独立验收 P2-1）。
+    bad "AC-013 脱敏在写入前完成，且留痕" \
+        "脱敏留痕为空：redacted_fields=$REDFIELDS、证据里也没有 REDACTED 痕迹 —— 真实原因多半是**响应里已无敏感字段可脱敏**（场景被掏空），不是缺 redaction 段"
+  elif echo "$RED" | grep -q "rules_applied" && [ -n "$MARKS" ]; then
+    ok "AC-013 脱敏在写入前完成，且留痕（证据 $EVD13 份，脱敏 $REDFIELDS 处，痕迹: $MARKS）"
   else
-    bad "AC-013 脱敏在写入前完成，且留痕" "meta.json 缺 redaction.rules_applied"
+    bad "AC-013 脱敏在写入前完成，且留痕" \
+        "meta.json 的 redaction 段不完整（redacted_fields=$REDFIELDS、痕迹=[$MARKS]）"
   fi
 else
   bad "AC-013 脱敏在写入前完成，且留痕" "执行未产出结果"
@@ -955,35 +1008,7 @@ if run_suite "$D26" >/dev/null 2>&1 && [ -n "$RUN_DIR" ]; then
   # ---- AC-026b：复现步骤的**路径序列**必须与证据里的请求路径序列一致
   # 条数对但内容错位（证据是第 1 步的响应，复现步骤却写第 2 步）也必须被测出 ——
   # 只查条数查不出这种错位（独立验收实测：条数对但内容指向别的步骤，验收脚本测不出）。
-  V26B="$(node -e '
-  const fs=require("fs"),path=require("path");
-  const [runDir,resFile]=process.argv.slice(1);
-  let results=[];
-  try{ results=JSON.parse(fs.readFileSync(resFile,"utf8")); }catch(e){}
-  const r=results.find(x=>x&&x.case_id==="TC-ERR");
-  if(!r){console.log("missing=1");process.exit(0);}
-  const repro=(r.reproduction&&Array.isArray(r.reproduction.steps)?r.reproduction.steps:[])
-    .map(s=>{const m=String(s).match(/^[A-Z]+\s+(\S+)/);return m?m[1]:null;}).filter(Boolean);
-  const dir=path.join(runDir,"evidence","TC-ERR");
-  let files=[];
-  try{ files=fs.readdirSync(dir).filter(f=>f.endsWith(".json")).sort(); }catch(e){}
-  const evid=[];
-  for(const f of files){
-    let p=null;
-    try{
-      const o=JSON.parse(fs.readFileSync(path.join(dir,f),"utf8"));
-      if(o&&o.request&&typeof o.request.path==="string") p=o.request.path;
-    }catch(e){
-      const m=fs.readFileSync(path.join(dir,f),"utf8").match(/"path"\s*:\s*"([^"]+)"/);
-      if(m) p=m[1];
-    }
-    evid.push(p);
-  }
-  console.log("missing=0");
-  console.log("repro_paths="+repro.join(","));
-  console.log("evidence_paths="+evid.join(","));
-  console.log("same="+(repro.length===evid.length&&repro.every((v,i)=>v===evid[i])?"yes":"no"));
-  ' "$RUN_DIR" "$RUN_DIR/results.json")"
+  V26B="$(node "$WORK/align-check.mjs" "$RUN_DIR" "TC-ERR" 2>/dev/null)"
   SAME26B="$(printf '%s\n' "$V26B" | sed -n 's/^same=//p')"
   RP26B="$(printf '%s\n' "$V26B" | sed -n 's/^repro_paths=//p')"
   EP26B="$(printf '%s\n' "$V26B" | sed -n 's/^evidence_paths=//p')"

@@ -384,3 +384,278 @@ $ cd feature-REQ-002.5B && git status --ignored --short   # 空
 | 变异执行器 | `/tmp/req004-verify/final-sweep.mjs` → `final-mutations.json` |
 | 基线结果 | `/tmp/req004-verify/baseline.json`（48 PASS / 1 FAIL） |
 | BA 脚本对变异体的结果 | `/tmp/req004-verify/ba-mut.log`、`mut2.log` |
+
+---
+---
+
+# 第二轮独立验收报告：修复轮之后（REQ-004 / 原 REQ-002.5b）
+
+> 验收方：独立验收代理（verifier，第二轮；未参与实现，也未修改任何被验对象）
+> 验收对象：`<REPO_ROOT>/feature-REQ-002.5B/` 下的 `skills/test-execute/` 与 `skills/test-case-design/`
+> 验收日期：2026-11-11
+> 验收方式：**自建独立探针（36 条）+ 自建变异体（19 个）**，不把 BA 验收脚本的"全绿"当作结论
+> 交付分支在验收期间**未发生任何改动**：`git -C feature-REQ-002.5B status --porcelain` 全程为空，HEAD 始终停在 `59ee0b3`
+
+---
+
+## 0. 一句话结论
+
+**上一轮查出的四个「虚报」类缺陷（AC-025/026/027/028）经行为级复验，确已修复**：36 条独立探针**全部通过**，19 个变异体**全部被验收脚本测出**（上一轮同一位置是 13 个只测出 6 个）。**交付物本身我没有找到 P0/P1 缺陷。**
+
+我在验收过程中用变异体测出 BA 验收脚本的**两个假 PASS 入口**（M9 生命周期分叉、M10 复现步骤错位）—— **BA 在本轮验收窗口内自行补上了这两条判据（AC-025b / AC-026b），并连同契约文案一起提交为 `82fca45`**。以当前 HEAD 的验收脚本复跑：**19/19 全部测出，且 19/19 都落在预期的那条 AC 上**。
+
+残留问题全部是 **P2**：BA 验收脚本/契约的 3 处小瑕疵 + 1 条流程建议 + 我自己 harness 的两处假 PASS 教训（§5）。
+
+---
+
+## 1. 基线事实（先把"验的是哪一版"钉死）
+
+| 项 | 值 | 证据 |
+|---|---|---|
+| 交付分支 HEAD | `59ee0b3 [Docs] 契约文档补齐四条新契约…` | `git -C feature-REQ-002.5B log -1` |
+| 交付分支工作区 | **全程干净**（无未提交改动） | `git -C feature-REQ-002.5B status --porcelain` → 空 |
+| 验收脚本（**当前 HEAD**） | 提交 `82fca45`，**1107 行**，md5 `9fbf24e8f81112e2d40f2384210018b0`，工作区干净 | `git -C BA log -1` / `md5sum` |
+| 验收脚本（**本轮开始时**的旧版） | 提交 `c4a56bc`，990 行，跑出 **28 PASS / 0 FAIL** | 本轮第一次运行记录 |
+| 当前脚本对交付物的基线 | **30 PASS / 0 FAIL** | §2.1 |
+| REQ-002A 回归 | **19 PASS / 0 FAIL** | §2.1 |
+| REQ-002B 回归 | **41 PASS / 0 FAIL** | §2.1 |
+
+### 1.1 验收脚本在本轮验收期间发生变更（必须写进结论）
+
+我 20:13 开始本轮验收，20:28 发现 `verify-acceptance.sh` 的 mtime 变化、内容新增了 `AC-025b`（现 `:852` 起）与 `AC-026b`（现 `:951` 起）两段；随后 BA 把它们连同 `acceptance.md` 的契约文案一起提交为 `82fca45`。脚本注释与 AC 文案里都写着"独立验收实测：把生命周期清单里的 `blocked` 去掉……AC-025 测不出来"。
+
+因此本轮变异测试**跑了两遍**：
+
+| 脚本版本 | 变异体 | 测出差异 | 假 PASS |
+|---|---|---|---|
+| 990 行（`c4a56bc`，本轮开始时） | 19 | **17** | **2** —— M9、M10，脚本报 **28 PASS / 0 FAIL**，完全没察觉 |
+| 1107 行（`82fca45`，当前 HEAD） | 19 | **19** | 0 |
+
+**M9 / M10 在旧版上是真的假 PASS，在当前 HEAD 上被新加的 AC-025b / AC-026b 抓住。** BA 自行补齐方向正确，但这个过程本身暴露一个流程问题（§5 P2-4）：**独立验收正在跑的时候，验收判据被改了** —— 谁该以哪一版为准，需要规则。
+
+---
+
+## 2. 逐条 AC 的独立判定
+
+判定口径：**PASS = 我自己的探针与行为证据支持该条成立**（脚本只作交叉验证，不单独成立）。
+
+| AC | 判定 | 我的独立依据（探针编号见 §3） |
+|---|---|---|
+| AC-001 目录结构完整 | **PASS** | 脚本 PASS；`SKILL.md` frontmatter 合法、`executors/index.json` 在位 |
+| AC-002 注册表声明可配置项与边界 | **PASS** | 脚本 PASS |
+| AC-003 执行器不可被 agent 修改 | **PASS** | 脚本 PASS（约束措辞可辨识） |
+| AC-004 断言完全可配置、判定不在执行器里 | **PASS** | 脚本 PASS；`executors/*.mjs` 无 `passed`/`failed` 字面量 |
+| AC-004b 断言对象形态可用 | **PASS** | 脚本 PASS（走 REQ-002A 回归） |
+| AC-004c 不可机械判定 → blocked | **PASS** | **P08**：status=blocked，error.type=no_mechanical_assertion |
+| AC-004d 断言对象字段缺失/op 非法被拦 | **PASS** | REQ-002A 回归 19/0（四例均拦截） |
+| AC-004e 旧用例集行为不变 | **PASS** | REQ-002A 回归 19/0 |
+| AC-005 判定口径单一模块 | **PASS** | 脚本 PASS；**P19b**：生命周期判定只有 verdict.mjs 一份 |
+| AC-006 凭证缺失 → blocked | **PASS** | **P09**：blocked + credential_missing；变异 M8（改成 failed）被测出 |
+| AC-007 产物零凭证明文 | **PASS** | **P29**：凭证确被用上（非 blocked、证据≥1），产物明文 0 处 |
+| AC-008 证据链结构完整 | **PASS** | 脚本 PASS（meta/results 必填字段齐全） |
+| AC-009 sha256 指纹与防篡改 | **PASS** | **P22/P23**：改 1 字节 → 退出码 1；删文件 → 退出码 1；改回 → 0 |
+| AC-010 results.json 被改能发现 | **PASS** | **P24**：退出码 1 |
+| AC-011 计数不可造假 | **PASS** | **P25**：退出码 1 |
+| AC-012 与轮次状态集成 | **PASS** | **P17c**：runs[] 真的记入本次 run_id；**P11**：幂等；脚本静态检索通过 |
+| AC-013 脱敏在写入前完成且留痕 | **PASS** | **P10**：证据非空 + 含脱敏痕迹 + 明文 0 处 + `redacted_fields=1`；变异 M12/M13 均被测出 |
+| AC-014 离线可跑（mock 自证） | **PASS** | **P27**：只用内置 mock 跑通全链路，证据自校验 exit 0，目标为 `http://127.0.0.1:<port>` |
+| AC-015 零依赖 + 可移植 | **PASS** | 脚本 PASS；变异 M14（在 `scripts/lib/` 引入 child_process）被测出 |
+| AC-016 执行器完整性自检 | **PASS** | **P28**：在副本上改 1 字节 → 退出码 1，改回 → 0 |
+| AC-017 `--json` 与退出码语义 | **PASS** | **P26**：成功=0 / 校验失败=1 / 用法错误=2，三种 stdout 均可 `JSON.parse` |
+| AC-018 失败用例必须有复现信息 | **PASS** | 脚本 PASS |
+| AC-019 多步逐步判定 | **PASS** | **P05**：第 2 步断言不成立 → failed，证据 2 份（`/ok` + `/notfound`）；变异 M7 被测出 |
+| AC-020 多步全通过 → passed | **PASS** | **P06**：passed，证据 2 份 |
+| AC-021 载体冲突 → blocked | **PASS** | **P01**：blocked + conflicting_request_carrier，证据 0 |
+| AC-022 `reproduction.steps` 如实 | **PASS**（判据偏弱，见 §5 P2-2） | **P04**：证据 1 == 复现 1；变异 M6 被测出 |
+| AC-023 用例级载体缺 path → incomplete | **PASS** | **P02**：blocked + incomplete_request_carrier；变异 M5 被测出 |
+| AC-024 step 级载体缺 path → incomplete | **PASS** | **P03**：同上 |
+| **AC-025 判 skipped 不得发请求** | **PASS** | **P14**（独立进程计数服务器，直接数收到的请求）：TC-DEP=skipped、证据 0、服务器只收到 `GET /ok`；**P14c** 对照组：活跃用例真发出且 passed；**P21**：skipped 用例 `reproduction.steps` 为空。变异 M1 被测出 |
+| **AC-026 传输层错误保留已执行证据** | **PASS** | **P15**：failed + timeout + 证据≥1；**P15b**：证据数==复现步骤数；**P18**：证据路径序列与复现路径序列**内容级**一一对应（`["/ok"]` vs `["/ok"]`）。变异 M2/M6/M10 被测出 |
+| **AC-027 生命周期必须收尾** | **PASS** | **P16**：判定层抛异常 → 退出码 1（非 124/137），耗时 **161ms**（上限 15000ms）。变异 M3（挂死 20024ms）、M3b（19199ms）、M3c（17165ms）分别被"退出码"和"耗时上限"两条判据测出 |
+| **AC-028 `meta.cycle` 不得谎报** | **PASS** | **P17a**：不存在轮次 → ok=false / runs_recorded=false / stage_status=**null** / exit=1；**P17b**：meta.json 同段一致；**P17c**：存在轮次 → true/true/in_progress/exit=0 且 runs[] 真记入；**P31**：顶层 `ok` 随推进结果翻转。变异 M4（runs_recorded 硬编码 true）、M4b（stage_status→"pending"）、M11（退出码取 0）被测出 |
+| **AC-025b 两种「不执行」生命周期处理必须一致** | **PASS** | **P19a**：deprecated 与 blocked 同为 skipped、证据均 0、服务器只收到 `/ok`。交付物本身满足；**旧版脚本测不出这条**（M9 假 PASS），是本轮新增 |
+| **AC-026b 复现步骤路径序列 == 证据请求路径序列** | **PASS** | **P18**（`["/ok"]` vs `["/ok"]`）。交付物本身满足；**旧版脚本同样测不出**（M10 假 PASS），是本轮新增 |
+
+**汇总：契约 34 条 AC（含本轮新增的 AC-025b / AC-026b）—— 我独立判定 34 PASS / 0 FAIL。**
+
+### 2.1 复现命令
+
+```bash
+cd <REPO_ROOT>
+# 验收脚本（当前 HEAD 82fca45，md5 9fbf24e8f81112e2d40f2384210018b0）
+bash BA/demands/REQ-002-suite-foundation/REQ-002.5b-test-execute/verify-acceptance.sh \
+  feature-REQ-002.5B/skills/test-execute feature-REQ-002.5B/skills/test-case-design
+# → 结论: 30 PASS / 0 FAIL
+# 回归
+bash BA/demands/REQ-002-suite-foundation/REQ-002A-schema-v2/verify-regression-002a.sh feature-REQ-002.5B/skills/test-case-design
+# → 结论: 19 PASS / 0 FAIL
+bash BA/demands/REQ-002-suite-foundation/REQ-002B-project-layout/verify-regression-002b.sh feature-REQ-002.5B/skills/test-case-design
+# → 结论: 41 PASS / 0 FAIL
+```
+
+---
+
+## 3. 我的独立探针矩阵（36 条）
+
+探针全部自建，**不调用 BA 脚本的任何断言逻辑**；执行对象是交付物原目录（只读），产物落在 `/tmp/req004-probe/work/`。
+
+| # | 探针 | 场景 → 期望 | 实测 | 一致 |
+|---|---|---|---|---|
+| P01 | 载体冲突 | blocked + conflicting_request_carrier + 证据 0 | blocked + conflicting_request_carrier + 证据 0 | ✅ |
+| P02 | 用例级载体缺 path | blocked + incomplete_request_carrier | 同 | ✅ |
+| P03 | step 级载体缺 path | blocked + incomplete_request_carrier | 同 | ✅ |
+| P04 | 复现信息如实 | 证据数 == 复现步数 | 证据 1 == 复现 1 | ✅ |
+| P05 | 多步第 2 步断言不成立 | failed + 证据≥2 且含两个路径 | failed + 证据 2（`/ok`,`/notfound`） | ✅ |
+| P06 | 多步全通过 | passed + 证据≥2 | passed + 证据 2 | ✅ |
+| P07 | 单请求多断言（D22 规则 4） | 只发 1 次请求，全部断言绑到该响应；含一条不成立 → failed | 1A=passed(证据1) / 1B=failed(证据1) | ✅（**首版探针写错**，见 §5.4） |
+| P08 | 不可机械判定 | blocked + no_mechanical_assertion | 同 | ✅ |
+| P09 | 凭证缺失 | blocked + credential_missing | 同 | ✅ |
+| P10 | 脱敏留痕 | 证据≥1 + 有脱敏痕迹 + 明文 0 + `redacted_fields>0` | 证据 1 / REDACTED=true / 明文 0 / rules_applied=["field"] / fields=1 | ✅ |
+| P11 | `set-stage --run` 幂等 | runs[] 无重复 | `["RUN-QA-1"]` | ✅ |
+| P12 | 断言所在 step 不可执行 | blocked + assertion_without_response | 同 | ✅ |
+| P13 | 多问题并存（D26） | type=no_mechanical_assertion 且消息点出载体缺 path | 同 | ✅ |
+| P14 | deprecated 不发请求（**独立进程计数服务器，直接数请求数**） | skipped + 证据 0 + 服务器无 `/notfound` | skipped + 证据 0 + 服务器只收到 `GET /ok` | ✅ |
+| P14c | 对照组 | 活跃用例 passed 且服务器确实收到 `/ok` | passed + 收到 `GET /ok` | ✅ |
+| P15 | 多步第 2 步超时 | failed + timeout + 证据≥1 | failed + timeout + 证据 1 | ✅ |
+| P15b | AC-026 第 4 条 | 证据数 == 复现步数 | 1 == 1 | ✅ |
+| P16 | 判定层抛异常 | 退出码∉{124,137} 且耗时≤15000ms | 退出码 1 / 161ms | ✅ |
+| P17a | `--cycle` 不存在 | ok=false / recorded=false / stage=null / exit=1 | 全中 | ✅ |
+| P17b | meta.json 的 cycle 段 | 同上 | 全中 | ✅ |
+| P17c | `--cycle` 存在（配对） | true/true/in_progress/exit=0 且 runs[] 真记入 | 全中 | ✅ |
+| P18 | **复现步骤与证据内容级一一对应** | `evidence[i].request.path == repro.steps[i]` 的路径 | 证据路径 `["/ok"]` vs 复现路径 `["/ok"]` | ✅ |
+| P19a | **deprecated 与 blocked 处理一致** | 同为 skipped、证据均 0、服务器只收到 `/ok` | 全中 | ✅ |
+| P19b | **生命周期判定只有一份** | 只有 verdict.mjs 出现 `'deprecated'`；run-suite 复用 `isNonExecutable` | 只有 `lib/verdict.mjs`；复用=true；自带清单=false | ✅ |
+| P20 | D27 判定顺序 | incomplete 优先于 conflicting | incomplete_request_carrier | ✅ |
+| P21 | skipped 不得谎称跑过 | `reproduction.steps` 为空 | `[]` | ✅ |
+| P22 | 篡改证据 1 字节 | verify-evidence 退出码 1；改回 0 | 0 → 1 → 0 | ✅ |
+| P23 | 删除证据文件 | 退出码 1 | 1 | ✅ |
+| P24 | 改 results.json | 退出码 1 | 1 | ✅ |
+| P25 | 改 meta.json 计数 | 退出码 1 | 1 | ✅ |
+| P26 | 退出码语义 | 0/1/2 且 stdout 可 JSON.parse | 全中 | ✅ |
+| P27 | 离线可跑 | 证据自校验 exit 0 + 目标为回环地址 | exit 0 + `http://127.0.0.1:<port>` | ✅ |
+| P28 | 执行器完整性自检（副本上做） | 改 1 字节 → 1；改回 → 0 | 0 → 1 → 0 | ✅ |
+| P29 | 凭证零明文 | 凭证确被用上 + 明文 0 处 | 非 blocked、证据 1、明文 0 | ✅ |
+| P30 | D24 回退语义 | blocked 且未执行 → 复现步回退到声明步（2 步、证据 0） | 同 | ✅ |
+| P31 | 顶层 ok 随轮次推进翻转 | 失败 false/1；成功 true/0 | 全中 | ✅ |
+
+**汇总：36 条探针，36 PASS / 0 FAIL。**
+（探针代码：`/tmp/req004-probe/probes1.mjs` `probes2.mjs` `probes2b.mjs` `probes3.mjs` `probes4.mjs`，公共库 `lib.mjs`）
+
+---
+
+## 4. 变异测试结果表（19 个变异体）
+
+方法：把 skill 目录复制到 `/tmp/req004-probe/mut/<id>/skills/`，用脚本改坏其中一处，再跑 **BA 验收脚本**。同时用我自己的针对性探针验证"这个变异确实把契约改坏了"（避免拿一个无效变异充数）。
+
+> 改动 `executors/` 的变异（M2/M7/M10/M13）在补丁后**重生成完整性清单**（`verify-integrity.mjs --update`），把"改执行器源码"这个无关变量从 AC-016 里摘掉，确保目标 AC 是唯一变红的那条。
+
+| # | 改了什么 | 期望变红 | 旧版脚本 | 当前 HEAD | 实际变红 | 我的探针 |
+|---|---|---|---|---|---|---|
+| M1 | 去掉「skipped 的用例不执行」的判断 | AC-025 | ✅ | ✅ | AC-025 + AC-025b | ✅（服务器收到 `/notfound`+`/created`，而 status 仍写 skipped） |
+| M2 | http-core 传输层错误时丢掉已累积的 steps | AC-026 | ✅ | ✅ | AC-026 + AC-026b | ✅（证据 0 / 复现 1） |
+| M3 | 去掉收尾钩子的 finally 语义 | AC-027 | ✅ | ✅ | AC-027（退出码 **124**、耗时 20007ms） | ✅ |
+| M3b | 收尾钩子延迟 **19 秒** | AC-027 | ✅ | ✅ | AC-027（退出码 1、耗时 **19199ms** → 触发耗时上限） | ✅ |
+| M3c | 收尾钩子延迟 **17 秒**（隔离验证耗时上限） | AC-027 | ✅ | ✅ | AC-027（退出码 1、耗时 **17165ms**） | ✅ |
+| M4 | `meta.cycle.runs_recorded` 改回硬编码 `true` | AC-028 | ✅ | ✅ | AC-028 | ✅ |
+| M4b | 失败场景 `stage_status` 从 `null` 改成 `"pending"` | AC-028 | ✅ | ✅ | AC-028 | ✅ |
+| M5 | 载体缺 path 误诊成 `conflicting_request_carrier` | AC-023/024 | ✅ | ✅ | AC-023 + AC-024 | ✅ |
+| M6 | `reproduction.steps` 回退到用例声明的步骤 | AC-022 | ✅ | ✅ | AC-022 + AC-026 + AC-026b | ✅（证据 1 / 复现 2） |
+| M7 | 只执行多步用例的第一步 | AC-019 | ✅ | ✅ | AC-019 + AC-020 + AC-026 | ✅（status=blocked、证据 1） |
+| M8 | 凭证缺失判成 `failed` | AC-006 | ✅ | ✅ | AC-006 | ✅ |
+| **M9** | **生命周期清单去掉 `"blocked"`（deprecated 与 blocked 分叉）** | AC-025 | ❌ **假 PASS（28/0）** | ✅ | AC-025b | ✅ 测出（`/created` 真被发出、status=passed、证据 1） |
+| **M10** | **复现步骤描述错位（条数对、内容指向别的步骤）** | AC-026 | ❌ **假 PASS（28/0）** | ✅ | AC-026b | ✅ 测出（复现路径 `["/slow?ms=3000"]` vs 证据路径 `["/ok"]`） |
+| M11 | 轮次推进失败时退出码仍取 0 | AC-028 | ✅ | ✅ | AC-028 | ✅ |
+| M12 | 去掉脱敏（证据写盘不脱敏） | AC-013 | ✅ | ✅ | AC-013（产物出现 secret-value） | ✅ |
+| M13 | mock `/token` 不再返回敏感字段（掏空脱敏场景）+ 重生成清单 | AC-013 | ✅ | ✅ | AC-013 | ✅（`redacted_fields=0`、证据里无脱敏痕迹） |
+| M14 | 在 `scripts/lib/` 引入 `child_process` | AC-015 | ✅ | ✅ | AC-015 | ✅ |
+| M15 | 在 `scripts/lib/` 绕过推进器直接写 `cycle.json` | AC-012b | ✅ | ✅ | AC-012b（命中 1 处） | ✅ |
+| M16 | 去掉 `cycle-state --run` 的幂等判断 | AC-012b | ✅ | ✅ | AC-012b（runs 出现重复项） | ✅ |
+
+**统计：当前 HEAD 脚本 19/19 全部测出，且 19/19 都落在**预期的那条 AC** 上（不是靠别的 AC 连带变红）；我的探针同样 19/19。**
+同一位置的历史对比：上一轮 6/13 → 本轮旧脚本 17/19 → 当前 HEAD 19/19。
+
+**两条「补严」判据单独复验（briefing 特别要求）**：
+- **AC-027 的耗时上限（≤15s）**：M3b（19s）与 M3c（17s）的退出码都是 **1（非 124/137）**，只有耗时上限能抓住 —— 证明这条补严**不是文字游戏**，它确实拦得住"卡住十几秒再自己退出"。
+- **AC-028 的 `stage_status` 锁死 null**：M4b 把失败场景改成 `"pending"`，脚本仍判红 —— 证明"只判不等于 in_progress"的旧写法确实会被 `"pending"` 绕过，这条补严有效。
+
+---
+
+## 5. 问题清单
+
+### 5.1 对交付物（`feature-REQ-002.5B`）
+
+**没有 P0，没有 P1。** 四个「虚报」类缺陷经行为复验均已修复；36 条探针与 19 个变异体没有暴露出任何交付物侧的虚报、证据失真或生命周期泄漏。唯一与交付物相关的仍是 D32 已记录的**已知限制**：`results.json` 不记录"为什么 skipped"，原因只在 `logs/runner.log`（实测确认：日志里有"用例 TC-DEP: skipped（用例已废弃（status: deprecated），不执行）"）。
+
+### 5.2 对 BA 验收脚本 / 契约（BA 决定是否改；我未改动）
+
+#### P2-1 · AC-013 的失败信息**误导**（真实原因不是它说的那个）
+- **触发条件**：变异 M13（mock `/token` 不再返回敏感字段）。
+- **观察**：脚本报 `↳ meta.json 缺 redaction.rules_applied`。实测 `meta.json` 的 `redaction` 段是 `{"rules_applied":[],"redacted_fields":0}` —— **键名在**（只是数组为空），真实原因是**证据里根本没有脱敏痕迹**（无 `[REDACTED:`）。
+- **证据**：M13 产物 `/tmp/req004-probe/work/mut_M13/.test-artifacts/*/evidence/TC-T/step-1-response.json`（内容无 REDACTED）、同目录 `meta.json` 的 `redaction` 段（见上）。
+- **建议**：把判据改成显式断言 `redacted_fields > 0` 与"证据中存在 `[REDACTED:` 痕迹"；else 分支文案改成"证据里没有脱敏痕迹（可能是响应里已无敏感字段，场景被掏空）"。顺带：`grep -q "rules_applied"` 只查**键名**，查不出"值为空"。
+
+#### P2-2 · AC-022 的判据仍是**纯计数**，内容错位测不出
+- **触发条件**：变异 M10（复现步骤描述错位）。
+- **观察**：M10 变红的只有 AC-026b，**AC-022 仍判绿** —— 说明 AC-022 自己的场景（`证据条数 == 复现步骤数`）只能挡"条数对不上"，挡不住"条数对但内容指向别的步骤"。
+- **建议**：把 AC-026b 的**路径序列比对**同样套用到 AC-022 的场景（或抽成共用断言），否则同一类风险在另一条 AC 上仍是敞口。
+
+#### P2-3 · AC-025b / AC-026b 没有对应的决策记录
+- **触发条件**：`decisions.md` 最后一条仍是 D32，本轮新增的两条 AC 没有 D33。
+- **影响**：两条判据的来历（"独立验收实测出的假 PASS 入口"）只写在 `acceptance.md` 的理由行里，决策记录这条链断了 —— 与本 REQ 其余判据（D23~D31 都有对应决策）不一致。
+- **建议**：补一条 D33，把"AC-025b 只要求两种生命周期**一致**、不裁决 blocked 该不该执行（承接 D32 的未裁定语义）"这件事写进决策记录。
+
+#### P2-4（流程）· 独立验收正在跑的时候，验收判据被改了
+- **触发条件**：20:13 我开始验收 → 20:28 脚本变更 → 随后提交 `82fca45`。
+- **影响**：同一批 19 个变异体在两个"官方"脚本版本上结论不同（旧版 2 处假 PASS，新版 0 处）。**任何不钉版本的"脚本全绿"结论都不可复现。**
+- **建议**：验收方在报告里引用脚本的 sha256（本报告已记 `9fbf24e8f81112e2d40f2384210018b0`）；BA 在 `status.md` 里记录脚本版本；以及约定"验收期间判据变更要通知验收方并重跑受影响项"。
+
+### 5.3 对我自己（记下来，因为这类坑正是本 REQ 要消灭的东西）
+
+#### P2-5 · 我方探针 harness 的两处假 PASS（已修正并复跑）
+- **(a) 计数服务器与阻塞式 `spawnSync` 同进程** → 服务器被自己的事件循环卡住，一个请求都收不到，于是"什么都没发"也能让判据判绿。我的 P14 首版就是这样假绿的（`服务器收到=[]`，而活跃用例其实超时失败）。改成**独立进程**的计数服务器后复跑，P14 / P14c / P19a 才拿到真实数据。
+- **(b) `spawnSync` 不会因非零退出码抛异常** → 我用它判"有没有 REDACTED 痕迹"时恒为真。已改为显式判 `status === 0`，并重跑 M12 / M13（结论不变：两者都仍被测出）。
+- **教训**：上一轮报告里 BA 被批评的"恒真断言"，我这一版 harness 一开始也犯了同类错误 —— 这条自查必须留在流程里，不能只审别人。
+
+### 5.4 另有一处**探针写错**（不是交付物问题）
+
+P07 首版用了 `steps[].expected` 的**数组**形态，而契约只支持**每步一个断言对象**（"一次响应多条断言"= 多个 step 各带一条断言，全部绑到同一次响应）。改正后 P07 通过。**记录在此以免后续读者重复踩。**
+
+### 5.5 一处文档小瑕疵（不影响判定）
+
+`acceptance.md` 的 AC-025b 段落末尾有两行重复的 `- **类型**: 功能`。
+
+---
+
+## 6. 我**没有**验到的部分（明确列出，不假装全覆盖）
+
+1. **BA 脚本两条新增判据的契约措辞是否与 D32 的未裁定语义自洽**（`blocked` 该不该执行）：这两条只在契约里，我没做需求方视角的裁定判断 —— 这超出验收方权限。
+2. **`--cycle` 推进成功但 `cycle-state.mjs` 内部出错（非退出码非 0）的中间态**：只验了"目录不存在"与"目录存在且推进成功"两端。
+3. **断言 op 枚举的逐个行为**：只实测了 `equals`（含 `$status` 路径）；`not_equals` / `contains` / `matches` / `type` / `gt` 等未逐个跑。
+4. **重试语义**：`retries` 的实际重试次数、"重试后成功""重试耗尽"未测。
+5. **并发 / 超大用例集 / 超大响应体 / 循环引用 / Windows 平台**：未测。
+6. **证据链规模化表现**（成千上万个证据文件时的指纹计算开销）：未测。
+7. **合并到 `develop` 后的交叉回归**：只跑了 REQ-002A / REQ-002B 两个既有回归脚本，没有跑 `develop` 的全量回归。
+8. **`test-case-design/references/*.md` 与实现的逐条文档-代码对拍**：未做（只做了行为层验证）。
+9. **「安装副本组合」场景**：本轮跑的是仓库内同版本的两个 skill；"新 test-execute + 旧 test-case-design"的版本错配场景由 BA 另行提交验证（BA 提交 `6bfc5fc` 记录），我没有独立复现。
+10. **AC-027 耗时上限在高负载机器上的余量**：M3b/M3c 实测 19199ms / 17165ms，距 15000ms 上限余量较大，但在负载高的机器上余量会变小 —— 未测其高负载表现。
+
+---
+
+## 7. 附：本轮用到的路径与复现物
+
+| 用途 | 路径 |
+|---|---|
+| 探针公共库 | `/tmp/req004-probe/lib.mjs` |
+| 探针组 1（上一轮 13 场景 + D26/D27） | `/tmp/req004-probe/probes1.mjs` |
+| 探针组 2（本轮 4 条新契约 + 深度场景） | `/tmp/req004-probe/probes2.mjs` |
+| 探针组 2b（AC-025，独立进程计数服务器） | `/tmp/req004-probe/probes2b.mjs` |
+| 探针组 3（证据链/退出码/离线/完整性/凭证） | `/tmp/req004-probe/probes3.mjs` |
+| 探针组 4（D24 回退、顶层 ok） | `/tmp/req004-probe/probes4.mjs` |
+| 独立进程计数服务器 | `/tmp/req004-probe/count-server.mjs` |
+| 变异定义 + 执行器（19 个） | `/tmp/req004-probe/mutate.mjs` |
+| 变异结果（旧脚本 990 行） | `/tmp/req004-probe/mutate.log`、`/tmp/req004-probe/mut-results-old.json`（19 行：测出 17，假 PASS 2 = M9/M10） |
+| 变异结果（当前 HEAD 1107 行） | `/tmp/req004-probe/mutate2.log`、`/tmp/req004-probe/mut-results-new.json`（19 行：测出 19，假 PASS 0） |
+| 脚本版本快照 | `/tmp/req004-probe/verify-acceptance.snapshot.sh`（md5 `9fbf24e8f81112e2d40f2384210018b0`） |
+| 变异体副本 | `/tmp/req004-probe/mut/<M1..M16>/skills/` |
+
+**纪律声明**：本轮**未修改**被验对象（`feature-REQ-002.5B/` 全程只读、工作区干净）；**未修改** BA 的验收脚本（§1.1 提到的脚本变更均为 BA 自己在验收窗口内所做，并已提交为 `82fca45`，非我改动）；所有变异体只在 `/tmp` 的副本上进行。
