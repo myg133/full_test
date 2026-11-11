@@ -1,7 +1,7 @@
-# REQ-004（原 REQ-002.5b）独立验收报告：执行 skill 与证据链
+# REQ-004（原 REQ-004）独立验收报告：执行 skill 与证据链
 
 > 验收方：独立验收代理（未参与开发）
-> 验收对象：`feature/REQ-002.5B` worktree 的 `skills/test-execute/` 及其对 `skills/test-case-design/` 的向后兼容扩展
+> 验收对象：`feature/REQ-004` worktree 的 `skills/test-execute/` 及其对 `skills/test-case-design/` 的向后兼容扩展
 > 验收日期：2026-11-11
 > 验收方式：**自建独立验收工程 + 变异测试**，未把 BA 的 `verify-acceptance.sh` 的结论当作前提
 
@@ -44,8 +44,8 @@
 ### 2.2 关键事实核对（交付分支未被改动）
 
 ```
-$ cd feature-REQ-002.5B && git status --short     # 空
-$ cd feature-REQ-002.5B && git status --ignored --short   # 空
+$ cd feature-REQ-004 && git status --short     # 空
+$ cd feature-REQ-004 && git status --ignored --short   # 空
 ```
 所有变异都做在 `/tmp/req004-verify/mut/*/skills/` 的副本上。唯一一次在交付 worktree 内产生的
 产物（离线示例的 `.test-artifacts/`）已删除并复核。
@@ -388,13 +388,13 @@ $ cd feature-REQ-002.5B && git status --ignored --short   # 空
 ---
 ---
 
-# 第二轮独立验收报告：修复轮之后（REQ-004 / 原 REQ-002.5b）
+# 第二轮独立验收报告：修复轮之后（REQ-004 / 原 REQ-004）
 
 > 验收方：独立验收代理（verifier，第二轮；未参与实现，也未修改任何被验对象）
-> 验收对象：`<REPO_ROOT>/feature-REQ-002.5B/` 下的 `skills/test-execute/` 与 `skills/test-case-design/`
+> 验收对象：`<REPO_ROOT>/feature-REQ-004/` 下的 `skills/test-execute/` 与 `skills/test-case-design/`
 > 验收日期：2026-11-11
 > 验收方式：**自建独立探针（36 条）+ 自建变异体（19 个）**，不把 BA 验收脚本的"全绿"当作结论
-> 交付分支在验收期间**未发生任何改动**：`git -C feature-REQ-002.5B status --porcelain` 全程为空，HEAD 始终停在 `59ee0b3`
+> 交付分支在验收期间**未发生任何改动**：`git -C feature-REQ-004 status --porcelain` 全程为空，HEAD 始终停在 `59ee0b3`
 
 ---
 
@@ -412,8 +412,8 @@ $ cd feature-REQ-002.5B && git status --ignored --short   # 空
 
 | 项 | 值 | 证据 |
 |---|---|---|
-| 交付分支 HEAD | `59ee0b3 [Docs] 契约文档补齐四条新契约…` | `git -C feature-REQ-002.5B log -1` |
-| 交付分支工作区 | **全程干净**（无未提交改动） | `git -C feature-REQ-002.5B status --porcelain` → 空 |
+| 交付分支 HEAD | `59ee0b3 [Docs] 契约文档补齐四条新契约…` | `git -C feature-REQ-004 log -1` |
+| 交付分支工作区 | **全程干净**（无未提交改动） | `git -C feature-REQ-004 status --porcelain` → 空 |
 | 验收脚本（**当前 HEAD**） | 提交 `82fca45`，**1107 行**，md5 `9fbf24e8f81112e2d40f2384210018b0`，工作区干净 | `git -C BA log -1` / `md5sum` |
 | 验收脚本（**本轮开始时**的旧版） | 提交 `c4a56bc`，990 行，跑出 **28 PASS / 0 FAIL** | 本轮第一次运行记录 |
 | 当前脚本对交付物的基线 | **30 PASS / 0 FAIL** | §2.1 |
@@ -483,13 +483,13 @@ $ cd feature-REQ-002.5B && git status --ignored --short   # 空
 ```bash
 cd <REPO_ROOT>
 # 验收脚本（当前 HEAD 82fca45，md5 9fbf24e8f81112e2d40f2384210018b0）
-bash BA/demands/REQ-002-suite-foundation/REQ-002.5b-test-execute/verify-acceptance.sh \
-  feature-REQ-002.5B/skills/test-execute feature-REQ-002.5B/skills/test-case-design
+bash BA/demands/REQ-002-suite-foundation/REQ-004-test-execute/verify-acceptance.sh \
+  feature-REQ-004/skills/test-execute feature-REQ-004/skills/test-case-design
 # → 结论: 30 PASS / 0 FAIL
 # 回归
-bash BA/demands/REQ-002-suite-foundation/REQ-002A-schema-v2/verify-regression-002a.sh feature-REQ-002.5B/skills/test-case-design
+bash BA/demands/REQ-002-suite-foundation/REQ-002A-schema-v2/verify-regression-002a.sh feature-REQ-004/skills/test-case-design
 # → 结论: 19 PASS / 0 FAIL
-bash BA/demands/REQ-002-suite-foundation/REQ-002B-project-layout/verify-regression-002b.sh feature-REQ-002.5B/skills/test-case-design
+bash BA/demands/REQ-002-suite-foundation/REQ-002B-project-layout/verify-regression-002b.sh feature-REQ-004/skills/test-case-design
 # → 结论: 41 PASS / 0 FAIL
 ```
 
@@ -582,7 +582,7 @@ bash BA/demands/REQ-002-suite-foundation/REQ-002B-project-layout/verify-regressi
 
 ## 5. 问题清单
 
-### 5.1 对交付物（`feature-REQ-002.5B`）
+### 5.1 对交付物（`feature-REQ-004`）
 
 **没有 P0，没有 P1。** 四个「虚报」类缺陷经行为复验均已修复；36 条探针与 19 个变异体没有暴露出任何交付物侧的虚报、证据失真或生命周期泄漏。唯一与交付物相关的仍是 D32 已记录的**已知限制**：`results.json` 不记录"为什么 skipped"，原因只在 `logs/runner.log`（实测确认：日志里有"用例 TC-DEP: skipped（用例已废弃（status: deprecated），不执行）"）。
 
@@ -658,4 +658,4 @@ P07 首版用了 `steps[].expected` 的**数组**形态，而契约只支持**�
 | 脚本版本快照 | `/tmp/req004-probe/verify-acceptance.snapshot.sh`（md5 `9fbf24e8f81112e2d40f2384210018b0`） |
 | 变异体副本 | `/tmp/req004-probe/mut/<M1..M16>/skills/` |
 
-**纪律声明**：本轮**未修改**被验对象（`feature-REQ-002.5B/` 全程只读、工作区干净）；**未修改** BA 的验收脚本（§1.1 提到的脚本变更均为 BA 自己在验收窗口内所做，并已提交为 `82fca45`，非我改动）；所有变异体只在 `/tmp` 的副本上进行。
+**纪律声明**：本轮**未修改**被验对象（`feature-REQ-004/` 全程只读、工作区干净）；**未修改** BA 的验收脚本（§1.1 提到的脚本变更均为 BA 自己在验收窗口内所做，并已提交为 `82fca45`，非我改动）；所有变异体只在 `/tmp` 的副本上进行。
