@@ -22,6 +22,7 @@ import {
   ROUND_TYPES,
   ROUNDS,
   checkCycleState,
+  checkScopesSkipped,
 } from './lib/state-machine.mjs';
 
 // ---------------------------------------------------------------- 常量
@@ -548,26 +549,11 @@ function checkCycle(file, root) {
     });
   }
 
-  // --- 检查 10：跳过范围必须写明理由 ---
-  if (Array.isArray(data.scopes_skipped)) {
-    data.scopes_skipped.forEach((item, index) => {
-      const at = `scopes_skipped[${index}]`;
-      if (!isObject(item)) {
-        addIssue(rel, 'type', at, `${at} 类型错误：期望 object，实际 ${describeType(item)}`);
-        return;
-      }
-      if (typeof item.scope === 'string' && !CYCLE_SCOPES.includes(item.scope)) {
-        addIssue(
-          rel,
-          'enum',
-          `${at}.scope`,
-          `${at}.scope 取值非法："${item.scope}"（允许值: ${CYCLE_SCOPES.join(' / ')}）`,
-        );
-      }
-      if (!isFilledString(item.reason)) {
-        problem(`${rel}: ${at}.reason 为空：跳过必须写明可被 review 发现的理由`);
-      }
-    });
+  // --- 检查 10：跳过范围必须写明理由与审计信息 ---
+  // 判定规则来自共享状态机模块（scopes_skipped 记录的必填字段集合只有一份），
+  // 推进器 scripts/cycle-state.mjs 写入时用的是同一套规则。
+  for (const issue of checkScopesSkipped(data)) {
+    addIssue(rel, issue.kind, issue.path, issue.text);
   }
 
   // --- 检查 9 / 10 / 11：status、history、stages —— 复用共享状态机模块 ---

@@ -127,15 +127,25 @@ node scripts/cycle-state.mjs advance test-assets/cycles/R1-REQ-001 --to in_progr
 ### 3.4 `skip-scope` —— 记录本轮跳过的范围
 
 ```console
-node scripts/cycle-state.mjs skip-scope test-assets/cycles/R1-REQ-001 --scope load --reason "需求未给性能指标，无阈值可依"
+node scripts/cycle-state.mjs skip-scope test-assets/cycles/R1-REQ-001 \
+  --scope load --reason "需求未给性能指标，无阈值可依" --by dev-agent-1
 ```
 
 | 参数 | 必填 | 说明 |
 |---|---|---|
 | `--scope` | 是 | 被跳过的范围，必须在 `functional` / `security` / `load` 内 |
 | `--reason` | 是 | 跳过理由，**非空**。缺失或为空 → 退出码 1，文件不动 |
+| `--by` | 是 | 执行者标识（**谁跳过的**）。**不允许有默认值**——缺失 → 退出码 2，取值为空 → 退出码 1，文件均不动 |
 
-产出：`scopes_skipped` 追加一条 `{scope, reason}`。跳过不改变轮次状态，因此不动 `history`。
+产出：`scopes_skipped` 追加一条 `{scope, reason, at, by}`：
+
+- `reason` —— 为什么这个范围本轮不跑（可被 review 发现的理由）
+- `at` —— 脚本自动生成的 ISO-8601 时间戳（什么时候跳过的）
+- `by` —— 执行者标识（谁跳过的）
+
+> 为什么 `at` / `by` 是必填：跳过记录要能被**审计**。半年后回看一条记录，只有 `{scope, reason}` 的话，不知道该找谁确认、也不知道是什么时候的决定。成本几乎为零——脚本本来就要生成时间戳。
+
+跳过不改变轮次状态，因此不动 `history`。同一 scope 重新声明会**整条覆盖**（`reason` / `by` / `at` 一并更新）；同 scope、同 reason、同 `by` 重复执行 → 报"已记录"，不重复写入（幂等）。
 
 ### 3.5 `set-stage` —— 设置阶段状态
 
@@ -159,10 +169,10 @@ node scripts/cycle-state.mjs set-stage test-assets/cycles/R1-REQ-001 --stage des
 2. **失败零副作用**：校验不通过时，目标文件**不被修改**——不追加半条 `history`，不写 `scopes_skipped`，不删临时文件。
 3. **一致性由脚本保证**：`advance` 成功后 `status` 必然等于 `history` 最后一条的 `to`，因为两处在同一次写入里完成。
 4. **每次推进必留痕**：`history` 新增一条 `{at, from, to, by}`，`from` = 推进前状态，`to` = 推进后状态。
-5. **跳过必留痕**：`skip-scope` 的 `--reason` 为空或缺失 → 拒绝（退出码 1），文件不动。
+5. **跳过必留痕**：`skip-scope` 的 `--reason` 为空或缺失 → 拒绝（退出码 1），文件不动；`--by` 缺失 → 拒绝（退出码 2）。写入的记录含 `scope` / `reason` / `at` / `by` 四个字段，跳过的决定可被审计。
 6. **幂等**：重复执行同一命令不产生额外副作用。
    - `advance --to <当前状态>` → 报"已在该状态"，不追加 `history`，退出码 0。
-   - `skip-scope` 同 scope 同理由 → 报"已记录"，不重复写入。
+   - `skip-scope` 同 scope 同 reason 同 `by` → 报"已记录"，不重复写入。
    - `set-stage` 同阶段同状态 → 报"已是该状态"，不重复写入。
 7. **索引同步**：`init` 与 `advance` 成功后，脚本会同步 `test-assets/cycles/index.json` 里本轮次的 `id` / `round` / `status` 摘要（索引结构非法时先失败，不留半成品）。
 
@@ -192,7 +202,10 @@ scripts/lib/state-machine.mjs
 | `status "x" 与 history 最后一条的 to "y" 不一致` | 有人手改了 `status` 而没追加 `history` | 不要手改。用 `advance` 走一次合法转移（脚本会同时修好两处）；状态已经错乱到无法推进时，按 `history` 最后一条的 `to` 手工把 `status` 改回去，并补一条对应记录 |
 | `history[0].by 缺少必填字段` | 留痕不完整 | 补齐 `at` / `from` / `to` / `by`；用 `advance` 生成的记录天然齐备 |
 | `跳过必须写明可被 review 发现的理由` | `skip-scope` 的 `--reason` 缺失或为空 | 写清"为什么这个范围本轮不跑"（如"需求未给任何性能指标，无阈值可依"） |
-| `scopes_skipped[].reason 为空` | 手写了跳过记录但没给理由 | 补理由；或用 `skip-scope` 重新记录 |
+| `scopes_skipped[0].reason` 缺失或为空 | 手写了跳过记录但没给理由 | 补理由；或用 `skip-scope` 重新记录 |
+| `scopes_skipped[0].at` 缺少必填字段 | 手写的跳过记录没留时间戳 | 用 `skip-scope --by <agent>` 重新记录（脚本自动写 ISO-8601 时间戳） |
+| `scopes_skipped[0].by` 缺少必填字段 | 手写的跳过记录没留执行者 | 同上；"谁跳过的"不允许有默认值 |
+| `缺少必填参数 --by` | `skip-scope` 没给执行者 | 补 `--by <agent>`；跳过必须可被审计，脚本不会替你编一个默认值 |
 | `status 取值非法` | 用了 `finished` 之类自造状态 | 只能用 `planned` / `in_progress` / `completed` / `blocked` / `cancelled` |
 | `缺少必填参数 --to` / `未知参数 --xxx` | 调用方式写错 | 看 `--help`；退出码 2 表示命令本身没写对，状态文件未受影响 |
 | `轮次已存在` | `init` 指向了已有 `cycle.json` 的目录 | 换目录名，或改用 `advance` / `set-stage` |
@@ -215,8 +228,9 @@ node scripts/cycle-state.mjs advance test-assets/cycles/R1-REQ-001 --to in_progr
 # 3) 推进阶段
 node scripts/cycle-state.mjs set-stage test-assets/cycles/R1-REQ-001 --stage design --status done
 
-# 4) 记录不跑的范围（必须给理由）
-node scripts/cycle-state.mjs skip-scope test-assets/cycles/R1-REQ-001 --scope load --reason "需求未给性能指标，无阈值可依"
+# 4) 记录不跑的范围（必须给理由与执行者）
+node scripts/cycle-state.mjs skip-scope test-assets/cycles/R1-REQ-001 \
+  --scope load --reason "需求未给性能指标，无阈值可依" --by dev-agent-1
 
 # 5) 收工
 node scripts/cycle-state.mjs advance test-assets/cycles/R1-REQ-001 --to completed --by dev-agent-1 --reason "R1 全部用例执行完毕"

@@ -37,6 +37,7 @@ import {
   allowedNext,
   canTransition,
   checkCycleState,
+  checkSkipRecord,
   isCycleStatus,
   isObject,
   isStageStatus,
@@ -51,7 +52,7 @@ const COMMAND_SPECS = {
   init: { value: ['cycle-id', 'round', 'round-type', 'requirement', 'scope', 'by'], repeat: ['scope'] },
   show: { value: [] },
   advance: { value: ['to', 'by', 'reason'] },
-  'skip-scope': { value: ['scope', 'reason'] },
+  'skip-scope': { value: ['scope', 'reason', 'by'] },
   'set-stage': { value: ['stage', 'status', 'artifacts'] },
 };
 
@@ -64,7 +65,7 @@ const USAGE = [
   '             --scope <scope>（可重复） --by <agent>',
   '  show       读当前状态：status / history / stages / 允许的下一步',
   '  advance    推进轮次状态  --to <状态> --by <agent> [--reason <文本>]',
-  '  skip-scope 记录本轮跳过的 scope  --scope <scope> --reason <文本>',
+  '  skip-scope 记录本轮跳过的 scope  --scope <scope> --reason <文本> --by <agent>',
   '  set-stage  设置阶段状态  --stage <名称> --status <状态> [--artifacts a,b]',
   '',
   '通用参数: --json 输出机器可读 JSON（缺省输出人读文本）',
@@ -537,40 +538,61 @@ function cmdAdvance(target, flags) {
 function cmdSkipScope(target, flags) {
   const scope = requireFlag(flags, 'scope');
   const rawReason = flags.get('reason');
-  if (typeof rawReason !== 'string' || rawReason.trim() === '') {
+  const reason = typeof rawReason === 'string' ? rawReason.trim() : '';
+  if (reason === '') {
     failValidation(
-      `${target.file}: scopes_skipped[].reason: 跳过必须写明可被 review 发现的理由：` +
-        '--reason 缺失或为空均拒绝，文件未被修改',
-      'scopes_skipped[].reason',
+      `${target.file}: scopes_skipped[0].reason: 跳过必须写明可被 review 发现的理由` +
+        '（--reason 缺失或为空均拒绝，文件未被修改）',
+      'scopes_skipped[0].reason',
     );
   }
-  const reason = rawReason.trim();
-  if (!CYCLE_SCOPES.includes(scope)) {
+  const rawBy = flags.get('by');
+  if (rawBy === undefined) {
+    failUsage('缺少必填参数 --by（跳过必须留痕：谁做的不允许有默认值）');
+  }
+  const by = String(rawBy).trim();
+  if (by === '') {
     failValidation(
-      `${target.file}: scopes_skipped[].scope: scope 取值非法："${scope}"` +
-        `（允许值: ${CYCLE_SCOPES.join(' / ')}）`,
-      'scopes_skipped[].scope',
+      `${target.file}: scopes_skipped[0].by: 参数 --by 的取值不能为空（谁跳过的必须留痕）`,
+      'scopes_skipped[0].by',
+    );
+  }
+
+  // 待写入记录跑一遍共享规则（scope 枚举、四个必填字段），与校验器同一套判定
+  const entry = { scope, reason, at: new Date().toISOString(), by };
+  const issues = checkSkipRecord(entry, 'scopes_skipped[0]');
+  if (issues.length > 0) {
+    failValidation(
+      issues.map((issue) => `${target.file}: ${issue.path}: ${issue.text}`).join('\n'),
+      'scopes_skipped[0]',
+      issues.map((issue) => ({ field: issue.path, message: issue.text })),
     );
   }
 
   const data = loadCycle(target.file);
   if (!Array.isArray(data.scopes_skipped)) data.scopes_skipped = [];
-  const existing = data.scopes_skipped.find((item) => isObject(item) && item.scope === scope);
+  const index = data.scopes_skipped.findIndex(
+    (item) => isObject(item) && item.scope === scope,
+  );
+  const existing = index === -1 ? null : data.scopes_skipped[index];
 
-  if (existing && existing.reason === reason) {
+  if (existing && existing.reason === reason && existing.by === by) {
     writeResult({
       command: 'skip-scope',
       target,
       status: typeof data.status === 'string' ? data.status : null,
       changed: false,
-      message: `scope "${scope}" 已记录且理由未变：未做任何修改（幂等）`,
+      message:
+        `scope "${scope}" 已记录且理由与执行者未变：未做任何修改（幂等）` +
+        '（重复声明会刷新 at 时间戳，故不比较时间）',
       extra: { scopes_skipped: data.scopes_skipped },
     });
     return;
   }
 
-  if (existing) existing.reason = reason;
-  else data.scopes_skipped.push({ scope, reason });
+  // 同一 scope 重新声明：整条覆盖（reason / by / at 一并更新）
+  if (existing) data.scopes_skipped[index] = entry;
+  else data.scopes_skipped.push(entry);
   writeJsonAtomic(target.file, data);
 
   writeResult({

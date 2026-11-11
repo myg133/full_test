@@ -48,6 +48,9 @@ export const TERMINAL_STATUSES = Object.freeze(['completed', 'cancelled']);
 /** history 每条记录必填的字段 */
 export const HISTORY_REQUIRED_FIELDS = Object.freeze(['at', 'from', 'to', 'by']);
 
+/** scopes_skipped 每条记录必填的字段 */
+export const SKIP_RECORD_REQUIRED_FIELDS = Object.freeze(['scope', 'reason', 'at', 'by']);
+
 // ---------------------------------------------------------------- 转移表
 
 /**
@@ -280,6 +283,77 @@ export function checkCycleState(data) {
     }
   }
 
+  return issues;
+}
+
+// ---------------------------------------------------------------- 跳过记录检查
+
+/**
+ * 检查一条跳过记录（`scopes_skipped[]` 的元素）。
+ * 校验器与推进器共用本函数，保证两边对同一条记录报出同一类问题。
+ *
+ * @param {any} entry 跳过记录
+ * @param {string} at 字段路径前缀（如 `scopes_skipped[0]`）
+ * @returns {{kind: string, path: string, text: string}[]} 问题列表
+ */
+export function checkSkipRecord(entry, at) {
+  const issues = [];
+  if (!isObject(entry)) {
+    issues.push({
+      kind: 'type',
+      path: at,
+      text: `${at} 类型错误：期望 object，实际 ${describeType(entry)}`,
+    });
+    return issues;
+  }
+  if (!isFilledString(entry.scope)) {
+    issues.push({
+      kind: 'missing',
+      path: `${at}.scope`,
+      text: `${at}.scope 缺少必填字段（或不是非空字符串）`,
+    });
+  } else if (!CYCLE_SCOPES.includes(entry.scope)) {
+    issues.push({
+      kind: 'enum',
+      path: `${at}.scope`,
+      text: `${at}.scope 取值非法："${entry.scope}"（允许值: ${CYCLE_SCOPES.join(' / ')}）`,
+    });
+  }
+  if (!isFilledString(entry.reason)) {
+    issues.push({
+      kind: 'missing',
+      path: `${at}.reason`,
+      text: `${at}.reason 为空：跳过必须写明可被 review 发现的理由`,
+    });
+  }
+  if (!isFilledString(entry.at)) {
+    issues.push({
+      kind: 'missing',
+      path: `${at}.at`,
+      text: `${at}.at 缺少必填字段（或不是非空字符串）：跳过记录必须可被审计（什么时候跳过的）`,
+    });
+  }
+  if (!isFilledString(entry.by)) {
+    issues.push({
+      kind: 'missing',
+      path: `${at}.by`,
+      text: `${at}.by 缺少必填字段（或不是非空字符串）：跳过记录必须可被审计（谁跳过的）`,
+    });
+  }
+  return issues;
+}
+
+/**
+ * 检查 cycle.json 的 `scopes_skipped` 数组。
+ * @param {any} data cycle.json 解析结果
+ * @returns {{kind: string, path: string, text: string}[]} 问题列表
+ */
+export function checkScopesSkipped(data) {
+  const issues = [];
+  if (!isObject(data) || !Array.isArray(data.scopes_skipped)) return issues;
+  data.scopes_skipped.forEach((entry, index) => {
+    issues.push(...checkSkipRecord(entry, `scopes_skipped[${index}]`));
+  });
   return issues;
 }
 

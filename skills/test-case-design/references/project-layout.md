@@ -212,7 +212,7 @@ planned ──▶ in_progress ──▶ completed
 | `round_type` | string | 否 | 轮次类型。取值 `new-requirement` / `regression` / `defect-verify`，写了就必须合法（校验器会拦非法取值） |
 | `status` | string | 是 | 轮次当前状态。取值 `planned` / `in_progress` / `completed` / `blocked` / `cancelled`；**必须等于 `history` 最后一条的 `to`**（校验器会拦） |
 | `scopes` | array | 否 | 本轮覆盖的范围。元素取值 `functional` / `security` / `load`，写了就必须合法（校验器会拦非法取值） |
-| `scopes_skipped` | array | 否 | 本轮跳过的范围。元素为 `{scope, reason}`：`scope` 取值同 `scopes`，`reason` **不得为空**（校验器会拦） |
+| `scopes_skipped` | array | 否 | 本轮跳过的范围。元素为 `{scope, reason, at, by}`，**四个字段都必须是非空字符串**（校验器会拦）：`scope` 取值同 `scopes`；`reason` 是可被 review 发现的理由；`at` 是 ISO-8601 时间戳（什么时候跳过的）；`by` 是执行者标识（谁跳过的）。由 `scripts/cycle-state.mjs skip-scope` 写入 |
 | `stages` | object | 否 | 阶段状态表。键为阶段名，值为 `{status, artifacts?}`（校验器会拦非法的阶段状态） |
 | `stages.<name>.status` | string | 是（`stages` 存在时） | 阶段状态。取值 `pending` / `in_progress` / `done` / `blocked` / `skipped` |
 | `stages.<name>.artifacts` | array | 否 | 该阶段的产物路径列表 |
@@ -241,6 +241,7 @@ planned ──▶ in_progress ──▶ completed
 - `cycle.json` 的 `status` **必须等于** `history` 数组最后一条的 `to`。改状态时必须同时追加一条 `history` 记录，两处要同一次改动完成。**校验器会拦**（`status "x" 与 history 最后一条的 to "y" 不一致`）。
 - `history` 至少一条记录，**每条**含 `at` / `from` / `to` / `by`，四个字段都是非空字符串；其中 `from` 与 `to` 取值同 `status` 枚举。**校验器会拦**（`history[0].by 缺少必填字段`、`history[0].from 取值非法`）。
 - `scopes_skipped[].reason` **不得为空**：跳过必须是可被 review 发现的可解释决定，空理由一律 FAIL。与用例集里"跳过必须写理由"是同一原则。**校验器会拦**。
+- `scopes_skipped[]` 每条记录还须含 `at`（ISO-8601 时间戳）与 `by`（执行者标识），二者**不得为空**：跳过的决定要能被审计——半年后回看一条记录，得知道**谁在什么时候**跳过了它。**校验器会拦**。
 
 ### 4.5 `cycle.json` 与 `cycles/index.json`
 
@@ -297,7 +298,9 @@ planned ──▶ in_progress ──▶ completed
 | `suite "x" 与所在目录名 "y" 不一致` | 套件改名后没同步 | 让两者一致：改目录名或改 `suite` 字段 |
 | `status 取值非法` | 用了 `finished` 之类自造状态 | 用 `planned` / `in_progress` / `completed` / `blocked` / `cancelled` |
 | `status 缺少必填字段` | 轮次没写当前状态 | 用 `scripts/cycle-state.mjs advance` 推进（脚本会同时写 `status` 与 `history`） |
-| `scopes_skipped[0].reason 为空` | 跳过了范围但没写理由 | 写清"为什么这个范围本轮不跑"（如"需求未给任何性能指标，无阈值可依"） |
+| `scopes_skipped[0].reason` 缺失或为空 | 跳过了范围但没写理由 | 写清"为什么这个范围本轮不跑"（如"需求未给任何性能指标，无阈值可依"） |
+| `scopes_skipped[0].at` 缺少必填字段 | 跳过记录缺时间戳 | 用 `scripts/cycle-state.mjs skip-scope --by <agent>` 重新记录（脚本自动写 ISO-8601 时间戳） |
+| `scopes_skipped[0].by` 缺少必填字段 | 跳过记录缺执行者 | 同上；"谁跳过的"不允许有默认值 |
 | `status "x" 与 history 最后一条的 to "y" 不一致` | 只改了状态没追加 history | 追加一条 `history` 记录，其 `to` 等于新的 `status`；或直接用 `scripts/cycle-state.mjs advance` 走一次合法转移 |
 | `history[0].by 缺少必填字段` | 状态变更留痕不完整 | 每条 history 都要有 `at` / `from` / `to` / `by`；用 `advance` 生成的记录天然齐备 |
 | `cycle_id "x" 与轮次目录名 "y" 不一致` | 轮次目录改名后没同步 | 改目录名或改 `cycle_id`，两者必须一致 |
@@ -326,7 +329,7 @@ planned ──▶ in_progress ──▶ completed
 | 7 | `suite.json` 的 `cases_file` 指向的文件存在 | 缺失 → FAIL |
 | 8 | `suite.json` 的 `suite` 与所在目录名一致 | 不一致 → FAIL |
 | 9 | `cycle.json`（及 `index.json` 条目）的枚举值合法，`status` 必填 | → FAIL |
-| 10 | `cycle.json` 的 `scopes_skipped[].reason` 非空 | → FAIL |
+| 10 | `cycle.json` 的 `scopes_skipped[]` 每条含非空的 `scope` / `reason` / `at` / `by` | 缺字段 / reason 为空 → FAIL |
 | 11 | `cycle.json` 的 `status` 与 `history` 最后一条 `to` 一致；`history` 每条含 `at` / `from` / `to` / `by` | 不一致 / 缺字段 → FAIL |
 | 12 | `cycles/index.json` 中每个 `id` 在 `cycles/` 下有对应目录 | 悬空 → FAIL |
 | 13 | `.test-artifacts/` 在项目 `.gitignore` 中 | 未忽略 → FAIL |
