@@ -111,3 +111,10 @@
 - **预期结果**: 四例均退出码 1，报错指出缺失的字段名；`history` 为空数组、`history[0].from` 为非法枚举仍须被拦（不得回归）
 - **类型**: 功能
 
+### AC-019: `skip-scope` 记录含 `at` 与 `by`
+- **前置条件**: 合法轮次
+- **测试步骤**: `node $SK/scripts/cycle-state.mjs skip-scope <轮次目录> --scope load --reason "<理由>" --by dev-agent-1`；再跑一次**不带 `--by`** 的
+- **预期结果**: 前者退出码 0，且 `scopes_skipped[0]` 含 `scope` / `reason` / `at` / `by` 四个字段，`by` 等于传入值；后者退出码非 0 且文件未修改
+- **类型**: 功能
+
+

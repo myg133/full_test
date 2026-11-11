@@ -415,6 +415,36 @@ if [ $FIELD_OK -eq 1 ] && [ $R1 -ne 0 ] && [ $R2 -ne 0 ]; then
   ok "AC-018 history 每条记录四个必填字段齐备"
 fi
 
+# ---------------------------------------------------------------- AC-019
+# skip-scope 的记录须含 at 与 by；--by 必填
+D="$WORK/ac019"; mkdir -p "$D"
+node "$CS" init "$D/R1-REQ-001" --cycle-id R1-REQ-001 --round R1 --round-type new-requirement \
+  --requirement REQ-001 --scope functional --by dev >/dev/null 2>&1
+# 1) 带 --by 应成功且四字段齐备
+if node "$CS" skip-scope "$D/R1-REQ-001" --scope load --reason "需求未给性能指标，无阈值可依" --by dev-agent-1 >/dev/null 2>&1; then
+  SK="$(jget "$D/R1-REQ-001/cycle.json" scopes_skipped 0)"
+  if echo "$SK" | grep -q '"scope":"load"' && echo "$SK" | grep -q '"reason"' \
+     && echo "$SK" | grep -q '"at"' && echo "$SK" | grep -q '"by":"dev-agent-1"'; then
+    ok "AC-019 skip-scope 记录含 at 与 by"
+  else
+    bad "AC-019 skip-scope 记录含 at 与 by" "scopes_skipped[0]=$SK（应含 scope/reason/at/by 四字段）"
+  fi
+else
+  bad "AC-019 skip-scope 记录含 at 与 by" "带 --by 的 skip-scope 退出码非 0"
+fi
+# 2) 不带 --by 应被拒绝且文件不修改
+D2="$WORK/ac019-noby"; mkdir -p "$D2"
+node "$CS" init "$D2/R1-REQ-001" --cycle-id R1-REQ-001 --round R1 --round-type new-requirement \
+  --requirement REQ-001 --scope functional --by dev >/dev/null 2>&1
+BEFORE="$(sha "$D2/R1-REQ-001/cycle.json")"
+node "$CS" skip-scope "$D2/R1-REQ-001" --scope load --reason "x" >/dev/null 2>&1; RC=$?
+AFTER="$(sha "$D2/R1-REQ-001/cycle.json")"
+if [ $RC -ne 0 ] && [ "$BEFORE" = "$AFTER" ]; then
+  ok "AC-019 skip-scope 缺 --by 被拒且文件零改动"
+else
+  bad "AC-019 skip-scope 缺 --by 被拒且文件零改动" "rc=$RC sha相同=$([ "$BEFORE" = "$AFTER" ] && echo yes || echo no)"
+fi
+
 # ---------------------------------------------------------------- 汇总
 echo
 echo "────────────────────────────────────────"
