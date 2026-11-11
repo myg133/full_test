@@ -41,3 +41,11 @@
 |----|------|
 | _（示例）BA-A | 001-099 |
 | _（示例）BA-B | 100-199 |
+
+## 遗留项（已知限制，跨 REQ 跟踪）
+
+| 来源 | 遗留内容 | 归属 |
+|------|---------|------|
+| REQ-004 / D32 | `results.json` 不记录"为什么 skipped"，原因只在 `logs/runner.log`。要可信就得连同**指纹口径**一起扩（`fingerprint.mjs` + `verify-evidence.mjs`） | 后续 REQ（报告能力域优先 —— 报告读者最需要知道"这条为什么没跑"） |
+| REQ-004 / D32 | `case.status == "blocked"` 该不该执行，与 REQ-002A 的"`blocked` 计入覆盖"存在语义张力。执行层按"歧义显式拒"不替需求方裁定 | 需需求方裁定；裁定后再落到实现与契约 |
+| REQ-003 | `feature-meta/manifest.json` 的 `demand_dir` 写的是 `BA/demands/REQ-003`，实际路径是 `BA/demands/REQ-002-suite-foundation/REQ-003-tools-bootstrap` | 合并收口时一并修正 |

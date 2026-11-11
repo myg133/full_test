@@ -912,15 +912,20 @@ fs.writeFileSync(p,s);
 if [ "$MUT_OK" -ne 1 ]; then
   bad "AC-027 执行器生命周期必须收尾（异常路径也要停）" "变异体没造出来（判定层入口找不到）"
 else
+  T0="$(date +%s%3N)"
   ( cd "$D27" && timeout 20 node "$WORK/mutant/scripts/run-suite.mjs" \
       "$D27/test-assets/suites/REQ-001-coupon/suite.json" --json ) >/dev/null 2>&1
   RC27=$?
+  T1="$(date +%s%3N)"
+  MS27=$((T1 - T0))
   # 124 = 被 timeout 杀掉 = 进程挂死
-  if [ "$RC27" -ne 124 ] && [ "$RC27" -ne 137 ]; then
+  # ⚠️ 光看退出码不够 —— "卡住 19 秒然后自己退出"也能判绿（独立验收/实现方都指出了这一点）。
+  #    所以再加一道**耗时上限**：判定层一进来就抛异常，收尾必须在 15 秒内完成。
+  if [ "$RC27" -ne 124 ] && [ "$RC27" -ne 137 ] && [ "$MS27" -le 15000 ]; then
     ok "AC-027 执行器生命周期必须收尾（异常路径也要停）"
   else
     bad "AC-027 执行器生命周期必须收尾（异常路径也要停）" \
-        "退出码=$RC27（124/137 = 进程挂死，判定层异常后执行器没被收尾）"
+        "退出码=$RC27（124/137 = 进程挂死，判定层异常后执行器没被收尾）耗时=${MS27}ms（上限15000ms）"
   fi
 fi
 
@@ -963,12 +968,14 @@ O_OK="$(printf '%s\n' "$V28" | sed -n 's/^ok_ok=//p')"
 O_REC="$(printf '%s\n' "$V28" | sed -n 's/^ok_recorded=//p')"
 O_STG="$(printf '%s\n' "$V28" | sed -n 's/^ok_stage=//p')"
 O_RC="$(printf '%s\n' "$V28" | sed -n 's/^ok_rc=//p')"
-if [ "$F_OK" = "false" ] && [ "$F_REC" != "true" ] && [ "$F_STG" != "in_progress" ] && [ "$F_RC" = "1" ] \
+# ⚠️ 失败场景的 stage_status 必须**锁死为 null**（状态未知）——
+#    旧版只查"不等于 in_progress"，那 "pending" 这类同样误导人的值也能判绿。
+if [ "$F_OK" = "false" ] && [ "$F_REC" = "false" ] && [ "$F_STG" = "null" ] && [ "$F_RC" = "1" ] \
    && [ "$O_OK" = "true" ] && [ "$O_REC" = "true" ] && [ "$O_STG" = "in_progress" ] && [ "$O_RC" = "0" ]; then
   ok "AC-028 meta.cycle 段不得谎报推进结果"
 else
   bad "AC-028 meta.cycle 段不得谎报推进结果" \
-      "失败场景: ok=$F_OK(期望false) runs_recorded=$F_REC(期望≠true) stage_status=$F_STG(期望≠in_progress) 退出码=$F_RC(期望1) || 成功场景: ok=$O_OK(期望true) runs_recorded=$O_REC(期望true) stage_status=$O_STG(期望in_progress) 退出码=$O_RC(期望0)"
+      "失败场景: ok=$F_OK(期望false) runs_recorded=$F_REC(期望false) stage_status=$F_STG(期望null) 退出码=$F_RC(期望1) || 成功场景: ok=$O_OK(期望true) runs_recorded=$O_REC(期望true) stage_status=$O_STG(期望in_progress) 退出码=$O_RC(期望0)"
 fi
 
 # ---------------------------------------------------------------- 汇总

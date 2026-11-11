@@ -100,6 +100,14 @@ $(mkcase TC-004 边界越界 boundary "[ $(astep '长度21' '$.len' 'equals' '21
 MATRIX_B='[ { "requirement": "R-1", "methods_applied": ["M0.2"], "skipped": [], "dimensions": ["functional","boundary"] } ]'
 mkcases "$WORK/b.json" "$CASES_B" "$MATRIX_B"
 OUT_B="$(node "$CM" "$WORK/b.json" --methods "$MTH" 2>&1)"; RC_B=$?
+# 场景 B2：三条 boundary 用例的 expected 取值**完全相同** → distinct_expected 谓词必须报错
+# （场景 B 的取值互不相同，所以 B 测不出 distinct_expected 是否真的生效；B2 才测得出）
+CASES_B2="[ \
+$(mkcase TC-002 边界下界 boundary "[ $(astep '长度7' '$.len' 'equals' '7') ]"), \
+$(mkcase TC-003 边界上界 boundary "[ $(astep '长度8' '$.len' 'equals' '7') ]"), \
+$(mkcase TC-004 边界越界 boundary "[ $(astep '长度21' '$.len' 'equals' '7') ]") ]"
+mkcases "$WORK/b2.json" "$CASES_B2" "$MATRIX_B"
+OUT_B2="$(node "$CM" "$WORK/b2.json" --methods "$MTH" 2>&1)"; RC_B2=$?
 
 A3=0; A4=0
 # 判据：脚本必须**点名**那条方法与那条需求条目，而不是泛泛说"有问题"
@@ -114,6 +122,13 @@ if [ $A4 -eq 1 ]; then
   ok "AC-004 方法确实应用了 → 不误报"
 else
   bad "AC-004 方法确实应用了 → 不误报" "rc=$RC_B out=$OUT_B"
+fi
+# AC-003b：distinct_expected 谓词必须**真的生效** —— 同一维度下 expected 取值全相同 → 报错
+# （AC-004 的场景 B 取值互不相同，恒成立，查不出这个谓词有没有被实现）
+if [ $RC_B2 -ne 0 ]; then
+  ok "AC-003b distinct_expected 谓词生效（取值全相同 → 被发现）"
+else
+  bad "AC-003b distinct_expected 谓词生效" "rc=$RC_B2（期望非0）out=$OUT_B2"
 fi
 
 # ---------------------------------------------------------------- AC-005
@@ -180,11 +195,48 @@ DEPS="0"
 if [ -f "$PKG" ]; then
   DEPS="$(node -e 'const p=require(process.argv[1]);const d=Object.keys(p.dependencies||{}).length;console.log(d)' "$PKG")"
 fi
-EXT="$(grep -rlE "child_process|python3|/bin/bash" "$TCD/scripts" 2>/dev/null | wc -l)"
-if [ "${DEPS:-1}" -eq 0 ] && [ "$EXT" -eq 0 ]; then
+# 检索范围必须覆盖**整个 skill 目录**（不只 scripts/）且**去注释后**检索 ——
+# 旧版只 grep "$TCD/scripts"，把实现挪到 scripts/lib/ 或根目录就测不出来了。
+EXT="$(node -e '
+const fs=require("fs"),path=require("path");
+const root=process.argv[1];const files=[];
+const walk=(d)=>{ for(const e of fs.readdirSync(d,{withFileTypes:true})){ const p=path.join(d,e.name);
+  if(e.isDirectory()) walk(p); else if(/\.(mjs|js|cjs)$/.test(e.name)) files.push(p); } };
+if(fs.existsSync(root)) walk(root);
+const hits=[];
+for(const f of files){
+  const src=fs.readFileSync(f,"utf8").replace(/\/\*[\s\S]*?\*\//g,"").replace(/^\s*\/\/.*$/gm,"");
+  src.split(/\r?\n/).forEach((ln,i)=>{
+    if(/child_process|execSync|spawnSync|execFile|\/bin\/bash|python3/.test(ln)) hits.push(f+":"+(i+1));
+  });
+}
+console.log(hits.length);
+if(hits.length) console.error(hits.slice(0,5).join("\n"));
+' "$TCD" 2>/dev/null | head -1)"
+# 非内置 import（引第三方包）也算依赖
+BADIMPORT="$(node -e '
+const fs=require("fs"),path=require("path");
+const root=process.argv[1];const files=[];
+const walk=(d)=>{ for(const e of fs.readdirSync(d,{withFileTypes:true})){ const p=path.join(d,e.name);
+  if(e.isDirectory()) walk(p); else if(/\.(mjs|js|cjs)$/.test(e.name)) files.push(p); } };
+if(fs.existsSync(root)) walk(root);
+let n=0;
+for(const f of files){
+  const src=fs.readFileSync(f,"utf8").replace(/\/\*[\s\S]*?\*\//g,"").replace(/^\s*\/\/.*$/gm,"");
+  src.split(/\r?\n/).forEach((ln)=>{
+    if(/^\s*import\s+.*from\s+[\x27\x22]/.test(ln)){
+      const m=ln.match(/from\s+[\x27\x22]([^\x27\x22]+)[\x27\x22]/);
+      const spec=m?m[1]:"";
+      if(spec && !spec.startsWith("node:") && !spec.startsWith("./") && !spec.startsWith("../")) n++;
+    }
+  });
+}
+console.log(n);
+' "$TCD" 2>/dev/null | head -1)"
+if [ "${DEPS:-1}" -eq 0 ] && [ "${EXT:-1}" -eq 0 ] && [ "${BADIMPORT:-1}" -eq 0 ]; then
   ok "AC-009 零依赖 + 可移植"
 else
-  bad "AC-009 零依赖 + 可移植" "deps=$DEPS 命中外部依赖的文件数=$EXT"
+  bad "AC-009 零依赖 + 可移植" "deps=$DEPS 命中外部调用的行数=$EXT 非内置import=$BADIMPORT"
 fi
 
 # ---------------------------------------------------------------- AC-010
@@ -206,42 +258,64 @@ step "AC-011 本脚本自身要被验收（变异必须被测出差异）"
 if [ ! -f "$CM" ]; then
   bad "AC-011 本脚本自身要被验收" "缺 check-methods.mjs"
 else
-  # 把"缺少必需产出"的判定去掉 → 场景 A 应当不再报错（若仍报错，说明变异没生效）
-  cp "$CM" "$WORK/cm.bak"
-  # 变异 1：把 min_cases_by_dimension 的判定阈值改成 0（等价于不判）
+  # ⚠️ 绝不能**原地改被验对象** —— 旧版把 $CM 备份后原地改再还原，
+  #    一旦中途出错就留下改坏的实现（验收脚本污染被验物，比假 PASS 更糟）。
+  #    正确做法：把整个 skill 目录**复制一份**，在副本上做变异。
+  cp -r "$TCD" "$WORK/mutant-skill"
+  CMM="$WORK/mutant-skill/scripts/check-methods.mjs"
+  MTHM="$WORK/mutant-skill/references/methods.json"
+  # 检测信号用**「退出码 + 输出」的组合** —— 只看退出码会漏：
+  # 变异让实现崩溃时退出码同样是 1，与基线的"报 ERROR"退出码一样，看不出差异。
+  pair() { printf '%s\n--\n%s' "$1" "$2"; }
+  # 基线
+  OUT_RA="$(node "$CM" "$WORK/a.json" --methods "$MTH" 2>&1)"; RC_RA=$?
+  OUT_RB2="$(node "$CM" "$WORK/b2.json" --methods "$MTH" 2>&1)"; RC_RB2=$?
+  BASE_A="$(pair "$RC_RA" "$OUT_RA")"
+  BASE_B2="$(pair "$RC_RB2" "$OUT_RB2")"
+
+  # 变异 1：让 required_outputs 的核验失效
+  # （键名由 F1/F2 的 JSON 契约定死，不是实现内部命名 —— 实现方改内部变量名不该让验收失效）
   node -e '
   const fs=require("fs"),f=process.argv[1];let s=fs.readFileSync(f,"utf8");
-  s=s.replace(/min_cases_by_dimension/g,"min_cases_by_dimension_DISABLED");
+  s=s.replace(/required_outputs/g,"required_outputs_DISABLED");
   fs.writeFileSync(f,s);
-  ' "$CM"
-  node "$CM" "$WORK/a.json" --methods "$MTH" >/dev/null 2>&1; VM1=$?
-  cp "$WORK/cm.bak" "$CM"
-  # 变异 2：把 ERROR 降级成 WARN（退出码恒 0）
+  ' "$CMM"
+  OUT_V1="$(node "$CMM" "$WORK/a.json" --methods "$MTHM" 2>&1)"; RC_V1=$?
+  V1="$(pair "$RC_V1" "$OUT_V1")"
+  # 还原
+  cp "$WORK/mutant-skill/scripts/check-methods.mjs" "$WORK/m1.bak"
+
+  # 变异 2：把 ERROR 降级成 WARN（退出码应从 1 变 0）
   node -e '
   const fs=require("fs"),f=process.argv[1];let s=fs.readFileSync(f,"utf8");
-  s=s.replace(/severity\s*:\s*.ERROR./g,"severity: \x27WARN\x27");
+  s=s.replace(/[\x27\x22]ERROR[\x27\x22]/g,"\x27WARN\x27");
   fs.writeFileSync(f,s);
-  ' "$CM"
-  node "$CM" "$WORK/a.json" --methods "$MTH" >/dev/null 2>&1; VM2=$?
-  cp "$WORK/cm.bak" "$CM"
-  # 变异 3：跳过 distinct_expected 检查
+  ' "$CMM"
+  OUT_V2="$(node "$CMM" "$WORK/a.json" --methods "$MTHM" 2>&1)"; RC_V2=$?
+  V2="$(pair "$RC_V2" "$OUT_V2")"
+  cp "$WORK/m1.bak" "$CMM"
+
+  # 变异 3：让 distinct_expected 谓词失效（场景 B2 的取值全相同，应从"报错"变成"不报错"）
   node -e '
   const fs=require("fs"),f=process.argv[1];let s=fs.readFileSync(f,"utf8");
   s=s.replace(/distinct_expected/g,"distinct_expected_DISABLED");
   fs.writeFileSync(f,s);
-  ' "$CM"
-  node "$CM" "$WORK/b.json" --methods "$MTH" >/dev/null 2>&1; VM3=$?
-  cp "$WORK/cm.bak" "$CM"
-  # 还原后必须回到基线
-  node "$CM" "$WORK/a.json" --methods "$MTH" >/dev/null 2>&1; RB=$?
+  ' "$CMM"
+  OUT_V3="$(node "$CMM" "$WORK/b2.json" --methods "$MTHM" 2>&1)"; RC_V3=$?
+  V3="$(pair "$RC_V3" "$OUT_V3")"
+
+  # 还原后必须回到基线（确认变异被还原干净）
+  OUT_RB="$(node "$CM" "$WORK/a.json" --methods "$MTH" 2>&1)"; RC_RB=$?
   DET=0
-  [ "$VM1" -ne "$RB" ] && DET=$((DET+1))
-  [ "$VM2" -ne "$RB" ] && DET=$((DET+1))
-  [ "$VM3" -ne 0 ] && DET=$((DET+1))
-  if [ "$DET" -ge 2 ] && [ "$RB" -ne 0 ]; then
+  [ "$V1" != "$BASE_A" ] && DET=$((DET+1))
+  [ "$V2" != "$BASE_A" ] && DET=$((DET+1))
+  [ "$V3" != "$BASE_B2" ] && DET=$((DET+1))
+  # 必须 3/3 全测出 —— 旧版只要 2/3 就算过，等于给"漏测一处"留了后门
+  if [ "$DET" -eq 3 ] && [ "$RC_RB" -eq "$RC_RA" ]; then
     ok "AC-011 本脚本自身要被验收（变异测出差异 $DET/3）"
   else
-    bad "AC-011 本脚本自身要被验收" "检出差异 $DET/3 基线rc=$RB v1=$VM1 v2=$VM2 v3=$VM3"
+    bad "AC-011 本脚本自身要被验收" \
+        "检出差异 $DET/3（要求 3/3）基线A rc=$RC_RA 基线B2 rc=$RC_RB2 v1=$RC_V1 v2=$RC_V2 v3=$RC_V3 还原后 rc=$RC_RB"
   fi
 fi
 
@@ -253,11 +327,18 @@ if [ ! -f "$SK" ]; then
 else
   HAS_SCRIPT="$(grep -c "check-methods.mjs" "$SK" 2>/dev/null)"
   HAS_SEQ="$(grep -c -E '^\s*(node |# ).*check-methods\.mjs' "$SK" 2>/dev/null)"
-  HAS_ERRWARN="$(grep -c -E "ERROR|WARN" "$SK" 2>/dev/null)"
-  if [ "$HAS_SCRIPT" -ge 1 ] && [ "$HAS_SEQ" -ge 1 ] && [ "$HAS_ERRWARN" -ge 1 ]; then
+  # ERROR 与 WARN 必须**分别**出现 —— 旧版用 "ERROR|WARN" 一个正则，
+  # 只要文档里出现"ERROR/WARN"这个词就判绿，等于没查后果。
+  # 按 F6 的要求，两类结论**各自**要写清后果：ERROR 必须修；WARN 必须在报告里说明。
+  HAS_ERROR="$(grep -c "ERROR" "$SK" 2>/dev/null)"
+  HAS_WARN="$(grep -c "WARN" "$SK" 2>/dev/null)"
+  HAS_ERRFIX="$(grep -c -E "ERROR.*(必须|要)?修|修.*ERROR|阻断|block" "$SK" 2>/dev/null)"
+  HAS_WARNTELL="$(grep -c -E "WARN.*(说明|报告|列出|不得忽略)|(说明|报告|列出|不得忽略).*WARN" "$SK" 2>/dev/null)"
+  if [ "$HAS_SCRIPT" -ge 1 ] && [ "$HAS_SEQ" -ge 1 ] && [ "$HAS_ERROR" -ge 1 ]      && [ "$HAS_WARN" -ge 1 ] && [ "$HAS_ERRFIX" -ge 1 ] && [ "$HAS_WARNTELL" -ge 1 ]; then
     ok "AC-012 SKILL.md 把方法选择落在脚本上"
   else
-    bad "AC-012 SKILL.md 把方法选择落在脚本上" "脚本提及=$HAS_SCRIPT 调用序列=$HAS_SEQ ERROR/WARN=$HAS_ERRWARN"
+    bad "AC-012 SKILL.md 把方法选择落在脚本上" \
+        "脚本提及=$HAS_SCRIPT 调用序列=$HAS_SEQ ERROR=$HAS_ERROR WARN=$HAS_WARN ERROR后果=$HAS_ERRFIX WARN后果=$HAS_WARNTELL"
   fi
 fi
 

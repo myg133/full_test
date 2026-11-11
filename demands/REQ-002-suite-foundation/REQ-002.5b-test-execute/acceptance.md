@@ -208,7 +208,8 @@
 ### AC-027: 执行器生命周期必须收尾（异常路径也要停）
 - **前置条件**: 复制一份 skill 目录，把 `scripts/lib/verdict.mjs` 的 `export function decide(` 改成**立即抛异常**（模拟判定层崩溃）；用 mock 驱动跑一条用例
 - **测试步骤**: `timeout 20 node scripts/run-suite.mjs <suite.json> --json`，看退出码
-- **预期结果**: 退出码 **≠ 124**（124 = 被 `timeout` 杀掉 = 挂死）。进程必须在有限时间内结束
+- **预期结果**: 退出码 **≠ 124**（124 = 被 `timeout` 杀掉 = 挂死）；**且整段耗时 ≤ 15 秒**。进程必须在有限时间内结束
+- **补充**: 光看退出码不够 —— "卡住 19 秒然后自己退出"也能让退出码不为 124，所以**必须加耗时上限**。这一条是实现方在修复后主动指出的判据漏洞，已补入
 - **理由**（D30）: mock 驱动会起一个内置 HTTP 桩服务。执行外壳的 `driver.stop()` 只在正常路径上调用，没有 `finally` —— 任何异常都会跳过收尾，桩服务继续持有事件循环，**进程永不退出**。实测：判定层改成抛异常后，JSON 已输出（exit_code 1），进程却一直挂着直到被杀掉
 - **类型**: 健壮性
 
@@ -216,7 +217,8 @@
 - **前置条件**: 两个子场景。①`--cycle` 指向**不存在的轮次目录**（推进必然失败）②`--cycle` 指向**存在的轮次目录**（推进应当成功）
 - **测试步骤**: 两次都跑 `--json`，检查 `cycle` 段与退出码
 - **预期结果**:
-  - ① `cycle.ok == false`；`cycle.runs_recorded` **不得为 `true`**；`cycle.stage_status` **不得为 `"in_progress"`**；**退出码 == 1**
+  - ① `cycle.ok == false`；`cycle.runs_recorded == false`；`cycle.stage_status == null`（**状态未知**）；**退出码 == 1**
+    - ⚠️ `stage_status` 必须**锁死为 `null`**，不能只判"不等于 `in_progress`" —— `"pending"` 这类同样误导人的值也必须被挡住
   - ② `cycle.ok == true`；`cycle.runs_recorded == true`；`cycle.stage_status == "in_progress"`；**退出码 == 0**
 - **理由**（D31）: `meta.cycle` 段当前把 `stage_status` 与 `runs_recorded` **硬编码**成 `in_progress` / `true`，与同一段里的 `ok: false` 自相矛盾 —— 推进失败也照写"已记录"。轮次推进失败属于执行流程失败（用户要求把这次执行记进轮次，没记上就是没做完），按 D18 退出码应取 1；用例本身全通过不改变这一点。②是配对的**成功场景**，防止为了满足①而把字段一律写成 `false`
 - **类型**: 功能
