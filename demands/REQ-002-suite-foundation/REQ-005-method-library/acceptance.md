@@ -20,12 +20,16 @@
 - **类型**: 功能
 
 ### AC-003: 声称用了方法但没有对应产出 → 被发现
-- **前置条件**: 一条需求条目，`coverage_matrix[].methods_applied = ["M1.2"]`（边界值），但该条目下**没有** `boundary` 维度的用例
+- **前置条件**: 一条需求条目，`coverage_matrix[].methods_applied = ["M1.2"]`（边界值），该条目下有 **2 条** `boundary` 用例、且两条的 `expected` 取值**互不相同**
 - **测试步骤**: `node scripts/check-methods.mjs cases.json`
-- **预期结果**: 报出该条目"声明使用 M1.2 但缺少必需产出"，退出码 1
+- **预期结果**: 报出该条目"声明使用 M1.2 但缺少必需产出"（**缺的是数量**：boundary 维度用例数 2 < 3），退出码 1
 - **判据形式**: 输出里 `M1.2` 与 `R-1` 必须**同一行**出现 —— 只查"输出里有两个词"可能命中的是别处的提及
 - **类型**: 功能
-- **说明**: **这是本 REQ 的核心 AC**。它对应的失败模式是"方法使用只是声明"
+- **说明**: **这是本 REQ 的核心 AC**。它对应的失败模式是"方法使用只是声明"。
+  ⚠️ **样本必须只违反计数谓词**（D24 修正）：M1.2 = `min_cases_by_dimension(boundary,min=3)` **且**带 `distinct_expected` 子字段。
+  若给 **0** 条 boundary 用例，计数谓词与 distinct 子字段**同时**违反 → 计数谓词失效后 distinct 子字段照样报错 →
+  判据看不出计数谓词死没死（独立验收第三轮实测的 **C05 逃逸**）。改成给 **2 条**且取值**互不相同**的 boundary 用例：
+  计数 2 < 3 违反、distinct 2 ≥ 2 满足 —— 只有计数谓词能触发报错
 
 ### AC-004: 方法确实应用了 → 不误报
 - **前置条件**: 同一条目，补上 3 条 `boundary` 用例，断言的 `expected` 取值互不相同
@@ -106,7 +110,9 @@
   2. **三分类互斥** —— 同一条 `(requirement, method)` 不得同时出现在 `errors` 与 `warnings`
   3. 落在 `undecidable` 的组合，其 `verdicts[].status` **不得是 `satisfied`**（判不了 ≠ 通过）
   4. `verdicts[].status` 只能取约定的五个值；同一条 `(requirement, method)` 只能有一个 `verdict`
-  5. **覆盖完整性** —— 每个 `(需求条目 × 方法)` 组合都必须有结论。只给"有问题"的组合写结论 = **漏判**
+  5. **覆盖完整性** —— 每个 `(需求条目 × 方法)` 组合都必须有结论。只给"有问题"的组合写结论 = **漏判**。
+     ⚠️ 组合集合必须把**用例级**声明的方法编号也算进来（D24 修正）：只按 `coverage_matrix[].methods_applied` 算 →
+     用例声明了某方法、矩阵没声明时，那个组合会被算成"本来就不该有结论" → 漏判无从发现
 - **类型**: 功能
 - **说明**: F5.1 把字段名定死就是为了让这条可判。契约不写死，"判不了到底算不算通过"就会变成实现方与验收方各写各的理解 —— 那正是这套 skill 要消灭的分叉。第 5 条（覆盖完整性）是补上的（D9）—— 此前只查 status 合法与不重复，**漏判**测不出来
 
@@ -215,14 +221,22 @@
 - **说明**（D17）: 独立验收实测 —— 这四个谓词分支**没有任何 AC 触达**（验收样本只用了 M1.1/M1.2），把任一分支置空后验收脚本仍 **23 PASS / 0 FAIL**。**方法库里的每个谓词都必须有判据**，否则它随时会被悄悄删掉
 
 ### AC-024: M0.x / M4.x 判"无法判定"，**不得**默认通过（虚报类红线）
-- **前置条件**: 一份用例集，`coverage_matrix[0].methods_applied = ["M0.1"]`（Layer 0 必选测试点段编号，**不在设计方法库内**），`cases[0].method = ["M0.1"]`
+- **前置条件**: **两份**用例集，分别隔离两条产生"无法判定"的路径：
+  - **场景 A（矩阵级）**：`coverage_matrix[0].methods_applied = ["M0.1"]`（Layer 0 必选测试点段编号，**不在设计方法库内**），而 `cases[0].method = ["M1.1"]`（已登记）→ **只有矩阵级**那条路径会触发
+  - **场景 B（用例级）**：`cases[0].method = ["M0.1"]`，而 `coverage_matrix[0].methods_applied = ["M1.1"]` → **只有用例级**那条路径会触发
 - **测试步骤**: 跑 `node scripts/check-methods.mjs <用例集> --json`，检查输出 JSON
-- **预期结果**:
+- **预期结果**（**两个场景都要满足**）:
   1. `undecidable` 数组里**有** `M0.1` 这条
-  2. `verdicts` 里 `M0.1` 的 `status` 是 `undecidable`，**绝不是** `satisfied`
+  2. `verdicts` 里 `M0.1` 的 `status` 是 `undecidable`，**绝不是** `satisfied`，且**不得缺失**
   3. `errors` 数组里**没有** `M0.1`（它不是"产出缺失"，是"判不了"）
   4. `summary.undecidable` ≥ 1
-- **判据形式**: ①`undecidable` 含 `M0.1` ②`verdicts` 中 `M0.1` 的 status == `undecidable` ③`satisfied` 里**不含** `M0.1`
+- **判据形式**: ①`undecidable` 含 `M0.1` ②`verdicts` 中 `M0.1` 的 status == `undecidable` ③`satisfied` 里**不含** `M0.1`；**场景 A 与场景 B 各判一遍**
+- **说明**（D24）: 两条路径必须**各隔离一次** —— 若两个场景都让矩阵与用例同时声明 `M0.1`，
+  两条路径都会写 `undecidable`，删掉任何一条都还剩另一条 → 测不出"矩阵级/用例级"哪一侧被破坏
+  （独立验收第三轮实测的 **C22 / C10 两个逃逸**）。第 2 条还堵住了**一个真实缺陷**：
+  实现原先对**用例级**未登记编号只写 `undecidable`、**不写 `verdict`** ——
+  违反 F5.1 硬约束 2（"`undecidable` 对应的 `verdicts[].status` 必须是 `undecidable`"）
+  与硬约束 3（"没有结论的组合等于漏判"）
 - **类型**: 功能
 - **说明**（D17 / D8 / D10）: 独立验收实测 —— 把 `M0.1` 从"无法判定"改成 `satisfied`（**假绿灯**）后，验收脚本仍 **23 PASS / 0 FAIL**。这是**虚报类**规则却**完全没有 AC**，违反 D9。本条是"宁可漏报通过，不可虚报通过"这条底线的直接护栏
 
@@ -321,3 +335,35 @@
   `check-methods` rc=2（用法错误），`validate-cases` rc=1（把 `--help` 当成用例集文件路径 →
   "无法读取用例集文件"）。两个脚本的脚本头都声明「2 = 调用方式错误」，所以 `validate-cases` 的 rc=1 是错的。
   **又一次 D9**：实现写了、验收没测 → 随时会被改回去
+
+### AC-031: 独立的 `distinct_expected` 谓词种类必须真的被核验（D24）
+- **前置条件**: 被验 skill 目录的**副本**；副本的 `references/methods.json` 里追加一个方法 `M9.9`，其 `required_outputs = [{ "kind": "distinct_expected", "dimension": "boundary", "min": 2 }]`
+- **测试步骤**: 用副本的 `methods.json` 跑 `node scripts/check-methods.mjs <用例集>`
+  - **反例**：2 条 `boundary` 用例，`expected` 取值**完全相同** → 必须报错并点名"区分度"
+  - **正例**：2 条 `boundary` 用例，`expected` 取值**互不相同** → 不得报错
+- **预期结果**: 反例退出码 ≠ 0 且输出含"区分度"；正例退出码 0
+- **判据形式**: 两个子判据（反例报错 + 正例不报错）**全部**满足才算通过
+- **类型**: 功能
+- **说明**（D24）: 契约 D6 定了「`distinct_expected` 以**子字段**形式为准」，但实现**同时**保留了「独立 kind」的分支，
+  且 `PREDICATE_KINDS` 收录了它 —— 即实现**对外承诺支持**这个 kind。可 `methods.json` 从没用它 →
+  那段分支**从未被执行** → **没有任何 AC 保护**（独立验收第三轮实测：把它改成恒返回 ok，验收脚本仍 31/0，
+  即 **C06 逃逸**）。两种处置：① 删掉（死代码）② **给它补上验收**。BA 选②（保留支持 + 补保护）：
+  删掉后"有人写了这个 kind"会退化成**静默忽略** —— 那才是真正的虚报。判据用**数据级**手段
+  （改副本的 `methods.json`，不依赖实现内部变量名），与 AC-020/AC-021 同一套路
+
+### AC-032: `dimension:` 前缀的适用范围 —— 文档必须与实现一致（D12 / D24）
+- **前置条件**: `references/case-schema.md` 与 `scripts/validate-cases.mjs`
+- **测试步骤**: ①检索文档里 `dimension:` 前缀的**适用范围**说明 ②实测两处行为
+- **预期结果**:
+  1. 文档里存在把 `dimension:` **限定在 `skipped[]`** 的说明（含 `dimension:` + `skipped` + 限定词"只/仅"）
+  2. 文档里**不得**出现把 `dimension:` 放宽到"任何方法字段 / 任意位置"的措辞
+  3. **正反对消**：`skipped[].method` 里写 `dimension:concurrency` → validate-cases **接受**；
+     `cases[].method` 里写 `dimension:concurrency` → validate-cases **拒绝**
+- **判据形式**: ①文档有限定说明 ②无放宽措辞 ③行为与文档声明一致（两条都判）—— 三项**全部**满足
+- **类型**: 可用性
+- **说明**（D24）: 独立验收第三轮实测 —— 把 `case-schema.md` 里 D12 那句契约
+  （「`dimension:` 前缀只出现在 `skipped[]` 里」）改成「它可以出现在任何方法字段里」，
+  **验收脚本仍然 31 PASS / 0 FAIL** —— 这句契约**完全没有验收护栏**（REQ-002A 回归脚本也不查）。
+  后果不是虚报通过，而是**契约与实现分叉**：agent 照文档把 `dimension:` 写进 `cases[].method` →
+  validate-cases 拒绝 → agent 以为自己写对了却老是被打回。**契约文档本身就是交付物**，
+  不是实现完成后的收尾 —— D9 的第五次应验

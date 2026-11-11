@@ -134,7 +134,15 @@ fi
 # ---------------------------------------------------------------- AC-003 / AC-004
 step "AC-003/004 声称用了方法但无对应产出 → 被发现（且不误报）"
 # 场景 A：声明用了 M1.2（边界值），但该条目下**没有** boundary 维度的用例 → 应报错
-CASES_A="[ $(mkcase TC-001 功能用例 functional "[ $(astep '输入密码' '$.code' 'equals' '"E001"') ]") ]"
+# ⚠️ 样本必须**只违反计数谓词**（D24）：M1.2 = min_cases_by_dimension(boundary,min=3)
+#    **且**带 distinct_expected 子字段。若给 0 条 boundary 用例，计数谓词与 distinct
+#    子字段**同时**违反 → 计数谓词失效后 distinct 子字段照样报错 → 测不出计数谓词
+#    （独立验收实测的 C05 逃逸就是这个）。改为给 **2 条** boundary 用例且取值**互不相同**：
+#    计数 2 < 3 违反、distinct 2 ≥ 2 满足 —— 只有计数谓词能触发报错。
+CASES_A="[ \
+$(mkcase TC-001 功能用例 functional "[ $(astep '输入密码' '$.code' 'equals' '"E001"') ]"), \
+$(mkcase TC-002 边界下界 boundary "[ $(astep '长度7' '$.len' 'equals' '7') ]"), \
+$(mkcase TC-003 边界上界 boundary "[ $(astep '长度8' '$.len' 'equals' '"8"') ]") ]"
 MATRIX_A='[ { "requirement": "R-1", "methods_applied": ["M1.2"], "skipped": [], "dimensions": ["functional"] } ]'
 mkcases "$WORK/a.json" "$CASES_A" "$MATRIX_A"
 OUT_A="$(node "$CM" "$WORK/a.json" --methods "$MTH" 2>&1)"; RC_A=$?
@@ -476,6 +484,18 @@ else {
     for(const m of (matrix||[])){
       if(!m||m.requirement!==r.id) continue;
       for(const mid of (m.methods_applied||[])) combos.add(String(r.id)+"|"+String(mid));
+    }
+  }
+  // ⚠️ 覆盖口径必须把**用例级**声明的方法编号也算进来（D24）：
+  //    只按 coverage_matrix 算 → 用例声明了某个方法、矩阵没声明时，
+  //    那个 (需求条目 × 方法) 组合会被算成"本来就不该有结论" → 漏判无从发现。
+  //    F5.1 硬约束 3：「verdicts 必须覆盖每一条 (需求条目 × 方法) 组合 —— 没有结论的组合等于漏判」
+  for(const c of (cases.cases||[])){
+    if(!c||!Array.isArray(c.method)) continue;
+    const refs=Array.isArray(c.requirement_refs)?c.requirement_refs:[];
+    const targets=refs.length>0?refs:[null];
+    for(const mid of c.method){
+      for(const rid of targets) combos.add(String(rid)+"|"+String(mid));
     }
   }
   for(const c of combos){ if(!seen.has(c)) prob.push("verdict 漏判: "+c); }
@@ -893,7 +913,9 @@ if [ ! -f "$CM" ]; then
   bad "AC-024 M0.x 判无法判定" "缺 check-methods.mjs"
 else
   # M0.1 属于 Layer 0 必选测试点段，不在设计方法库内 → 必须判"无法判定"
-  CASES_M0='[ { "id": "TC-001", "title": "功能用例", "requirement_refs": ["R-1"], "dimension": "functional", "priority": "P0", "method": ["M0.1"], "status": "active", "steps": [ { "action": "下单", "expected": { "path": "$.code", "op": "equals", "expected": "E001" } } ] } ]'
+  # ⚠️ 场景 A 必须**只走矩阵级路径**：用例声明的是 M1.1（已登记），
+  #    只有矩阵声明 M0.1 → 矩阵级那条 addUndecidable 是唯一来源（D24）。
+  CASES_M0='[ { "id": "TC-001", "title": "功能用例", "requirement_refs": ["R-1"], "dimension": "functional", "priority": "P0", "method": ["M1.1"], "status": "active", "steps": [ { "action": "下单", "expected": { "path": "$.code", "op": "equals", "expected": "E001" } } ] } ]'
   MATRIX_M0='[ { "requirement": "R-1", "methods_applied": ["M0.1"], "skipped": [], "dimensions": ["functional"] } ]'
   mkcases "$WORK/m0.json" "$CASES_M0" "$MATRIX_M0"
   node "$CM" "$WORK/m0.json" --methods "$MTH" --json > "$WORK/m0.json.out" 2>/dev/null
@@ -917,11 +939,41 @@ else
   M0_S="$(printf '%s' "$M0_CHK" | cut -d'|' -f2)"
   M0_E="$(printf '%s' "$M0_CHK" | cut -d'|' -f3)"
   M0_N="$(printf '%s' "$M0_CHK" | cut -d'|' -f4)"
-  if [ "${M0_U:-0}" -eq 1 ] && [ "${M0_S:-1}" -eq 0 ] && [ "${M0_E:-1}" -eq 0 ] && [ "${M0_N:-0}" -ge 1 ]; then
-    ok "AC-024 M0.x/M4.x 判无法判定、不判通过（undecidable 含 M0.1，satisfied 不含，errors 不含）"
+  # ---- 场景 B：**用例级**声明的未登记编号（独立验收实测的 C10 逃逸）----
+  # 场景 A 的样本里，矩阵与用例**都**声明了 M0.1 → 两条路径都会写 undecidable，
+  # 删掉任何一条路径都还剩另一条 → 测不出"用例级"这一侧。场景 B 让**矩阵不声明**
+  # M0.1、只有用例声明 → 只有用例级路径会触发。
+  CASES_M0C='[ { "id": "TC-001", "title": "功能用例", "requirement_refs": ["R-1"], "dimension": "functional", "priority": "P0", "method": ["M0.1"], "status": "active", "steps": [ { "action": "下单", "expected": { "path": "$.code", "op": "equals", "expected": "E001" } } ] } ]'
+  MATRIX_M0C='[ { "requirement": "R-1", "methods_applied": ["M1.1"], "skipped": [], "dimensions": ["functional"] } ]'
+  mkcases "$WORK/m0c.json" "$CASES_M0C" "$MATRIX_M0C"
+  node "$CM" "$WORK/m0c.json" --methods "$MTH" --json > "$WORK/m0c.json.out" 2>/dev/null
+  M0C_CHK="$(node -e '
+  const fs=require("fs");
+  let o; try{ o=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); }catch(e){ console.log("u=0|s=1|v=0|e=1"); process.exit(0); }
+  const undec=(Array.isArray(o.undecidable)?o.undecidable:[]);
+  const verd=(Array.isArray(o.verdicts)?o.verdicts:[]);
+  const errs=(Array.isArray(o.errors)?o.errors:[]);
+  const isM0=(x)=>String(x&&x.method)==="M0.1";
+  // ① undecidable 里必须有 M0.1
+  const u=undec.some(isM0)?1:0;
+  // ② verdicts 里 M0.1 的 status 必须是 undecidable（**不得**缺失、**不得** satisfied）
+  const v=verd.find(isM0);
+  const s=(v&&v.status==="satisfied")?1:0;
+  const hasv=(v&&v.status==="undecidable")?1:0;
+  // ③ errors 里不该有 M0.1
+  const e=errs.some(isM0)?1:0;
+  console.log(u+"|"+s+"|"+hasv+"|"+e);
+  ' "$WORK/m0c.json.out")"
+  M0C_U="$(printf '%s' "$M0C_CHK" | cut -d'|' -f1)"
+  M0C_S="$(printf '%s' "$M0C_CHK" | cut -d'|' -f2)"
+  M0C_V="$(printf '%s' "$M0C_CHK" | cut -d'|' -f3)"
+  M0C_E="$(printf '%s' "$M0C_CHK" | cut -d'|' -f4)"
+  if [ "${M0_U:-0}" -eq 1 ] && [ "${M0_S:-1}" -eq 0 ] && [ "${M0_E:-1}" -eq 0 ] && [ "${M0_N:-0}" -ge 1 ] \
+     && [ "${M0C_U:-0}" -eq 1 ] && [ "${M0C_S:-1}" -eq 0 ] && [ "${M0C_V:-0}" -eq 1 ] && [ "${M0C_E:-1}" -eq 0 ]; then
+    ok "AC-024 M0.x/M4.x 判无法判定、不判通过（矩阵级 + 用例级两条路径；undecidable 有、verdict 是 undecidable、errors 无、satisfied 无）"
   else
     bad "AC-024 M0.x/M4.x 判无法判定、不判通过" \
-        "undecidable含M0.1=${M0_U:-?} 判成satisfied=${M0_S:-?} 误入errors=${M0_E:-?} undecidable数=${M0_N:-?}（期望 1/0/0/≥1）"
+        "矩阵级: undecidable含M0.1=${M0_U:-?} 判成satisfied=${M0_S:-?} 误入errors=${M0_E:-?} undecidable数=${M0_N:-?}（期望 1/0/0/≥1）| 用例级: undecidable含M0.1=${M0C_U:-?} 判成satisfied=${M0C_S:-?} verdict=undecidable=${M0C_V:-?}（期望1）误入errors=${M0C_E:-?}（期望 1/0/1/0）"
   fi
 fi
 
@@ -1200,6 +1252,101 @@ else
   else
     bad "AC-030 --help 退出码口径一致" \
         "check-methods rc=$HCM_RC(期望2且含用法) ok=$H1 | validate-cases rc=$HVC_RC(期望2且含用法) ok=$H2 out1=[$(printf '%s' "$HCM" | head -3 | tr '\n' ' ')] out2=[$(printf '%s' "$HVC" | head -3 | tr '\n' ' ')]"
+  fi
+fi
+
+# ---------------------------------------------------------------- AC-031
+step "AC-031 独立的 distinct_expected 谓词种类必须真的被核验（D24）"
+# 背景：契约 D6 定了「distinct_expected 以**子字段**形式为准」，但实现里**同时**保留了
+# 「独立 kind」的分支（`kind === 'distinct_expected'`），而且 `PREDICATE_KINDS` 收录了它
+# —— 即实现**对外承诺支持**这个 kind。可 methods.json 从没用它 → 那段分支**从未被执行**，
+# 也就**没有任何 AC 保护**。独立验收实测：把该分支改成恒返回 ok，验收脚本仍 31 PASS / 0 FAIL。
+# 两种处置：① 删掉（死代码）② **给它补上验收**。BA 选②（保留支持 + 补保护）：
+#   删掉后，"有人写了这个 kind"会退化成**静默忽略**（校验器若不再报错、核验器也不再执行）
+#   —— 那才是真正的虚报。保留并保护它，才能做到"写了就一定被核验"。
+# 判据用**数据级**手段：给副本的 methods.json 加一个用独立 kind 的方法，验证它被真的核验。
+if [ ! -f "$CM" ] || [ ! -f "$MTH" ]; then
+  bad "AC-031 独立 distinct_expected kind 被核验" "缺 check-methods.mjs 或 methods.json"
+else
+  cp -r "$TCD" "$WORK/de-skill"
+  node -e '
+  const fs=require("fs"),f=process.argv[1];
+  const o=JSON.parse(fs.readFileSync(f,"utf8"));
+  o.methods.push({
+    id:"M9.9",
+    name:"区分度探针（AC-031 用）",
+    aliases:[],
+    purpose:"独立验收用的探针方法，验证 kind=distinct_expected 这条路径真的会被执行。",
+    applies_when:["长度"],
+    not_applies_when:[],
+    required_outputs:[ { kind:"distinct_expected", dimension:"boundary", min:2 } ],
+    typical_dimensions:["boundary"],
+    anti_patterns:[]
+  });
+  fs.writeFileSync(f,JSON.stringify(o,null,2));
+  ' "$WORK/de-skill/references/methods.json" 2>/dev/null
+  MTH_DE="$WORK/de-skill/references/methods.json"
+  # 需求文本含"长度" → 命中 M9.9 的适用信号
+  REQ_LEN='[ { "id": "R-1", "title": "密码长度 8-20 位", "source_ref": "x", "testable": true } ]'
+  # 反例：2 条 boundary 用例，expected 取值**完全相同** → 区分度不足，必须报错
+  DE_BAD='[ { "id": "TC-001", "title": "功能用例", "requirement_refs": ["R-1"], "dimension": "functional", "priority": "P0", "method": ["M1.1"], "status": "active", "steps": [ { "action": "下单", "expected": { "path": "$.code", "op": "equals", "expected": "E001" } } ] }, { "id": "TC-002", "title": "边界下界", "requirement_refs": ["R-1"], "dimension": "boundary", "priority": "P0", "method": ["M1.1"], "status": "active", "steps": [ { "action": "长度7", "expected": { "path": "$.len", "op": "equals", "expected": "7" } } ] }, { "id": "TC-003", "title": "边界上界", "requirement_refs": ["R-1"], "dimension": "boundary", "priority": "P0", "method": ["M1.1"], "status": "active", "steps": [ { "action": "长度8", "expected": { "path": "$.len", "op": "equals", "expected": "7" } } ] } ]'
+  # 正例：取值互不相同 → 区分度够，不该报错
+  DE_OK='[ { "id": "TC-001", "title": "功能用例", "requirement_refs": ["R-1"], "dimension": "functional", "priority": "P0", "method": ["M1.1"], "status": "active", "steps": [ { "action": "下单", "expected": { "path": "$.code", "op": "equals", "expected": "E001" } } ] }, { "id": "TC-002", "title": "边界下界", "requirement_refs": ["R-1"], "dimension": "boundary", "priority": "P0", "method": ["M1.1"], "status": "active", "steps": [ { "action": "长度7", "expected": { "path": "$.len", "op": "equals", "expected": "7" } } ] }, { "id": "TC-003", "title": "边界上界", "requirement_refs": ["R-1"], "dimension": "boundary", "priority": "P0", "method": ["M1.1"], "status": "active", "steps": [ { "action": "长度8", "expected": { "path": "$.len", "op": "equals", "expected": "8" } } ] } ]'
+  MATRIX_DE='[ { "requirement": "R-1", "methods_applied": ["M9.9"], "skipped": [], "dimensions": ["functional","boundary"] } ]'
+  mkcases "$WORK/de_bad.json" "$DE_BAD" "$MATRIX_DE"
+  mkcases "$WORK/de_ok.json" "$DE_OK" "$MATRIX_DE"
+  OUT_DE_BAD="$(node "$WORK/de-skill/scripts/check-methods.mjs" "$WORK/de_bad.json" --methods "$MTH_DE" 2>&1)"; RC_DE_BAD=$?
+  OUT_DE_OK="$(node "$WORK/de-skill/scripts/check-methods.mjs" "$WORK/de_ok.json" --methods "$MTH_DE" 2>&1)"; RC_DE_OK=$?
+  DE_NEG=0; DE_POS=0
+  # 反例：必须报错（且点名区分度）
+  if [ $RC_DE_BAD -ne 0 ] && printf '%s' "$OUT_DE_BAD" | grep -q "区分度"; then DE_NEG=1; fi
+  # 正例：不得报错（否则这条判据恒红）
+  if [ $RC_DE_OK -eq 0 ]; then DE_POS=1; fi
+  if [ $DE_NEG -eq 1 ] && [ $DE_POS -eq 1 ]; then
+    ok "AC-031 独立 distinct_expected kind 真的被核验（取值全同→报错 / 取值互异→通过）"
+  else
+    bad "AC-031 独立 distinct_expected kind 被核验" \
+        "反例 rc=$RC_DE_BAD(期望≠0且点名区分度) ok=$DE_NEG | 正例 rc=$RC_DE_OK(期望0) ok=$DE_POS out1=[$(printf '%s' "$OUT_DE_BAD" | grep -E '结论|METHOD_OUTPUT_MISSING' | head -2 | tr '\n' ' ')] out2=[$(printf '%s' "$OUT_DE_OK" | grep -E '结论' | head -1 | tr '\n' ' ')]"
+  fi
+fi
+
+# ---------------------------------------------------------------- AC-032
+step "AC-032 `dimension:` 前缀的适用范围：文档必须与实现一致（D12 / D24）"
+# 为什么要有这条：独立验收第三轮实测 —— 把 case-schema.md 里 D12 那句契约
+# （「`dimension:` 前缀只出现在 `skipped[]` 里」）改成「它可以出现在任何方法字段里」，
+# **验收脚本仍然 31 PASS / 0 FAIL** —— 这句契约**完全没有验收护栏**（002A 回归脚本也不查）。
+# 后果不是虚报通过，而是**契约与实现分叉**：agent 照文档把 `dimension:` 写进
+# `cases[].method` → validate-cases 拒绝 → agent 以为自己写对了却老是被打回。
+# 契约文档本身就是交付物（不是实现完成后的收尾）—— 这条是 D9 的第五次应验。
+if [ ! -f "$TCD/references/case-schema.md" ] || [ ! -f "$VC" ]; then
+  bad "AC-032 dimension: 前缀适用范围文档与实现一致" "缺 case-schema.md 或 validate-cases.mjs"
+else
+  DOCSCHEMA="$TCD/references/case-schema.md"
+  # ① 必须存在把 `dimension:` 限定在 skipped[] 的说明（含 "dimension:" + "skipped" + 限定词）
+  LIMIT_HIT=0
+  if grep -F "dimension:" "$DOCSCHEMA" 2>/dev/null | grep -F "skipped" | grep -E "只|仅" >/dev/null; then LIMIT_HIT=1; fi
+  # ② 不得出现把 dimension: 放宽到任意方法字段 / 任意位置的措辞
+  LOOSE=""
+  for P in "任何方法字段" "任意方法字段" "任何位置" "任意位置" "任何方法列表"; do
+    if grep -F "$P" "$DOCSCHEMA" >/dev/null 2>&1; then LOOSE="$LOOSE [$P]"; fi
+  done
+  # ③ 正反对消：文档说"只在 skipped[]" → 实测 skipped[] 接受、cases[].method 拒绝
+  #    （与实现一致；两处已有判据 AC-022 / AC-016，这里独立复核一遍，防止文档与实现同时被改）
+  CASES_SK='[ { "id": "TC-001", "title": "功能用例", "requirement_refs": ["R-1"], "dimension": "functional", "priority": "P0", "method": ["M1.1"], "status": "active", "steps": [ { "action": "下单", "expected": { "path": "$.code", "op": "equals", "expected": "E001" } } ] } ]'
+  MATRIX_SKD='[ { "requirement": "R-1", "methods_applied": ["M1.1"], "skipped": [ { "method": "dimension:concurrency", "reason": "无并发语义" } ], "dimensions": ["functional"] } ]'
+  mkcases "$WORK/skd.json" "$CASES_SK" "$MATRIX_SKD"
+  node "$VC" "$WORK/skd.json" >/dev/null 2>&1; RC_SKD=$?
+  MATRIX_SKC='[ { "requirement": "R-1", "methods_applied": ["M1.1"], "skipped": [], "dimensions": ["functional"] } ]'
+  CASES_SKC='[ { "id": "TC-001", "title": "功能用例", "requirement_refs": ["R-1"], "dimension": "functional", "priority": "P0", "method": ["dimension:concurrency"], "status": "active", "steps": [ { "action": "下单", "expected": { "path": "$.code", "op": "equals", "expected": "E001" } } ] } ]'
+  mkcases "$WORK/skc.json" "$CASES_SKC" "$MATRIX_SKC"
+  node "$VC" "$WORK/skc.json" >/dev/null 2>&1; RC_SKC=$?
+  BEH_OK=0
+  if [ $RC_SKD -eq 0 ] && [ $RC_SKC -ne 0 ]; then BEH_OK=1; fi
+  if [ $LIMIT_HIT -eq 1 ] && [ -z "$LOOSE" ] && [ $BEH_OK -eq 1 ]; then
+    ok "AC-032 dimension: 前缀适用范围：文档限定在 skipped[]、无放宽措辞、实现与之一致"
+  else
+    bad "AC-032 dimension: 前缀适用范围文档与实现一致" \
+        "文档有限定说明=$LIMIT_HIT(期望1) 放宽措辞=$LOOSE(期望空) 行为一致(skipped接受/cases.method拒绝)=$BEH_OK(期望1,rc_skipped=$RC_SKD rc_cases=$RC_SKC)"
   fi
 fi
 
