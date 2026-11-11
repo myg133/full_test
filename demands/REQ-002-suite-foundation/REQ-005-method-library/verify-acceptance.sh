@@ -18,8 +18,10 @@ TCD="${1:?用法: verify-acceptance.sh <test-case-design-dir>}"
 TCD="$(cd "$TCD" 2>/dev/null && pwd)" || { echo "目录不存在: $1" >&2; exit 2; }
 
 CM="$TCD/scripts/check-methods.mjs"
+VC="$TCD/scripts/validate-cases.mjs"
 MTH="$TCD/references/methods.json"
 DIM="$TCD/references/dimensions.json"
+DIMDOC="$TCD/references/coverage-dimensions.md"
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/qa-005-XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
@@ -536,6 +538,284 @@ else
   else
     bad "AC-012 SKILL.md 把方法选择落在脚本上" \
         "脚本提及=$HAS_SCRIPT 调用序列=$HAS_SEQ ERROR=$HAS_ERROR WARN=$HAS_WARN ERROR后果=$HAS_ERRFIX WARN后果=$HAS_WARNTELL"
+  fi
+fi
+
+# ---------------------------------------------------------------- AC-016
+step "AC-016 cases[].method[] 与 methods_applied[] 只接受方法编号（D12）"
+# D12：dimension: 前缀只允许出现在 coverage_matrix[].skipped[].method。
+# 若这两处也放宽，dimension: 前缀就会渗进"用了哪些方法"的语义里。
+if [ ! -f "$VC" ]; then
+  bad "AC-016 method[] 只接受方法编号" "缺 validate-cases.mjs"
+else
+  # 场景 1：cases[0].method[] 里塞 dimension: 前缀
+  CASES_DIM_METH='[ { "id": "TC-001", "title": "功能用例", "requirement_refs": ["R-1"], "dimension": "functional", "priority": "P0", "method": ["dimension:concurrency"], "status": "active", "steps": [ { "action": "输入密码", "expected": { "path": "$.code", "op": "equals", "expected": "E001" } } ] } ]'
+  MATRIX_OK='[ { "requirement": "R-1", "methods_applied": ["M1.1"], "skipped": [], "dimensions": ["functional"] } ]'
+  mkcases "$WORK/dimmeth.json" "$CASES_DIM_METH" "$MATRIX_OK"
+  OUT_DM="$(node "$VC" "$WORK/dimmeth.json" 2>&1)"; RC_DM=$?
+  # 场景 2：coverage_matrix[0].methods_applied[] 里塞 dimension: 前缀
+  CASES_PLAIN='[ { "id": "TC-001", "title": "功能用例", "requirement_refs": ["R-1"], "dimension": "functional", "priority": "P0", "method": ["M1.1"], "status": "active", "steps": [ { "action": "输入密码", "expected": { "path": "$.code", "op": "equals", "expected": "E001" } } ] } ]'
+  MATRIX_DIM_APPLIED='[ { "requirement": "R-1", "methods_applied": ["dimension:concurrency"], "skipped": [], "dimensions": ["functional"] } ]'
+  mkcases "$WORK/dimappl.json" "$CASES_PLAIN" "$MATRIX_DIM_APPLIED"
+  OUT_DA="$(node "$VC" "$WORK/dimappl.json" 2>&1)"; RC_DA=$?
+  # 判据：必须点名**具体 JSON 路径** —— 只查 "dimension:concurrency" 可能命中别处的提及
+  DM_OK=0; DA_OK=0
+  if [ $RC_DM -ne 0 ] && printf '%s' "$OUT_DM" | grep -q "cases\[0\].method\[0\]"; then DM_OK=1; fi
+  if [ $RC_DA -ne 0 ] && printf '%s' "$OUT_DA" | grep -q "methods_applied\[0\]"; then DA_OK=1; fi
+  if [ $DM_OK -eq 1 ] && [ $DA_OK -eq 1 ]; then
+    ok "AC-016 method[] 与 methods_applied[] 只接受方法编号"
+  else
+    bad "AC-016 method[] 与 methods_applied[] 只接受方法编号" \
+        "cases.method rc=$RC_DM(期望≠0,点名cases[0].method[0]) ok=$DM_OK | methods_applied rc=$RC_DA(期望≠0,点名methods_applied[0]) ok=$DA_OK out1=$OUT_DM out2=$OUT_DA"
+  fi
+fi
+
+# ---------------------------------------------------------------- AC-017
+step "AC-017 跳过缺 reason 的报错文案区分方法/维度（D13）"
+if [ ! -f "$VC" ]; then
+  bad "AC-017 跳过文案区分方法/维度" "缺 validate-cases.mjs"
+else
+  # 场景 A：跳过的是**方法**（M1.4），缺 reason
+  MATRIX_SKIP_M='[ { "requirement": "R-1", "methods_applied": ["M1.1"], "skipped": [ { "method": "M1.4" } ], "dimensions": ["functional"] } ]'
+  mkcases "$WORK/skipm.json" "$CASES_PLAIN" "$MATRIX_SKIP_M"
+  OUT_SM="$(node "$VC" "$WORK/skipm.json" 2>&1)"; RC_SM=$?
+  # 场景 B：跳过的是**维度**（dimension:concurrency），缺 reason
+  MATRIX_SKIP_D='[ { "requirement": "R-1", "methods_applied": ["M1.1"], "skipped": [ { "method": "dimension:concurrency" } ], "dimensions": ["functional"] } ]'
+  mkcases "$WORK/skipd.json" "$CASES_PLAIN" "$MATRIX_SKIP_D"
+  OUT_SD="$(node "$VC" "$WORK/skipd.json" 2>&1)"; RC_SD=$?
+  SM_OK=0; SD_OK=0; SD_NEG=0
+  # A：点名 M1.4 + 出现"方法"二字
+  if [ $RC_SM -ne 0 ] && printf '%s' "$OUT_SM" | grep -q "M1.4" && printf '%s' "$OUT_SM" | grep -q "方法"; then SM_OK=1; fi
+  # B：点名 concurrency + 出现"维度"二字
+  if [ $RC_SD -ne 0 ] && printf '%s' "$OUT_SD" | grep -q "concurrency" && printf '%s' "$OUT_SD" | grep -q "维度"; then SD_OK=1; fi
+  # B：不得出现"跳过方法"（那正是要修的措辞错误）
+  if printf '%s' "$OUT_SD" | grep -q "跳过方法"; then SD_NEG=1; fi
+  if [ $SM_OK -eq 1 ] && [ $SD_OK -eq 1 ] && [ $SD_NEG -eq 0 ]; then
+    ok "AC-017 跳过缺 reason 的报错文案区分方法/维度"
+  else
+    bad "AC-017 跳过缺 reason 的报错文案区分方法/维度" \
+        "方法场景 rc=$RC_SM(期望≠0,含M1.4+方法) ok=$SM_OK | 维度场景 rc=$RC_SD(期望≠0,含concurrency+维度) ok=$SD_OK | 维度场景出现'跳过方法'=$SD_NEG(期望0) out1=$OUT_SM out2=$OUT_SD"
+  fi
+fi
+
+# ---------------------------------------------------------------- AC-018
+step "AC-018 skipped[].dimension 旧写法：两个脚本都判非法且指明正确写法（D14）"
+# 实测（BA 侧）：当前 check-methods.mjs **静默接受**该写法并让维度跳过真实生效，
+# 而 validate-cases.mjs 判它非法 —— 两个脚本对同一份文件结论相反，且宽松方静默放行。
+if [ ! -f "$VC" ] || [ ! -f "$CM" ]; then
+  bad "AC-018 legacy 写法两脚本一致判非法" "缺 validate-cases.mjs 或 check-methods.mjs"
+else
+  # legacy 写法：只有 dimension 字段，没有 method
+  MATRIX_LEGACY='[ { "requirement": "R-1", "methods_applied": ["M1.1"], "skipped": [ { "dimension": "concurrency", "reason": "无并发语义" } ], "dimensions": ["functional"] } ]'
+  mkcases "$WORK/legacy.json" "$CASES_PLAIN" "$MATRIX_LEGACY"
+  OUT_LV="$(node "$VC" "$WORK/legacy.json" 2>&1)"; RC_LV=$?
+  OUT_LC="$(node "$CM" "$WORK/legacy.json" --methods "$MTH" 2>&1)"; RC_LC=$?
+  LV_OK=0; LC_OK=0; LC_HINT=0
+  [ $RC_LV -ne 0 ] && LV_OK=1
+  [ $RC_LC -ne 0 ] && LC_OK=1
+  # check-methods 必须**指明正确写法** —— 只报错不指路，agent 仍然改不对
+  printf '%s' "$OUT_LC" | grep -q "dimension:" && LC_HINT=1
+  if [ $LV_OK -eq 1 ] && [ $LC_OK -eq 1 ] && [ $LC_HINT -eq 1 ]; then
+    ok "AC-018 legacy 写法两脚本一致判非法且指明正确写法"
+  else
+    bad "AC-018 legacy 写法两脚本一致判非法且指明正确写法" \
+        "validate rc=$RC_LV(期望≠0) ok=$LV_OK | check-methods rc=$RC_LC(期望≠0) ok=$LC_OK | 指明正确写法=$LC_HINT(期望1) out2=$OUT_LC"
+  fi
+fi
+
+# ---------------------------------------------------------------- AC-019
+step "AC-019 未知维度名（拼错）→ ERROR，两个脚本都点名（D15）"
+if [ ! -f "$VC" ] || [ ! -f "$CM" ]; then
+  bad "AC-019 未知维度名判 ERROR" "缺 validate-cases.mjs 或 check-methods.mjs"
+else
+  # 拼错的维度名：concurrancy 是 concurrency 的错拼
+  MATRIX_TYPO='[ { "requirement": "R-1", "methods_applied": ["M1.1"], "skipped": [ { "method": "dimension:concurrancy", "reason": "拼错了" } ], "dimensions": ["functional"] } ]'
+  mkcases "$WORK/typo.json" "$CASES_PLAIN" "$MATRIX_TYPO"
+  OUT_TV="$(node "$VC" "$WORK/typo.json" 2>&1)"; RC_TV=$?
+  OUT_TC="$(node "$CM" "$WORK/typo.json" --methods "$MTH" 2>&1)"; RC_TC=$?
+  TV_OK=0; TC_OK=0
+  # 两个脚本都**必须点名那个拼错的名字**
+  if [ $RC_TV -ne 0 ] && printf '%s' "$OUT_TV" | grep -q "concurrancy"; then TV_OK=1; fi
+  if [ $RC_TC -ne 0 ] && printf '%s' "$OUT_TC" | grep -q "concurrancy"; then TC_OK=1; fi
+  if [ $TV_OK -eq 1 ] && [ $TC_OK -eq 1 ]; then
+    ok "AC-019 未知维度名判 ERROR 且两个脚本都点名"
+  else
+    bad "AC-019 未知维度名判 ERROR 且两个脚本都点名" \
+        "validate rc=$RC_TV(期望≠0,含concurrancy) ok=$TV_OK | check-methods rc=$RC_TC(期望≠0,含concurrancy) ok=$TC_OK out1=$OUT_TV out2=$OUT_TC"
+  fi
+fi
+
+# ---------------------------------------------------------------- AC-020
+step "AC-020 维度枚举单一来源：validate-cases 不再自带副本（D16）"
+# 实测（BA 侧）：给 dimensions.json 加第 9 个维度后，
+# validate-cases 判非法（读的是硬编码常量）、check-methods 照常认 → 同文件两脚本结论相反。
+# 判据是**两个副本的退出码必须不同**：都 0 = 还在读硬编码；都 1 = 根本没读文件。
+if [ ! -f "$VC" ] || [ ! -f "$DIM" ]; then
+  bad "AC-020 维度枚举单一来源" "缺 validate-cases.mjs 或 dimensions.json"
+else
+  cp -r "$TCD" "$WORK/ss-skill"
+  # 给副本的 dimensions.json 加第 9 个维度
+  node -e '
+  const fs=require("fs"),f=process.argv[1];
+  const o=JSON.parse(fs.readFileSync(f,"utf8"));
+  o.dimensions.push({id:"audit",name:"审计",always_applies:false,applies_when:["审计"],skip_reason_required:true,skip_reason_hint:"无审计留痕要求",description:"审计留痕。"});
+  fs.writeFileSync(f,JSON.stringify(o,null,2));
+  ' "$WORK/ss-skill/references/dimensions.json" 2>/dev/null
+  # 造一份用了 audit 维度的用例集
+  CASES_AUDIT='[ { "id": "TC-001", "title": "审计用例", "requirement_refs": ["R-1"], "dimension": "audit", "priority": "P0", "method": ["M1.1"], "status": "active", "steps": [ { "action": "执行", "expected": { "path": "$.code", "op": "equals", "expected": "E001" } } ] } ]'
+  MATRIX_AUDIT='[ { "requirement": "R-1", "methods_applied": ["M1.1"], "skipped": [], "dimensions": ["audit"] } ]'
+  mkcases "$WORK/audit.json" "$CASES_AUDIT" "$MATRIX_AUDIT"
+  # 副本（库里有 audit）→ 应当认；原目录（库里没有 audit）→ 应当不认
+  OUT_SS="$(node "$WORK/ss-skill/scripts/validate-cases.mjs" "$WORK/audit.json" 2>&1)"; RC_SS=$?
+  OUT_OR="$(node "$VC" "$WORK/audit.json" 2>&1)"; RC_OR=$?
+  # 源码检查：validate-cases.mjs 里不得再出现那 8 个维度 id 组成的硬编码枚举
+  HARDCODED="$(node -e '
+  const fs=require("fs");
+  let s; try{ s=fs.readFileSync(process.argv[1],"utf8"); }catch(e){ console.log("__ERR__"); process.exit(0); }
+  // 去掉注释与字符串后，检索是否还有一个含 3 个以上维度 id 的数组字面量
+  const ids=["functional","boundary","exception","permission","data","concurrency","performance","compatibility"];
+  const stripped=s.replace(/\/\*[\s\S]*?\*\//g,"").replace(/\/\/.*$/gm,"");
+  const m=stripped.match(/\[[^\]]*\]/g)||[];
+  let hit=0;
+  for(const arr of m){
+    const n=ids.filter(id=>arr.includes("\x27"+id+"\x27")||arr.includes("\x22"+id+"\x22")).length;
+    if(n>=3) hit++;
+  }
+  console.log(hit);
+  ' "$VC" 2>/dev/null)"
+  SS_OK=0; OR_OK=0; HC_OK=0
+  [ $RC_SS -eq 0 ] && SS_OK=1
+  [ $RC_OR -ne 0 ] && OR_OK=1
+  [ "${HARDCODED:-1}" -eq 0 ] && HC_OK=1
+  # 副本与原目录的退出码**必须不同** —— 这是"确实在读文件"的判据
+  if [ $SS_OK -eq 1 ] && [ $OR_OK -eq 1 ] && [ $HC_OK -eq 1 ]; then
+    ok "AC-020 维度枚举单一来源（副本认新维度，原目录不认，无硬编码副本）"
+  else
+    bad "AC-020 维度枚举单一来源" \
+        "副本rc=$RC_SS(期望0) 原目录rc=$RC_OR(期望≠0) 硬编码枚举数=$HARDCODED(期望0) out1=$OUT_SS out2=$OUT_OR"
+  fi
+fi
+
+# ---------------------------------------------------------------- AC-021
+step "AC-021 维度清单文档与库一致（D16）"
+if [ ! -f "$DIM" ] || [ ! -f "$DIMDOC" ]; then
+  bad "AC-021 维度清单文档与库一致" "缺 dimensions.json 或 coverage-dimensions.md"
+else
+  # ① BA 侧独立比对：md 表格里的取值集合 与 json 的 id 集合 必须完全相等
+  SETDIFF="$(node -e '
+  const fs=require("fs");
+  let o; try{ o=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); }catch(e){ console.log("__ERR__|__ERR__"); process.exit(0); }
+  const doc=fs.readFileSync(process.argv[2],"utf8");
+  const ids=(Array.isArray(o.dimensions)?o.dimensions:[]).map(d=>String(d.id)).sort();
+  // md 表格行形如：| `functional` | 功能 | ... |
+  const mdIds=[...doc.matchAll(/^\|\s*`([a-z_]+)`\s*\|/gm)].map(m=>m[1]);
+  const uniq=[...new Set(mdIds)].sort();
+  const inMd=ids.filter(i=>!uniq.includes(i));
+  const inJson=uniq.filter(i=>!ids.includes(i));
+  console.log(inMd.join(",")+"|"+inJson.join(","));
+  ' "$DIM" "$DIMDOC" 2>/dev/null)"
+  MD_MISSING="$(printf '%s' "$SETDIFF" | cut -d'|' -f1)"
+  MD_EXTRA="$(printf '%s' "$SETDIFF" | cut -d'|' -f2)"
+  # ② 副本上删掉 md 表格里的一行 → 对照检查必须报错并点名被删掉的 id
+  cp -r "$TCD" "$WORK/dd-skill"
+  node -e '
+  const fs=require("fs"),f=process.argv[1];
+  let s=fs.readFileSync(f,"utf8");
+  s=s.replace(/^\|\s*`performance`\s*\|.*\n/m,"");
+  fs.writeFileSync(f,s);
+  ' "$WORK/dd-skill/references/coverage-dimensions.md" 2>/dev/null
+  # 入口名由实现自定（契约只要求"能单独触发"）→ 依次尝试可能的组合，
+  # **任一**组合能点名被删掉的维度即算通过（不把实现绑死在某个参数名上）。
+  DD_OUT=""; DD_RC=2; DD_OK=0
+  try_dd() {
+    local o r
+    o="$(node "$WORK/dd-skill/scripts/check-methods.mjs" "$@" 2>&1)"; r=$?
+    # 用法错误（码 2）= 这个入口不存在 → 试下一个
+    if [ $r -ne 2 ] && [ $r -ne 0 ] && printf '%s' "$o" | grep -q "performance"; then
+      DD_OUT="$o"; DD_RC=$r; DD_OK=1; return 0
+    fi
+    return 1
+  }
+  MTH_D="$WORK/dd-skill/references/methods.json"
+  DIM_D="$WORK/dd-skill/references/dimensions.json"
+  DOC_D="$WORK/dd-skill/references/coverage-dimensions.md"
+  try_dd --methods "$MTH_D" --dimensions "$DIM_D" --dimensions-doc "$DOC_D" --check-dimensions-doc || \
+  try_dd --methods "$MTH_D" --dimensions "$DIM_D" --dimensions-doc "$DOC_D" --check-doc || \
+  try_dd --methods "$MTH_D" --dimensions "$DIM_D" --doc "$DOC_D" --check-doc || \
+  try_dd --methods "$MTH_D" --dimensions "$DIM_D" --check-doc || \
+  try_dd --methods "$MTH_D" --dimensions "$DIM_D" --dimensions-doc "$DOC_D" || \
+  try_dd --check-dimensions-doc --dimensions-doc "$DOC_D" --dimensions "$DIM_D"
+  if [ -z "$MD_MISSING" ] && [ -z "$MD_EXTRA" ] && [ $DD_OK -eq 1 ]; then
+    ok "AC-021 维度清单文档与库一致"
+  else
+    bad "AC-021 维度清单文档与库一致" \
+        "库有文档无=[$MD_MISSING] 文档有库无=[$MD_EXTRA] 删行后rc=$DD_RC(期望≠0且≠2) 点名performance=$DD_OK out=$DD_OUT"
+  fi
+fi
+
+# ---------------------------------------------------------------- AC-022
+step "AC-022 新增契约自身要被验收（正反对消 + 数据级变异）"
+# 为什么要有这条：AC-016~AC-021 是本轮新增的契约。**新写的判据也可能恒真**
+# （例：check-methods 若对任何 skipped 项都报错，AC-018 照样绿；若 dimensions.json
+#  被删了它照常读硬编码兜底，AC-020 照样绿）。
+# 本条用两种手段证伪：
+#   ① 正反对消 —— 同一脚本对**合法**写法必须不报错（否则就是恒红误伤）
+#   ② 数据级变异 —— 改**数据**而不是改代码（不依赖实现内部变量名）
+if [ ! -f "$VC" ] || [ ! -f "$CM" ]; then
+  bad "AC-022 新增契约自身要被验收" "缺 validate-cases.mjs 或 check-methods.mjs"
+else
+  # ---------- ① 正反对消：合法写法必须被接受，且跳过真实生效 ----------
+  # 需求文本故意命中 concurrency 的适用信号（并发/重复提交）
+  REQ_CONC='[ { "id": "R-1", "title": "用户可以并发下单并重复提交", "source_ref": "x", "testable": true } ]'
+  printf '{\n  "schema_version": 2,\n  "meta": { "source": "qa-005", "generated_at": "2026-11-11T19:00:00+08:00", "case_count": 1 },\n  "requirements": %s,\n  "open_questions": [],\n  "coverage_matrix": [ { "requirement": "R-1", "methods_applied": ["M1.1"], "skipped": [ { "method": "dimension:concurrency", "reason": "该条目无共享资源，无并发语义" } ], "dimensions": ["functional"] } ],\n  "cases": [ { "id": "TC-001", "title": "功能用例", "requirement_refs": ["R-1"], "dimension": "functional", "priority": "P0", "method": ["M1.1"], "status": "active", "steps": [ { "action": "下单", "expected": { "path": "$.code", "op": "equals", "expected": "E001" } } ] } ]\n}\n' "$REQ_CONC" > "$WORK/valid_skip.json"
+  OUT_VS_CM="$(node "$CM" "$WORK/valid_skip.json" --methods "$MTH" 2>&1)"; RC_VS_CM=$?
+  OUT_VS_VC="$(node "$VC" "$WORK/valid_skip.json" 2>&1)"; RC_VS_VC=$?
+  POS_OK=0
+  # 合法写法：check-methods 不得因跳过项报错，且跳过**真实生效**
+  #（需求文本命中 concurrency 信号 → 若跳过未生效，必报 DIMENSION_MISSING）
+  if [ $RC_VS_CM -eq 0 ] && ! printf '%s' "$OUT_VS_CM" | grep -q "DIMENSION_MISSING"; then POS_OK=$((POS_OK+1)); fi
+  # 合法写法：validate-cases 不得因维度名报错
+  if [ $RC_VS_VC -eq 0 ] && ! printf '%s' "$OUT_VS_VC" | grep -q "dimension"; then POS_OK=$((POS_OK+1)); fi
+  # ---------- ② 数据级变异 1：删掉 dimensions.json → 不得静默降级 ----------
+  cp -r "$TCD" "$WORK/nolib-skill"
+  rm -f "$WORK/nolib-skill/references/dimensions.json"
+  OUT_NL="$(node "$WORK/nolib-skill/scripts/validate-cases.mjs" "$WORK/valid_skip.json" 2>&1)"; RC_NL=$?
+  M1_OK=0
+  # 库缺失 → 必须**明确报错**（码 2 或输出点名 dimensions.json）；若 rc=0 照常通过 = 有硬编码兜底
+  if [ $RC_NL -ne 0 ] && { [ $RC_NL -eq 2 ] || printf '%s' "$OUT_NL" | grep -q "dimensions.json"; }; then M1_OK=1; fi
+  # ---------- ② 数据级变异 2：dimensions.json 加一个文档里没有的维度 → 对照检查必须报错 ----------
+  cp -r "$TCD" "$WORK/drift-skill"
+  node -e '
+  const fs=require("fs"),f=process.argv[1];
+  const o=JSON.parse(fs.readFileSync(f,"utf8"));
+  o.dimensions.push({id:"audit",name:"审计",always_applies:false,applies_when:["审计"],skip_reason_required:true,skip_reason_hint:"无审计留痕要求",description:"审计留痕。"});
+  fs.writeFileSync(f,JSON.stringify(o,null,2));
+  ' "$WORK/drift-skill/references/dimensions.json" 2>/dev/null
+  DR_OUT=""; DR_RC=2; DR_OK=0
+  try_drift() {
+    local o r
+    o="$(node "$WORK/drift-skill/scripts/check-methods.mjs" "$@" 2>&1)"; r=$?
+    if [ $r -ne 2 ] && [ $r -ne 0 ] && printf '%s' "$o" | grep -q "audit"; then
+      DR_OUT="$o"; DR_RC=$r; DR_OK=1; return 0
+    fi
+    return 1
+  }
+  MTH_G="$WORK/drift-skill/references/methods.json"
+  DIM_G="$WORK/drift-skill/references/dimensions.json"
+  DOC_G="$WORK/drift-skill/references/coverage-dimensions.md"
+  try_drift --methods "$MTH_G" --dimensions "$DIM_G" --dimensions-doc "$DOC_G" --check-dimensions-doc || \
+  try_drift --methods "$MTH_G" --dimensions "$DIM_G" --dimensions-doc "$DOC_G" --check-doc || \
+  try_drift --methods "$MTH_G" --dimensions "$DIM_G" --doc "$DOC_G" --check-doc || \
+  try_drift --methods "$MTH_G" --dimensions "$DIM_G" --check-doc || \
+  try_drift --methods "$MTH_G" --dimensions "$DIM_G" --dimensions-doc "$DOC_G" || \
+  try_drift --check-dimensions-doc --dimensions-doc "$DOC_G" --dimensions "$DIM_G"
+  # 汇总：4 项全过才算本条成立
+  DET2=$(( POS_OK + M1_OK + DR_OK ))
+  if [ $POS_OK -eq 2 ] && [ $M1_OK -eq 1 ] && [ $DR_OK -eq 1 ]; then
+    ok "AC-022 新增契约自身要被验收（正反对消 2/2 + 数据级变异 2/2）"
+  else
+    bad "AC-022 新增契约自身要被验收" \
+        "正反对消=$POS_OK/2(期望2) 删库变异=$M1_OK/1(期望1,rc=$RC_NL) 库文档漂移变异=$DR_OK/1(期望1,rc=$DR_RC) 漂移输出=$DR_OUT 删库输出=$OUT_NL 合法写法输出=$OUT_VS_CM"
   fi
 fi
 

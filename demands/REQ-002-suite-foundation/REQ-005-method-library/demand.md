@@ -191,9 +191,16 @@ node scripts/check-methods.mjs --methods <路径> --dimensions <路径>   # 换�
 - **不做**通用表达式引擎（`required_outputs` 不允许写任意表达式）—— 通用表达式等于让模型写代码
 - **不改** `cases.json` 的 schema（不新增字段）—— 方法核验只读现有字段
 - **不改** REQ-002A 的校验**职责** —— `validate-cases.mjs` 的职责不变，`check-methods.mjs` 是**另一个脚本**。
-  **例外（唯一一处，D11）**：允许 `validate-cases.mjs` 对 `skipped[].method` 的格式检查**向后兼容地放宽**，
+  **例外一（唯一一处格式放宽，D11）**：允许 `validate-cases.mjs` 对 `skipped[].method` 的格式检查**向后兼容地放宽**，
   接受 `dimension:<维度名>` 前缀 —— 否则 D7 的"维度跳过"写出来根本交不出去（契约与实现分叉）。
   放宽带向后兼容：旧用例集行为完全不变，REQ-002A 回归 19/0 必须保持
+  **例外二（唯一一处数据来源变更，D16）**：允许 `validate-cases.mjs` 的**覆盖维度枚举**改为从
+  `references/dimensions.json` 读取（删掉硬编码的 `DIMENSIONS` 数组）—— 否则维度枚举存在三份副本
+  （硬编码常量 / `dimensions.json` / `coverage-dimensions.md` 表格）且零对照检查，**分叉当下已经存在**：
+  库一加维度，`validate-cases` 判非法而 `check-methods` 判合法，同一份用例集两个脚本结论相反。
+  语义不变：仍是那 8 个维度的同一份枚举，只是**唯一来源**从代码常量改为数据文件。
+  读不到 / 解析失败 → 明确报错退出（码 2），**绝不静默降级**到内置列表（静默降级 = 又一份真相）。
+  旧用例集行为完全不变，REQ-002A 回归 19/0 必须保持
 - **不做**"自动生成用例" —— 本 REQ 只核验，不生成
 
 ---

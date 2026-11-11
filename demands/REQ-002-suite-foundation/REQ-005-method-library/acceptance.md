@@ -130,3 +130,66 @@
 - **场景 2 的两个前提**（缺一个都测不到 `METHOD_SUSPECT`）:
   1. 需求标题**不含** `M1.2` 的适用信号词（长度/范围/上限/下限/最多/至少/不超过/不少于/位数/数量/阈值/到期/间隔）—— 否则判的是"适用"而不是"存疑"
   2. **必需产出必须齐备** —— 实现的判定顺序是「产出缺失 → ERROR（更根本）→ 才轮到适用性存疑」（与 D26/D27 同一条原则），产出也缺时报的是 `missing_output`，走不到 `METHOD_SUSPECT` 分支
+
+### AC-016: `cases[].method[]` 与 `methods_applied[]` 只接受方法编号（D12）
+- **前置条件**: 一份 schema v2 用例集。场景 1：`cases[0].method = ["dimension:concurrency"]`。场景 2：`coverage_matrix[0].methods_applied = ["dimension:concurrency"]`
+- **测试步骤**: 跑 `node scripts/validate-cases.mjs <用例集>`，两个场景各一次
+- **预期结果**: 两个场景都退出码 1，且报错分别点名 `cases[0].method[0]` 与 `coverage_matrix[0].methods_applied[0]`
+- **判据形式**: 输出里必须出现该**具体 JSON 路径**（`cases[0].method[0]` / `coverage_matrix[0].methods_applied[0]`）—— 只查 "dimension:concurrency" 可能命中别处的提及
+- **类型**: 功能
+- **说明**（D12）: `dimension:` 前缀**只允许出现在 `coverage_matrix[].skipped[].method`**（D7/D11 定的唯一例外）。这条 AC 钉住"只放宽这一处"的边界 —— D11 放宽了 `skipped[].method`，若有人顺手把 `cases[].method[]` 或 `methods_applied[]` 也放宽，`dimension:` 前缀就会渗进"用了哪些方法"的语义里（那两处记的是**方法编号**，不是跳过声明）。契约已写在 `case-schema.md` §`skipped[]`，本条补的是**验收保护**
+
+### AC-017: 跳过项缺 `reason` 的报错文案要区分"方法"与"维度"（D13）
+- **前置条件**: 两份用例集。场景 A：`skipped = [{"method":"M1.4"}]`（缺 reason，跳过的是**方法**）。场景 B：`skipped = [{"method":"dimension:concurrency"}]`（缺 reason，跳过的是**维度**）
+- **测试步骤**: 跑 `node scripts/validate-cases.mjs <用例集>`，两个场景各一次
+- **预期结果**: 两个场景都退出码 1。**场景 A 的报错必须说"方法"**（如"跳过的方法必须写明 reason"），**场景 B 的报错必须说"维度"**（如"跳过的维度必须写明 reason"）。两者都**必须点名被跳过的那个对象**（A 点名 `M1.4`、B 点名 `concurrency`）—— 有多条跳过时，agent 需要知道该改哪一条
+- **判据形式**: 场景 A 的输出含 `M1.4` **且**含"方法"二字；场景 B 的输出含 `concurrency` **且**含"维度"二字，且**不含**"跳过方法"（那正是要修的措辞错误）
+- **类型**: 可用性
+- **说明**（D13）: `skipped[].method` 有两种形态（方法编号 / 维度标识），报错文案却一律写"跳过方法" —— 跳维度时文案与事实不符。agent 靠报错文案判断怎么改，文案说错就会改错地方。**点名对象**同属此处：文案只说"跳过方法"而不说是哪一条，等于让 agent 自己回去数
+
+### AC-018: `skipped[].dimension` 旧写法在两个脚本里都判非法，且指明正确写法（D14）
+- **前置条件**: 一份 schema v2 用例集，`coverage_matrix[0].skipped = [{"dimension":"concurrency","reason":"无并发语义"}]`（**只有** `dimension` 字段，没有 `method`）
+- **测试步骤**: ①跑 `node scripts/validate-cases.mjs <用例集>` ②跑 `node scripts/check-methods.mjs <用例集>`
+- **预期结果**: **两个脚本都退出码 1**（结论一致，都判非法）。且 `check-methods.mjs` 的报错必须**指出正确写法** —— 输出里出现 `dimension:` 前缀的示例（如 `dimension:concurrency`）或明确提示"应写成 method 字段"
+- **判据形式**: ① `validate-cases` 退出码 ≠ 0；② `check-methods` 退出码 ≠ 0 **且**输出里出现 `dimension:`（正确写法的提示）
+- **类型**: 功能
+- **说明**（D14）: 实测当前 `check-methods.mjs` **静默接受**这个写法并让该维度跳过**真实生效** —— 而 `validate-cases.mjs` 判它非法。**两个脚本对同一份文件给出相反结论**，且宽松的那个让非法写法静默生效 = 虚报。`check-methods.mjs` 是本 REQ 新增文件、从未发布，无兼容负担。注意：**不能只是删掉兼容分支**（那样报错会变成"既没有 method 也没有 dimension"，对写了 legacy 写法的 agent 仍然指错路），必须保留探测并**报出正确写法**
+
+### AC-019: 未知维度名（拼错）→ ERROR，且两个脚本都点名（D15）
+- **前置条件**: 一份 schema v2 用例集，`coverage_matrix[0].skipped = [{"method":"dimension:concurrancy","reason":"拼错了"}]`（`concurrancy` 是 `concurrency` 的错拼）
+- **测试步骤**: ①跑 `node scripts/validate-cases.mjs <用例集>` ②跑 `node scripts/check-methods.mjs <用例集>`
+- **预期结果**: **两个脚本都退出码 1**（不是 WARN、不是退出码 0），且**都点名那个拼错的名字** `concurrancy`
+- **判据形式**: ①退出码 ≠ 0 且输出含 `concurrancy`；②退出码 ≠ 0 且输出含 `concurrancy`
+- **类型**: 功能
+- **说明**（D15）: 实测当前 `validate-cases.mjs` 只报 WARN、退出码 0「校验通过」；`check-methods.mjs` **一个字都不提** —— 该跳过**静默失效**。维度名不在枚举内是**可机械判定的事实**（按 D2 的三分法归 ERROR，不归 WARN）。**前置依赖 D16**：判定"拼错"要有唯一依据，故枚举必须先单一来源化，否则两个脚本依据的枚举不同，判据不可靠
+
+### AC-020: 维度枚举单一来源 —— `validate-cases.mjs` 不再自带副本（D16）
+- **前置条件**: 把 skill 目录**复制一份**到临时目录，在副本的 `references/dimensions.json` 里**加一个第 9 个维度**（如 `audit`），并造一份用了该维度的用例集（`cases[0].dimension = "audit"`）
+- **测试步骤**: ①跑**副本**的 `validate-cases.mjs` ②跑**原目录**的 `validate-cases.mjs` ③源码检查：检索 `validate-cases.mjs` 里是否还有那 8 个维度的硬编码数组
+- **预期结果**:
+  1. **副本**退出码 0（认这个新维度 —— 它是从文件读出来的）
+  2. **原目录**退出码 1（不认 —— 原库的 `dimensions.json` 里没有 `audit`）
+  3. 源码里**不存在**硬编码的维度枚举数组（否则副本也认不了、原目录也会误认）
+- **判据形式**: ①与②的退出码**必须不同**（都 0 = 还在读硬编码；都 1 = 根本没读文件）；③源码检索不到那 8 个维度 id 组成的字面量数组
+- **类型**: 功能
+- **说明**（D16）: 实测**分叉当下已经存在**：给 `dimensions.json` 加第 9 个维度后，`validate-cases` 判 `cases[].dimension="audit"` **非法**（它读的是硬编码常量）、`check-methods` **照常认** → 同一份用例集两个脚本结论相反。而"加维度"是方法库最常见的演进动作。**三份副本（硬编码常量 / `dimensions.json` / `coverage-dimensions.md` 表格）→ 一份**，分叉这个类别直接消失。读不到库时必须**明确报错退出**，不得静默降级到内置列表（静默降级 = 又一份真相）
+
+### AC-021: 维度清单文档与库一致（D16）
+- **前置条件**: `references/coverage-dimensions.md` 的维度表格 与 `references/dimensions.json` 并存
+- **测试步骤**: ①比对 md 表格里的取值集合与 json 的 `id` 集合 ②把 md 表格删掉一行，在**副本**上跑文档一致性检查
+- **预期结果**: ①两集合**完全相等**（不多不少）②副本上的检查退出码 ≠ 0 并**点名**被删掉的那个维度 id
+- **判据形式**: ①集合相等用脚本独立比对（不依赖实现自报）；②必须**点名**具体 id
+- **对照入口（契约）**: 维度清单的对照检查必须**可从命令行单独触发**（不依赖跑一遍用例集）。方法侧已有 `--doc <说明文档> --check-doc` 入口，维度侧需有**对应的一个**（如 `--dimensions-doc <维度清单.md> --check-dimensions-doc`，或把维度清单纳入 `--check-doc`）。**入口名由实现自定，但"能单独触发"是契约** —— 否则 agent 无法在交付前自查
+- **类型**: 功能
+- **说明**（D16）: `coverage-dimensions.md` 是 SKILL.md 明确让 agent 读的清单（SKILL.md:42）。它与库分叉 = agent 照文档写的维度名被校验器拒绝，而 agent 无从知道该信哪个文件。方法侧早有 `--check-doc` 对照机制，**维度侧缺** —— 补上。同时该文档里"改动其中一处必须同步另一处"这句**手工契约**要改成"以 dimensions.json 为准，由脚本对照保证一致"
+
+### AC-022: 本轮新增契约自身要被验收（正反对消 + 数据级变异）
+- **前置条件**: 无
+- **测试步骤**: ①**正反对消**：造一份**合法**用例集（`skipped[].method = "dimension:concurrency"`，且需求文本**故意命中** concurrency 的适用信号），分别跑 `validate-cases.mjs` 与 `check-methods.mjs` —— 两者都**不得**因该跳过项报错，且 `check-methods` **不得**报 `DIMENSION_MISSING`（说明跳过真实生效）②**数据级变异 1**：在 skill **副本**里删掉 `references/dimensions.json`，跑副本的 `validate-cases.mjs` ③**数据级变异 2**：在 skill **副本**里给 `dimensions.json` 加一个文档里没有的维度（如 `audit`），跑副本的维度清单对照检查
+- **预期结果**:
+  1. 正反对消 2/2 —— 合法写法被接受、跳过真实生效
+  2. 变异 1：`validate-cases.mjs` **明确报错**（退出码非 0，且码 2 或输出点名 `dimensions.json`）—— **不得**静默降级到内置列表后照常通过
+  3. 变异 2：维度清单对照检查退出码非 0 **且点名** `audit`
+- **判据形式**: 4 个子判据（2 个正反 + 2 个变异）**全部**满足才算通过
+- **类型**: 回归
+- **说明**（D9）: AC-016~AC-021 是本轮新增的契约，**新写的判据同样可能恒真** —— 若 `check-methods` 对任何 `skipped` 项都报错，AC-018 照样绿；若 `dimensions.json` 被删了它照常读硬编码兜底，AC-020 照样绿。本条用两种手段证伪：**正反对消**（合法写法必须被接受）＋ **数据级变异**（改数据而非改代码，因此不依赖实现内部变量名）
