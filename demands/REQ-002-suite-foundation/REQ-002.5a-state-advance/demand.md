@@ -54,7 +54,13 @@ agent 只能提交"推进意图"（"这一轮开始了"、"这一轮完成了"�
 
 ## 已确认的既有缺陷（本 REQ 必须修）
 
-**缺陷**：`scripts/verify-layout.mjs` 第 496 行要求 `cycle.json` 必须含非空字符串 `requirement`，但 `references/project-layout.md` §4「轮次状态机与阶段」**从未写过 `cycle.json` 的字段表**，只讲了状态机与一致性规则。
+本 REQ 开发期间，BA 对 REQ-002B 已交付的 `verify-layout.mjs` 做了一轮**契约 ↔ 实现一致性变异测试**：把契约文档声明的每一条"必须"逐个破坏，看校验器是否真的拦。共发现 3 个缺陷，**全部属于"文档写了必须、校验器没拦"**，直接违反契约文档第 1 节的承诺：
+
+> 凡是本文件没写的自由项，校验器一律不拦；凡是本文件写了"必须"的，**校验器一定会拦**。
+
+### 缺陷 1：契约文档漏写 `cycle.json` 字段表（文档缺口）
+
+**现象**：`scripts/verify-layout.mjs` 第 496 行要求 `cycle.json` 必须含非空字符串 `requirement`，但 `references/project-layout.md` §4「轮次状态机与阶段」**从未写过 `cycle.json` 的字段表**，只讲了状态机与一致性规则。
 
 **实测**：按契约文档构造的合法 `cycle.json`（只写 `cycle_id` / `round` / `round_type` / `status` / `scopes` / `scopes_skipped` / `stages` / `history`）被校验器判 FAIL：
 
@@ -62,9 +68,46 @@ agent 只能提交"推进意图"（"这一轮开始了"、"这一轮完成了"�
 [FAIL] test-assets/cycles/R1-REQ-001/cycle.json: requirement 缺少必填字段（或不是非空字符串）
 ```
 
-**定性**：校验器是对的 —— REQ-002B 的 `demand.md` F4 明确定义了 `cycle.json` 含 `"requirement": "REQ-001"`。**是契约文档漏了**，属于 REQ-002B 的文档交付缺口。
+**定性**：校验器是对的 —— REQ-002B 的 `demand.md` F4 明确定义了 `cycle.json` 含 `"requirement": "REQ-001"`。**是契约文档漏了**。
 
-**为什么必须在本 REQ 修**：契约文档第 1 节承诺"凡是本文件写了'必须'的，校验器一定会拦；凡是本文件没写的自由项，校验器一律不拦"。文档漏写 + 校验器拦截 = 执行者按文档办事却被拒，这是契约与实现不一致的活样本。修在 REQ-002.5a 而不是拖到 REQ-002.2（SKILL.md 重写），是因为它会直接卡住 REQ-002.5b 的执行链路。
+**修法**：在 `references/project-layout.md` §4 补齐 `cycle.json` 的字段表（至少含 `cycle_id` / `requirement` / `round` / `round_type` / `status` / `scopes` / `scopes_skipped` / `stages` / `history` / `trigger`），并保证"按文档构造的合法 `cycle.json` 能通过 `verify-layout.mjs`"（AC-014）。
+
+### 缺陷 2：环境 `name` 与文件名不一致未被拦截（实现缺口）
+
+**契约要求**（§3.2 字段表首行）：
+
+> `name` | string | 是 | 环境标识。**必须与文件名（不含 `.json`）完全一致**
+
+**实测**：把 `environments/local.json` 的 `name` 改成 `"other"`（文件名不变），校验器**放行**，exit 0。
+
+**原因**：实现里没有"文件名 ↔ `name` 字段"的交叉校验。`verify-layout.mjs` 第 337 行的 `envNames.add(basename(file, '.json'))` 是给 `suite.json` 的 `environment` 悬空引用检查用的，不是 name 一致性检查。
+
+**修法**：加一条 —— 环境文件的 `name` 必须等于其 basename（不含 `.json`），否则 FAIL（AC-017）。
+
+### 缺陷 3：`history` 每条记录缺 `at` / `from` / `to` / `by` 全部未被拦截（实现缺口）
+
+**契约要求**（§4.3）：
+
+> `history` 至少一条记录，**每条含 `at` / `from` / `to` / `by`**，其中 `from` 与 `to` 取值同 `status` 枚举。
+
+**实测**（四例全部放行，exit 0）：
+
+| 变异 | 实际 |
+|---|---|
+| `history[0]` 删掉 `by` | 放行 ✗ |
+| `history[0]` 删掉 `at` | 放行 ✗ |
+| `history[0]` 删掉 `from` | 放行 ✗ |
+| `history[0]` 删掉 `to` | 放行 ✗ |
+
+对照：`history` 为空数组 → 拦 ✓；`history[0].from` 填非法枚举 → 拦 ✓。说明现有实现只校验了"最后一条是 object"和"from/to 枚举合法"，**没有校验四个必填字段是否齐备**。
+
+**修法**：每条 history 记录必须含 `at` / `from` / `to` / `by` 且为非空字符串；缺任一 → FAIL。`from` / `to` 继续受 `status` 枚举约束（AC-018）。
+
+### 为什么三个都要在本 REQ 修
+
+1. 缺陷 1 会直接卡住 REQ-002.5b 的执行链路（按文档造的轮次跑不起来）。
+2. 缺陷 2、3 是"契约说了必须、校验器没拦" —— **跟没写是一回事**。本 REQ 的核心目的正是把强制真正落到脚本上，留着不管，REQ-002.5b 会把不合规状态直接固化成证据链。
+3. 三个缺陷的共同根源是同一个：REQ-002B 交付时缺少"契约 ↔ 实现双向一致性"的机械验证。修复它们的同时，本 REQ 建立 `verify-acceptance.sh`（见 F8），把这条防线常态化。
 
 ## 功能要求
 
@@ -166,6 +209,22 @@ node scripts/cycle-state.mjs show test-assets/cycles/R1-REQ-001 --json
 
 > 这是 REQ-002B 开发阶段由 worker 主动指出的已知缺口（"agent 不知道去用它"）。不补，脚本等于不存在。本 REQ 只做**最小增量**，REQ-002.2 整体重写 `SKILL.md` 时再整合。
 
+### F8 验收脚本 `BA/demands/.../REQ-002.5a-state-advance/verify-acceptance.sh`
+
+本 REQ 的 18 条 AC 全部机械化，由 `verify-acceptance.sh` 逐条执行。
+
+**背景**：这个套件至今**没有任何自动化回归测试**，连续两次返工（REQ-002A、REQ-002B）都是靠手工逐条验证。手工验证 18 条 AC 必然漏判 —— 本 REQ 的缺陷 2、3 正是手工验收阶段漏掉、靠变异测试才挖出来的。
+
+**用法**：
+
+```bash
+bash BA/demands/REQ-002-suite-foundation/REQ-002.5a-state-advance/verify-acceptance.sh <skill-dir>
+```
+
+`<skill-dir>` 指向含 `SKILL.md` 的 skill 目录。退出码 `0` = 全过，`1` = 有 AC 未通过。
+
+**约束**：只读 skill 目录，测试样例一律造在临时目录里，不污染仓库。
+
 ## 非功能要求
 
 - **零依赖**：只用 `node:` 内置模块，`package.json` 的 `dependencies` 保持为空
@@ -177,7 +236,7 @@ node scripts/cycle-state.mjs show test-assets/cycles/R1-REQ-001 --json
 
 ## 验收要点
 
-见 `acceptance.md`（16 条 AC）。
+见 `acceptance.md`（18 条 AC）。
 
 ## 依赖说明
 

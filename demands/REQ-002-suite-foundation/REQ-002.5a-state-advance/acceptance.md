@@ -98,3 +98,16 @@
 - **测试步骤**: 检查 `package.json` 的 `dependencies`；在源码中检索 `bash`/`python3`/`grep`/`sed`/`/tmp` 调用；对 `show` 跑 `--json`
 - **预期结果**: `dependencies` 为空或不存在；无上述外部命令与硬编码路径；`--json` 输出可被 `JSON.parse` 成功
 - **类型**: 非功能
+
+### AC-017: 环境 `name` 与文件名必须一致（既有缺陷 2 修复）
+- **前置条件**: 合法项目，把 `environments/local.json` 的 `name` 改成 `"other"`（**文件名不变**）
+- **测试步骤**: `node $SK/scripts/verify-layout.mjs <project-root>`
+- **预期结果**: 退出码 1，报错指出环境 `name` 与文件名不一致
+- **类型**: 功能
+
+### AC-018: `history` 每条记录四个必填字段齐备（既有缺陷 3 修复）
+- **前置条件**: 合法项目，分别把 `history[0]` 的 `at` / `from` / `to` / `by` 逐个删掉（四例）
+- **测试步骤**: 同上
+- **预期结果**: 四例均退出码 1，报错指出缺失的字段名；`history` 为空数组、`history[0].from` 为非法枚举仍须被拦（不得回归）
+- **类型**: 功能
+

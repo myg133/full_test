@@ -358,6 +358,49 @@ else
   bad "AC-016 零依赖 + 可移植 + agent 友好" "deps=$DEPS 外部调用行=$EXT bash式行=$BASHY json=$JSONOK"
 fi
 
+# ---------------------------------------------------------------- AC-017
+# 既有缺陷 2: 环境 name 与文件名不一致未被拦截
+D="$WORK/ac017"; mkdir -p "$D"
+make_project "$D/proj"
+node -e '
+const fs=require("fs"),f=process.argv[1];const o=JSON.parse(fs.readFileSync(f,"utf8"));
+o.name="other";fs.writeFileSync(f,JSON.stringify(o,null,2));
+' "$D/proj/test-assets/environments/local.json"
+OUT="$(node "$VL" "$D/proj" 2>&1)"; RC=$?
+if [ $RC -eq 1 ] && echo "$OUT" | grep -qi "name"; then
+  ok "AC-017 环境 name 与文件名必须一致"
+else
+  bad "AC-017 环境 name 与文件名必须一致" "rc=$RC out=$OUT"
+fi
+
+# ---------------------------------------------------------------- AC-018
+# 既有缺陷 3: history 每条缺 at/from/to/by 未被拦截
+D="$WORK/ac018"; mkdir -p "$D"
+FIELD_OK=1
+for F in at from to by; do
+  T="$D/$F"; make_project "$T"
+  node -e '
+  const fs=require("fs"),f=process.argv[1],k=process.argv[2];
+  const o=JSON.parse(fs.readFileSync(f,"utf8"));
+  delete o.history[0][k];
+  fs.writeFileSync(f,JSON.stringify(o,null,2));
+  ' "$T/test-assets/cycles/R1-REQ-001/cycle.json" "$F"
+  OUT="$(node "$VL" "$T" 2>&1)"; RC=$?
+  if [ $RC -ne 1 ] || ! echo "$OUT" | grep -qi "$F"; then
+    FIELD_OK=0
+    bad "AC-018 history 每条记录四个必填字段齐备" "缺 $F 时 rc=$RC（应为 1 且报错含字段名）out=$OUT"
+  fi
+done
+# 不得回归: 空 history 与非法 from 仍须被拦
+T="$D/regress"; make_project "$T"
+node -e 'const fs=require("fs"),f=process.argv[1];const o=JSON.parse(fs.readFileSync(f,"utf8"));o.history=[];fs.writeFileSync(f,JSON.stringify(o,null,2))' "$T/test-assets/cycles/R1-REQ-001/cycle.json"
+R1=$?; node "$VL" "$T" >/dev/null 2>&1 || R1=0
+node -e 'const fs=require("fs"),f=process.argv[1];const o=JSON.parse(fs.readFileSync(f,"utf8"));o.history[0].from="bogus";fs.writeFileSync(f,JSON.stringify(o,null,2))' "$T/test-assets/cycles/R1-REQ-001/cycle.json"
+node "$VL" "$T" >/dev/null 2>&1; R2=$?
+if [ $FIELD_OK -eq 1 ] && [ $R1 -ne 0 ] && [ $R2 -ne 0 ]; then
+  ok "AC-018 history 每条记录四个必填字段齐备"
+fi
+
 # ---------------------------------------------------------------- 汇总
 echo
 echo "────────────────────────────────────────"
