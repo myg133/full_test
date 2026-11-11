@@ -26,16 +26,18 @@
 **已装副本与包根两种形态的验收结果一致（均 28 PASS）** —— 验收脚本据此修正了 AC-016 的判据（已装副本下没有 `package.json`，依赖检查改由 import 检查覆盖）。
 
 
-## 2. 交付清单
+## 2. 交付清单（合并后最终态）
 
 | 文件 | 行数 | 职责 |
 |---|---|---|
-| `skills/test-case-design/scripts/lib/state-machine.mjs` | 317 | **状态机规则单一来源**：轮次/阶段/scope/round 枚举、转移表、终态判定、`status`↔`history` 一致性判定、history 四字段、`scopes_skipped` 四字段 |
-| `skills/test-case-design/scripts/cycle-state.mjs` | 795 | 状态推进器：`init` / `show` / `advance` / `skip-scope` / `set-stage`。原子写（临时文件 + rename）、失败零副作用、幂等、`--json`、退出码 0/1/2 |
-| `skills/test-case-design/references/state-machine.md` | 226 | 状态推进契约：枚举、完整转移表、全部子命令与参数、原子性与副作用规则、"状态文件只由脚本写"硬约束、常见错误与修法 |
-| `skills/test-case-design/scripts/verify-layout.mjs` | 795 | 删掉自带的状态机实现改为 import 共享模块；补 4 处契约↔实现缺口；强制项 14 → 18 条 |
-| `skills/test-case-design/references/project-layout.md` | 339 | 新增 §4.2 `cycle.json` 字段表；各"必须"标注是否被校验器拦截；§6.1 错误表、§6.3 检查表同步 |
-| `skills/test-case-design/SKILL.md` | 118 | 补 `verify-layout.mjs` / `cycle-state.mjs` / `references/project-layout.md` / `references/state-machine.md` 四个入口 + 写入权硬约束；补 schema v2 输出契约（缺陷 4） |
+| `skills/test-case-design/scripts/lib/state-machine.mjs` | 523 | **状态机规则单一来源**：轮次/阶段/scope/round 枚举、转移表、终态判定、`status`↔`history` 一致性判定、history 四字段、`scopes_skipped` 四字段、统一准入入口 `checkCycleConsistency`、index↔cycle 比较规则 |
+| `skills/test-case-design/scripts/cycle-state.mjs` | 911 | 状态推进器：`init` / `show` / `advance` / `skip-scope` / `set-stage`。原子写（临时文件 + rename）、索引写失败回滚、幂等分支同步索引、统一准入、`--json`、退出码 0/1/2 |
+| `skills/test-case-design/references/state-machine.md` | 247 | 状态推进契约：枚举、完整转移表、全部子命令与参数、跨文件原子性规则、"状态文件只由脚本写"硬约束、常见错误与修法 |
+| `skills/test-case-design/scripts/verify-layout.mjs` | 790 | 改用共享模块；新增 index↔cycle 一致性检查、`suite.json` 顶层字段封闭；强制项 14 → 22 条 |
+| `skills/test-case-design/references/project-layout.md` | 358 | 新增 §4.2 `cycle.json` 字段表、§4.5 index 派生视图声明、§2.5 封闭字段集措辞；§6.1 错误表、§6.3 检查表（22 项）同步 |
+| `skills/test-case-design/SKILL.md` | 163 | 补 `verify-layout.mjs` / `cycle-state.mjs` / 两份 reference 四个入口 + 写入权硬约束 + 五个子命令与可复制调用序列；补 schema v2 输出契约与 `--init` 工作流 |
+| `skills/test-case-design/scripts/validate-cases.mjs` | 814 | 新增 `--init`：输出字段齐备的 v2 骨架（自校验，不过则 exit 1）；**纯增量，原校验路径未变** |
+
 
 ## 3. 本 REQ 修复的既有缺陷
 
