@@ -81,8 +81,7 @@ REQ-002A 起的对策是"把强制落在脚本上"（`validate-cases.mjs --init`
 
 | `kind` | 含义 |
 |---|---|
-| `min_cases_by_dimension` | 该需求条目下，指定维度的用例数 ≥ `min` |
-| `distinct_expected` | 上述用例的 `steps[].expected`（断言对象的 `expected` 值）至少有 `n` 个不同取值 |
+| `min_cases_by_dimension` | 该需求条目下，指定维度的用例数 ≥ `min`。**子字段 `distinct_expected: true`** 表示这些用例的 `steps[].expected`（断言对象的 `expected` 值）必须**互不相同**（见 D6） |
 | `has_dimension` | 该需求条目下存在指定维度的用例 |
 | `min_assertions_per_case` | 用例的断言数 ≥ `min`（判定表类方法：一次响应上要多条断言） |
 | `min_cases_total` | 该需求条目下用例总数 ≥ `min` |
@@ -90,6 +89,11 @@ REQ-002A 起的对策是"把强制落在脚本上"（`validate-cases.mjs --init`
 
 **判定必须保守**：脚本**判不了就报"无法判定"**，不许悄悄当通过。
 （延续本套件的一贯原则：**没有证据的"通过"比失败更危险**。）
+
+> ⚠️ `distinct_expected` **不是独立的 kind**，而是 `min_cases_by_dimension` 的**子字段**
+> （`{"kind":"min_cases_by_dimension","dimension":"boundary","min":3,"distinct_expected":true}`）。
+> 裁决与理由见同目录 `decisions.md` 的 D6 —— 本表早期版本把它列成独立 kind，与 F2 的示例 JSON
+> 说法不一致，**契约不唯一就会让实现与验收各写各的**，故钉死为子字段。
 
 ### F3 方法适用性检查
 
