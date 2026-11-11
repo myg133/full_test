@@ -117,4 +117,17 @@
 - **预期结果**: 前者退出码 0，且 `scopes_skipped[0]` 含 `scope` / `reason` / `at` / `by` 四个字段，`by` 等于传入值；后者退出码非 0 且文件未修改
 - **类型**: 功能
 
+### AC-020: `SKILL.md` 的 Output contract 已同步 schema v2（缺陷 4 修复）
+- **前置条件**: 源码级检查 + 行为验证
+- **测试步骤**: (a) 检查 `SKILL.md` 是否提及 `schema_version`、`open_questions`、`coverage_matrix`、`method`、`status`；(b) 按 `SKILL.md` 的 Output contract 造一个用例集（不带 `schema_version`），跑 `node $SK/scripts/validate-cases.mjs`，再补上 `"schema_version": 2` 跑一次
+- **预期结果**: (a) 五个字段名全部被提及，且写明"必须声明 `schema_version: 2`"；(b) 不声明时**只报 WARN 且 exit 0**，声明后缺 `open_questions` / `coverage_matrix` **必须 exit 1 报 ERROR** —— 即 SKILL.md 说的"声明了就会被严格校验"为真
+- **类型**: 功能
+
+### AC-021: 校验器可生成字段齐备的 v2 骨架（缺陷 4 修复）
+- **前置条件**: 无
+- **测试步骤**: 跑 `node $SK/scripts/validate-cases.mjs --init`（或等价子命令），把输出存成 `cases.json`，再跑 `node $SK/scripts/validate-cases.mjs cases.json`
+- **预期结果**: 骨架输出是合法 JSON 且**包含** `schema_version`（值为 `2`）、`requirements[]`、`open_questions[]`、`coverage_matrix[]`、`cases[]` 各字段；直接校验该骨架**退出码 0**（字段齐备，不因缺字段而 ERROR）
+- **类型**: 功能
+
+
 

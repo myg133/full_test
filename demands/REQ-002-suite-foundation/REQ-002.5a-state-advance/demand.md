@@ -103,11 +103,45 @@ agent 只能提交"推进意图"（"这一轮开始了"、"这一轮完成了"�
 
 **修法**：每条 history 记录必须含 `at` / `from` / `to` / `by` 且为非空字符串；缺任一 → FAIL。`from` / `to` 继续受 `status` 枚举约束（AC-018）。
 
-### 为什么三个都要在本 REQ 修
+### 缺陷 4：`SKILL.md` 的 Output contract 未同步 schema v2 —— REQ-002A 的强制在真实使用路径上是空转的
+
+**这是本轮发现的最严重缺陷，等级 P0。它让 REQ-002A 的全部价值落空。**
+
+**现象**：REQ-002A 引入了 schema v2（`open_questions[]` / `coverage_matrix[]` / `cases[].method` / `cases[].status`），但 `SKILL.md` 的 **Output contract 一节完全没同步** —— 它列出的 `cases[]` 字段仍是 v1 的（`id` / `title` / `requirement_refs` / `dimension` / `priority` / `preconditions` / `steps` / `data` / `tags`），整篇没有出现 `schema_version` / `open_questions` / `coverage_matrix` / `method` / `status` 任何一个词。
+
+**实测**：按 SKILL.md 的 Output contract 造一个用例集，跑校验器 ——
+
+```
+[WARN] cases[0] 缺少字段 method
+[WARN] cases[0] 缺少字段 status
+[WARN] 缺少顶层字段 open_questions
+[WARN] 缺少顶层字段 coverage_matrix
+校验通过: skillmd-shaped.json
+>>> exit=0
+```
+
+**后果**：REQ-002A 的强制规则是"缺字段报 WARN，**显式声明 `schema_version: 2` 才升级为 ERROR**"（向后兼容设计）。而 SKILL.md 从没告诉 agent 要声明 `schema_version: 2`。于是：
+
+- agent 照 SKILL.md 产出 → 永远是不声明 v2 的 v1 形态 → 校验器永远只报 WARN → **永远 exit 0**
+- 也就是说 `open_questions`（歧义暴露）、`coverage_matrix`（跳过留痕）、`cases[].method`（方法声明）、`cases[].status`（生命周期）**这四项强制，在 agent 的实际使用路径上一条都没生效**
+
+REQ-002A 的立项理由正是"REQ-001 eval 证明模型会漏、会绕开契约，所以要靠强制"。现在强制是空转的 —— 这个缺陷让 REQ-002A 退回成一个只产出建议、不产生约束的文档。
+
+**根因**：REQ-001 时代的 SKILL.md 在 REQ-002A 引入 v2 后没有同步。REQ-002A 的验收全部通过了（14 条 AC 全 PASS），因为**没有任何一条 AC 检查"SKILL.md 与 schema 是否一致"** —— 校验器与文档的一致性有测（AC-011/012），SKILL.md 与校验器的一致性没人测。
+
+**修法**（两项都要）：
+
+1. **SKILL.md 的 Output contract 补齐 v2**：明确写出 `schema_version`（**必须声明为 `2`**）、`open_questions[]`、`coverage_matrix[]`，以及 `cases[].method` / `cases[].status` / `cases[].revision`。并说明"不声明 `schema_version: 2` 时校验器只报 WARN"，让 agent 明白为什么必须声明。
+2. **让"照文档产出"这件事可被机械验证**：在 `validate-cases.mjs` 增加一个生成 v2 骨架的命令（建议 `--init` / `--template`），输出一份字段齐备的合法 v2 骨架。agent 从骨架填内容，而不是照着字段清单手写 —— **这是把"记得写全字段"从软约束变成结构化产出**，与本套件"强制必须落在脚本上"的核心主张一致。
+
+**为什么在本 REQ 修**：REQ-002.5a 本来就在改 `SKILL.md`（F7 补脚本入口），成本极低；而 SKILL.md 整体重写属 REQ-002.2。**拖到 REQ-002.2 意味着 REQ-002A 在此期间一直是空转的** —— 而 REQ-002.5b 的执行链路马上要依赖用例集里那些字段的真实性。
+
+### 为什么四个缺陷都要在本 REQ 修
 
 1. 缺陷 1 会直接卡住 REQ-002.5b 的执行链路（按文档造的轮次跑不起来）。
 2. 缺陷 2、3 是"契约说了必须、校验器没拦" —— **跟没写是一回事**。本 REQ 的核心目的正是把强制真正落到脚本上，留着不管，REQ-002.5b 会把不合规状态直接固化成证据链。
-3. 三个缺陷的共同根源是同一个：REQ-002B 交付时缺少"契约 ↔ 实现双向一致性"的机械验证。修复它们的同时，本 REQ 建立 `verify-acceptance.sh`（见 F8），把这条防线常态化。
+3. 缺陷 4 是 **P0**：它让 REQ-002A 的全部强制在真实使用路径上失效。REQ-002.5b 的执行链路马上要依赖用例集里 `open_questions` / `coverage_matrix` / `method` / `status` 的真实性 —— 这些字段现在根本没被强制填。
+4. 四个缺陷的共同根源是同一个：**缺少"契约 ↔ 实现 ↔ 文档"三者的双向一致性机械验证**。修复它们的同时，本 REQ 建立 `verify-acceptance.sh`（见 F8），把这条防线常态化。
 
 ## 功能要求
 

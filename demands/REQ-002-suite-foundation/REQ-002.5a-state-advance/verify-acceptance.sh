@@ -446,6 +446,64 @@ else
   bad "AC-019 skip-scope 缺 --by 被拒且文件零改动" "rc=$RC sha相同=$([ "$BEFORE" = "$AFTER" ] && echo yes || echo no)"
 fi
 
+# ---------------------------------------------------------------- AC-020
+# 缺陷 4: SKILL.md 的 Output contract 未同步 schema v2
+SK="$SKILL_DIR/SKILL.md"
+V2MISS=0
+for tok in "schema_version" "open_questions" "coverage_matrix" "method" "status"; do
+  grep -q "$tok" "$SK" 2>/dev/null || V2MISS="$V2MISS $tok"
+done
+# 声明 v2 后缺字段必须 ERROR（证明 SKILL.md 说的"声明了就会被严格校验"为真）
+D="$WORK/ac020"; mkdir -p "$D"
+node -e '
+const fs=require("fs"),f=process.argv[1];
+const o={schema_version:2,
+  meta:{source:"t",generated_at:"2026-11-11T18:00:00+08:00",case_count:1},
+  requirements:[{id:"R-1",title:"t",source_ref:"x",testable:true}],
+  cases:[{id:"TC-001",title:"t",requirement_refs:["R-1"],dimension:"functional",priority:"P0",
+    method:["M0.1"],status:"active",steps:[{action:"a",expected:"b"}]}]};
+fs.writeFileSync(f,JSON.stringify(o,null,2));
+' "$D/nov2fields.json"
+node "$SKILL_DIR/scripts/validate-cases.mjs" "$D/nov2fields.json" >/dev/null 2>&1; RC_STRICT=$?
+# 不声明 v2 时只 WARN，exit 0（向后兼容）
+node -e '
+const fs=require("fs"),f=process.argv[1];const o=JSON.parse(fs.readFileSync(f,"utf8"));
+delete o.schema_version;fs.writeFileSync(f,JSON.stringify(o,null,2));
+' "$D/nov2fields.json"
+node "$SKILL_DIR/scripts/validate-cases.mjs" "$D/nov2fields.json" >/dev/null 2>&1; RC_LOOSE=$?
+if [ -z "$V2MISS" ] && [ $RC_STRICT -eq 1 ] && [ $RC_LOOSE -eq 0 ]; then
+  ok "AC-020 SKILL.md 的 Output contract 已同步 schema v2"
+else
+  bad "AC-020 SKILL.md 的 Output contract 已同步 schema v2" "未提及:$V2MISS 声明v2后exit=$RC_STRICT(期望1) 不声明exit=$RC_LOOSE(期望0)"
+fi
+
+# ---------------------------------------------------------------- AC-021
+# 缺陷 4: 校验器可生成字段齐备的 v2 骨架
+D="$WORK/ac021"; mkdir -p "$D"
+INIT_OUT=""
+for FLAG in "--init" "--template" "init" "--skeleton"; do
+  node "$SKILL_DIR/scripts/validate-cases.mjs" $FLAG > "$D/skel.json" 2>/dev/null
+  if node -e 'JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"))' "$D/skel.json" 2>/dev/null; then
+    INIT_OUT="$FLAG"; break
+  fi
+done
+if [ -n "$INIT_OUT" ]; then
+  HAS_SV="$(node -e 'const o=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log(o.schema_version===2?"yes":"no")' "$D/skel.json")"
+  HAS_KEYS="$(node -e '
+  const o=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));
+  const need=["schema_version","requirements","open_questions","coverage_matrix","cases"];
+  console.log(need.every(k=>k in o)?"yes":"no");
+  ' "$D/skel.json")"
+  node "$SKILL_DIR/scripts/validate-cases.mjs" "$D/skel.json" >/dev/null 2>&1; RC_SKEL=$?
+  if [ "$HAS_SV" = "yes" ] && [ "$HAS_KEYS" = "yes" ] && [ $RC_SKEL -eq 0 ]; then
+    ok "AC-021 校验器可生成字段齐备的 v2 骨架（$INIT_OUT）"
+  else
+    bad "AC-021 校验器可生成字段齐备的 v2 骨架" "flag=$INIT_OUT schema_version=$HAS_SV 字段齐备=$HAS_KEYS 骨架校验exit=$RC_SKEL(期望0)"
+  fi
+else
+  bad "AC-021 校验器可生成字段齐备的 v2 骨架" "未找到可用的骨架生成入口（试过 --init/--template/init/--skeleton）"
+fi
+
 # ---------------------------------------------------------------- 汇总
 echo
 echo "────────────────────────────────────────"
