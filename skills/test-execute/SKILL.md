@@ -50,6 +50,30 @@ description: |
    `reproduction.steps` 只记**实际执行过**的步骤，一个都不能多、也不能少；
    一个请求都没执行时（凭证缺失、载体冲突）才回退到用例声明的步骤 ——
    那表达的是"要复现得跑这些"，不是"这些跑过了"。
+   **判 `skipped` 的用例例外：它一个请求都不发，证据条目数为 0，`reproduction.steps` 为空。**
+
+7. **判了不执行，就真的不执行。**
+   用例生命周期为 `deprecated` / `blocked` 的用例判 `skipped`，
+   执行外壳在**调驱动之前**就跳过它 —— 一个请求都不许发、证据条目数必须为 0。
+   判了不执行却真发请求，比虚报通过更危险：**报告说这条没跑，被测系统却已经被改了**。
+   生命周期 → 是否执行的映射只有一份（`scripts/lib/verdict.mjs` 的 `isNonExecutable()`）。
+
+8. **传输层错误不得抹掉已经发生的执行事实。**
+   多步用例中途超时 / 网络错误时，此前已成功步骤的响应**照样留证**；
+   出错的那一步不列进 `reproduction.steps`（它没有响应，也就没有证据），
+   但要在 `error.message` 里点名是哪一步。
+   **证据条目数与 `reproduction.steps` 长度必须一致** —— 既不"列了但没证据"，也不"有证据但没列"。
+
+9. **收尾必须在异常路径上也执行。**
+   执行器的 `stop` 钩子由执行外壳用 `finally` 语义调用：正常路径停一次，
+   异常路径也停一次（幂等）。内置 mock 桩服务持有事件循环 ——
+   跳过收尾，进程就**永不退出**，一个套件就能把 CI 吊死。
+
+10. **`meta.cycle` 段不得谎报。**
+    轮次推进成功 → `runs_recorded: true` / `stage_status: "in_progress"` / 退出码 `0`；
+    推进失败 → `runs_recorded: false` / `stage_status: null`（状态未知，不写 `in_progress`）/ **退出码 `1`**。
+    轮次推进是执行流程的一环：用户要求把这次执行记进轮次，没记上就是没做完 ——
+    **用例本身全通过不改变这一点**。
 
 ## Inputs to collect
 
@@ -112,6 +136,12 @@ description: |
 断言所在 step 不可执行、又没有可判的响应时，该用例判 `blocked`（`assertion_without_response`），
 **不得判 `passed`**。步骤之间不做隐式数据串联：`${name}` 只跨用例，不跨 step。
 每步的证据文件名带序号（`step-1-response.json` / `step-2-response.json`）。
+中途**超时 / 网络错误**时，此前已成功步骤的响应**照样留证**；出错那一步不列进 `reproduction.steps`
+（它没有响应也就没有证据），但会在 `error.message` 里点名 ——
+**证据条数与 `reproduction.steps` 长度保持一致**。
+
+**生命周期决定要不要执行**：用例的 `status` 是 `deprecated` 或 `blocked` 时判 `skipped`，
+**一个请求都不发、证据条目数为 0**。判了不执行却真发请求，比虚报通过更危险。
 
 **载体冲突显式拒**：用例级载体与 step 级请求**同时**存在时，
 method + path 一致 → 视为同一次请求（只发一次，断言都绑到那一次响应）；
@@ -157,9 +187,12 @@ method + path 一致 → 视为同一次请求（只发一次，断言都绑到�
 `started_at` / `finished_at` / `duration_ms` / `agent` / `executor` / `tool_versions` /
 `cases_total` / `cases_passed` / `cases_failed` / `cases_blocked` / `cases_skipped` /
 `evidence_manifest_sha256` / `results_sha256` / `redaction`。
+给了 `--cycle` 时另有 `cycle` 段，如实反映轮次推进的结果
+（`ok` / `runs_recorded` / `stage_status`；推进失败时 `stage_status` 为 `null`，不写 `in_progress`）。
 
 `results.json` 每条必填：`case_id` / `title` / `requirement_refs` / `status` /
 `started_at` / `finished_at` / `duration_ms` / `evidence[]` / `reproduction` / `error`。
+判 `skipped` 的用例：`evidence[]` 是空数组、`reproduction.steps` 是空的 —— **它没有被执行**。
 
 字段语义、指纹算法、脱敏留痕的完整契约见 `references/evidence-chain.md`；
 执行器接口、断言操作、mock 端点集见 `references/executor-spec.md`。
@@ -177,11 +210,17 @@ method + path 一致 → 视为同一次请求（只发一次，断言都绑到�
 | 码 | 含义 |
 |---|---|
 | 0 | 执行流程成功完成且证据链自校验通过 —— **用例结果可能是 failed / blocked，那是业务事实** |
-| 1 | 执行流程失败：配置非法、驱动起不来、执行器异常、证据链自校验不通过；或 `--strict` 下有用例失败/阻塞 |
+| 1 | 执行流程失败：配置非法、驱动起不来、执行器异常、证据链自校验不通过、**轮次推进失败**；或 `--strict` 下有用例失败/阻塞 |
 | 2 | 调用方式错误（缺参数、参数拼错、路径不存在） |
 
 用例的通过/失败/阻塞看 `results.json` 的 `status` 与 `meta.json` 的计数。
 需要"有失败用例就让流水线红"的场景，加 `--strict`（此时有用例 failed/blocked 就退 1）。
+
+**轮次推进失败（`--cycle` 指向不存在的轮次目录、轮次文件非法等）→ 退出码 1**：
+轮次推进是执行流程的一环，没记上就是没做完；用例本身全通过也不改变这一点。
+同时 `meta.cycle` 段如实反映失败：`ok: false` / `runs_recorded: false` / `stage_status: null`
+（不写 `in_progress` —— 那会与同段的 `ok: false` 自相矛盾）。
+推进成功时则是 `ok: true` / `runs_recorded: true` / `stage_status: "in_progress"` / 退出码 `0`。
 
 `--json` 模式下 stdout **只有 JSON**（成功 / 校验失败 / 用法错误三种情形都是），可以直接 `JSON.parse`。
 
@@ -195,8 +234,13 @@ method + path 一致 → 视为同一次请求（只发一次，断言都绑到�
   `incomplete_request_carrier` = 载体**没写 path**（**用例级与 step 级同样适用**）—— **补上 path** 即可
   （`method` 可省略，默认 GET；若本意是由 step 提供路径，就去掉该载体）。这两种修法不同，别改错地方。
   消息里若还有"另外：…"的补充，说明同一用例还有别的问题要一并处理 —— 一次改完，别改完再撞下一个。
+- **用例判 `skipped`**：这条用例**没有执行**（生命周期是 `deprecated` 或用例自身被标记为 `blocked`）。
+  它的证据条目数是 0、`reproduction.steps` 是空的 —— **一个请求都没发**。
+  要跑它，先把用例的生命周期改回 `active`。
 - **用例判 `failed`**：看 `error.message` 里的断言明细与 `evidence/` 下的原始响应；
   `reproduction.command` 是可复制的复现命令（凭证以环境变量名出现，不含明文）。
+  `error.type` 是 `timeout` / `network_error` 时是**传输层错误**：
+  出错那一步之前**已成功的步骤照样留了证据**，别以为证据缺了是丢了 —— 看 `evidence/` 的份数。
 - **驱动起不来 / 未注册**：看 `executors/index.json`。`ui` / `load` / `security` 属后续 REQ，本 skill 只交付 `api` 与 `mock`。
 - **证据链校验失败**：`verify-evidence.mjs` 会点名是"文件被改动"、"文件丢失"、"results.json 被改写"还是"计数造假"。
   **不要手改产物去凑**——重跑一次执行，拿到新的 `run_id`。

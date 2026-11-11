@@ -74,7 +74,7 @@
 | `results_sha256` | string | 是 | 结果指纹（见 §4） |
 | `redaction` | object | 是 | `{rules_applied: [], redacted_fields: N}` —— 脱敏留痕 |
 | `cases_file` | string | 否 | 用例集路径（相对项目根） |
-| `cycle` | object\|null | 否 | 轮次推进结果（见 §6） |
+| `cycle` | object\|null | 否 | 轮次推进结果（见 §6、§6.1 —— 字段如实反映推进成败，不硬编码） |
 
 ---
 
@@ -90,8 +90,8 @@
 | `status` | string | 是 | `passed` / `failed` / `blocked` / `skipped` |
 | `started_at` / `finished_at` | string | 是 | ISO-8601 时间戳 |
 | `duration_ms` | number | 是 | 该用例耗时（毫秒） |
-| `evidence` | object[] | 是 | `{path, sha256, bytes, media_type}`；`path` 相对产物目录 |
-| `reproduction` | object | 是 | `{steps: [], command, expected}` —— 失败/阻塞时必填。`steps` 只写**实际执行过**的步骤（与证据份数一一对应）；一个请求都没执行时（判 `blocked`）才回退到用例声明的步骤 |
+| `evidence` | object[] | 是 | `{path, sha256, bytes, media_type}`；`path` 相对产物目录。判 `skipped` 的用例**必须是空数组**（没跑就没证据） |
+| `reproduction` | object | 是 | `{steps: [], command, expected}` —— 失败/阻塞时必填。`steps` 只写**实际执行过**的步骤（与证据份数一一对应）；一个请求都没执行时（判 `blocked`）才回退到用例声明的步骤；判 `skipped` 的用例**留空**（它本来就不该跑，列步骤等于谎称跑过） |
 | `error` | object\|null | 是 | `{type, message}` —— 失败/阻塞时必填 |
 
 `status` 的四种取值：
@@ -105,6 +105,12 @@
 
 > **不可判定判 `blocked`，绝不判 `passed`。** 执行器"跑完了没报错"不等于"通过"；
 > 把不可判定的用例算作通过，等于把"没测"记成"测过且通过"。宁可漏报通过，不可虚报通过。
+
+> **判 `skipped` 的用例一个请求都不许发**（判 `skipped` 是在执行之前决定的）：
+> 它的证据条目数必须是 **0**，`reproduction.steps` 必须为空。
+> 判了不执行却真发了请求，比虚报通过更危险 —— **报告说这条没跑，被测系统却已经被改了**。
+> 生命周期 → 是否执行的映射只有一处（`scripts/lib/verdict.mjs` 的 `isNonExecutable()`），
+> 执行外壳在调驱动之前先问它，判定层判 `skipped` 时也问它 —— 两边不会分叉。
 
 ---
 
@@ -121,6 +127,29 @@ evidence/TC-003/
 文件名里的序号是**执行顺序**（第几次请求），不是用例里的 step 下标。
 多步用例的证据条目数应等于它实际发出的请求数 —— 少一份就说明有请求没跑，
 而"没跑的步骤"会让判定看起来成立却毫无根据。
+
+### 3.2 传输层错误时，已执行步骤的证据必须保留
+
+多步用例中途**超时 / 网络错误**时，执行已经发生过的部分不能被抹掉：
+
+| 规则 | 说明 |
+|---|---|
+| 已成功步骤的响应**照样留证** | 执行器不得用"后面失败了"把前面已经拿到的响应一起丢掉 |
+| 出错的那一步**不列进** `reproduction.steps` | 它没有响应，也就没有证据 —— 列了却没证据同样是不一致 |
+| 出错的那一步写进 `error.message` | 消息里点名是哪一步（`steps[i] METHOD /path`）、什么错误（`timeout` / `network_error`） |
+| **证据条目数 == `reproduction.steps` 长度** | 执行过请求时两者必须相等（执行过请求的用例，不存在"列了但没证据"或"有证据但没列"） |
+
+举例：第 1 步 `GET /ok` 成功、第 2 步 `GET /slow?ms=3000` 超时 ——
+
+```text
+status            = failed
+error.type        = timeout
+evidence          = 1 份（step-1-response.json，第 1 步的响应）
+reproduction.steps = ["GET /ok"]（1 条，与证据份数一致）
+error.message     = 请求超时（超过 300 毫秒）（失败于 steps[1] GET /slow?ms=3000；此前已成功 1 步的证据保留）
+```
+
+> 传输层错误**不得抹掉已经发生的执行事实**。丢掉它，等于让证据链同时谎报"跑过"和"没跑过"。
 
 ## 4. 指纹算法
 
@@ -205,17 +234,42 @@ case_id + "\u0000" + status + "\u0000" + error.type + "\u0000" + error.message
 
 ```console
 node ../test-case-design/scripts/cycle-state.mjs set-stage <轮次目录> \
-  --stage execute --status in_progress --artifacts .test-artifacts/<run_id>
+  --stage execute --status in_progress --artifacts .test-artifacts/<run_id> --run <run_id>
 ```
 
 `run-suite.mjs --cycle <轮次目录>` 会自动做这件事（在独立线程里调用推进器，本脚本不碰 `cycle.json`）。
 
-**关于 `stages.execute.runs[]`**：需求 F7 提到把 `run_id` 记进 `stages.execute.runs[]`，
-但 REQ-002.5a 的 `cycle-state.mjs` 的 `set-stage` 目前只支持 `--status` 与 `--artifacts`，
-**没有写 `runs[]` 的参数**（该字段也不在 REQ-002B 的 `cycle.json` 字段表里）。
-本 skill 不越权改 REQ-002.5a 的已验收交付，因此运行标识落在契约支持的
-`stages.execute.artifacts`（产物路径列表，元素即 `.test-artifacts/<run_id>`，含 `run_id`）。
-后续若要给 `cycle-state.mjs` 加 `--run` 参数，`stages.execute.runs[]` 即可自然落地。
+**关于 `stages.execute.runs[]`**：本次执行标识由推进器的 `--run <run_id>` 参数写入
+（REQ-002.5a 的 `cycle-state.mjs` 已支持；同一个 `run_id` 重复写不产生重复项 —— 幂等）。
+
+### 6.1 `meta.cycle` 段的字段语义
+
+`meta.json` 的 `cycle` 段（不给 `--cycle` 时为 `null`）如实反映**本次轮次推进的结果**：
+
+| 字段 | 推进成功 | 推进失败 | 语义 |
+|---|---|---|---|
+| `ok` | `true` | `false` | 本次推进是否成功 |
+| `runs_recorded` | `true` | `false` | 本次执行标识**是否真的记进了** `stages.execute.runs[]` |
+| `stage_status` | `"in_progress"` | `null` | execute 阶段的状态：推进成功 → 确实被推进到 `in_progress`；推进失败 → **状态未知**（不写 `in_progress`） |
+| `exit_code` | 推进器的退出码（0） | 推进器的退出码（非 0） | 推进器自己的退出码 |
+| `message` | 推进结果说明 | 失败原因（含推进器的诊断输出） | 人读说明 |
+| `stage` / `artifact_path` / `run_id` / `cycle_dir` | 同左 | 同左 | 本次推进的对象 |
+
+> **`cycle` 段不得谎报**：同一段里 `ok: false` 却写着 `stage_status: "in_progress"`、
+> `runs_recorded: true`，是自相矛盾 —— 推进没成功却说"已记录"。
+> 字段必须由推进器的**实际结果**推导，不能硬编码。
+
+### 6.2 轮次推进失败 = 执行流程失败（退出码 1）
+
+轮次推进是执行流程的一环：用户要求把这次执行记进轮次，**没记上就是没做完**。
+
+| 情形 | 退出码 |
+|---|---|
+| 推进成功 | `0`（执行流程成功；用例结果另看 `results.json`） |
+| 推进失败（轮次目录不存在、`cycle.json` 非法、推进器报错……） | `1` |
+
+**用例本身全通过不改变这一点** —— 用例通过 ≠ 执行流程完成。
+（退出码说的是执行流程成败，用例级结果看 `results.json`，见 SKILL.md 的「退出码语义」。）
 
 ---
 
