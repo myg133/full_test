@@ -165,7 +165,7 @@ node scripts/check-methods.mjs --methods <路径> --dimensions <路径>   # 换�
 
 ---
 
-验收标准见同目录 `acceptance.md`（AC-001 ~ AC-013）。
+验收标准见同目录 `acceptance.md`（AC-001 ~ AC-014）。
 
 ## 4. 不做什么（明确排除）
 

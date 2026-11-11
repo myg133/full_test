@@ -274,6 +274,30 @@ else
   bad "AC-010 REQ-002A 回归不受影响" "找不到 REQ-002A 回归脚本"
 fi
 
+# ---------------------------------------------------------------- AC-014
+step "AC-014 验收场景的样本本身必须合法（不能拿非法输入去测）"
+# 为什么要有这条：本脚本造的场景样本用了**结构化断言对象**形式的 expected。
+# 若那份样本**通不过 REQ-002A 的校验器**，那么"check-methods 报错了"这件事
+# 可能只是因为输入非法，而不是因为判据生效 —— 测出来的结论是假的。
+VC="$TCD/scripts/validate-cases.mjs"
+if [ ! -f "$VC" ]; then
+  bad "AC-014 验收场景的样本本身必须合法" "缺 validate-cases.mjs"
+else
+  BAD_SAMPLE=""
+  for f in a b b2 c d e; do
+    [ -f "$WORK/$f.json" ] || continue
+    OUTV="$(node "$VC" "$WORK/$f.json" 2>&1)"; RCV=$?
+    if [ $RCV -ne 0 ]; then
+      BAD_SAMPLE="$BAD_SAMPLE $f(rc=$RCV)"
+    fi
+  done
+  if [ -z "$BAD_SAMPLE" ]; then
+    ok "AC-014 验收场景的样本本身必须合法（全部通过 REQ-002A 校验器）"
+  else
+    bad "AC-014 验收场景的样本本身必须合法" "非法样本:$BAD_SAMPLE —— 拿非法输入测出来的结论不算数"
+  fi
+fi
+
 # ---------------------------------------------------------------- AC-011
 step "AC-011 本脚本自身要被验收（变异必须被测出差异）"
 if [ ! -f "$CM" ]; then
