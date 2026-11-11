@@ -98,7 +98,10 @@ executor = {
   version: string,
   run(case, context) -> {
     observed: object,    // 执行器实际观察到什么（状态码 / 响应体 / 响应头 / 提取值…）
-    evidence: [{ path, media_type, bytes? }],
+    steps: [             // 多步用例：每个可执行 step 的观察结果（D12）
+      { step_index: number, observed: object, evidence: [{ path, media_type, content }] }
+    ],
+    evidence: [{ path, media_type, content }],
     reproduction?: { steps: string[], command?: string, expected?: string },
     error?: { type: string, message: string }
   }
@@ -107,6 +110,10 @@ executor = {
 
 `context` 提供：`base_url` / `timeout_ms` / `headers` / `resolved_credentials` / `run_id` / `evidence_dir` / `case`。
 
+> **证据条目带 `content` 而不是 `bytes`**（D17）：F8 要求"脱敏在**写入前**完成"。
+> 若执行器自己落盘，就来不及先脱敏。所以**执行器不落盘**，把内容本体交回执行外壳，
+> 由外壳按"脱敏 → 写盘 → 算指纹"的顺序处理。`bytes` 由外壳写盘时填。
+
 **执行器返回 `observed`（观察结果），不返回 `status`（判定结果）。** 判定由执行外壳按用例的 `assertions` 做 —— 这是刻意的分层：
 
 ```
@@ -114,11 +121,21 @@ executor = {
 执行外壳：读 assertions → 比对 observed → 得出 status（passed/failed/blocked/skipped）
 ```
 
-**接口的三条约束**：
+**接口的四条约束**：
 
 1. **执行器不判定"通过"的语义。** 否则每个执行器各写一套比较逻辑，判定口径必然漂移 —— 而且判定逻辑被写死在代码里（正是 F4 要消灭的东西）。执行器只负责"观察"，判定规则是**数据**（`assertions`），由执行外壳统一执行。
 2. **执行器不得自行写 `.test-artifacts/` 以外的文件**。
 3. **执行器必须产出可复现信息** —— 失败用例至少要有 `reproduction.steps`（照抄用例的 steps 即可）。做不到复现的失败等于没测。
+4. **多步用例逐步执行、逐步判定**（D12/D13/D14）——
+   - 一个用例的**每个可执行 step**（有 `step.request`，或 `action` 能解析成 `METHOD /path`）都要发一次请求；
+   - **每条断言绑定到它所属 step 的响应**（`steps[].expected` 属于它自己那一行）；
+   - 所在 step 不可执行时，该用例判 `blocked`（`assertion_without_response`），**不得判 `passed`**；
+   - 步骤之间不做隐式数据串联（`${name}` 仍只跨用例）。
+
+   > **为什么这条是硬约束**：验收实证过原实现只跑第一个 step、却把后续 step 的断言
+   > 拿第一个响应当判据 —— 结果"首步成立次步不成立"的用例报 `passed`（半个用例报通过），
+   > "两步都成立"的用例反而报 `failed`。这正是本套件要消灭的那类虚报，
+   > 出现在最核心的执行环节，后果是整个证据链失去可信度。
 
 ### F4 执行器不可被 agent 定制 —— 用配置吸收需求，而不是放开源码
 
@@ -249,12 +266,19 @@ executor = {
 
 ```bash
 node scripts/cycle-state.mjs set-stage <轮次目录> --stage execute --status in_progress
-node scripts/cycle-state.mjs set-stage <轮次目录> --stage execute --status in_progress --artifacts .test-artifacts/<run_id>
+node scripts/cycle-state.mjs set-stage <轮次目录> --stage execute --status in_progress --run <run_id>
 node scripts/cycle-state.mjs set-stage <轮次目录> --stage triage --status in_progress
 ```
 
 - 每次执行批次把 `run_id` 记进 `cycle.json` 的 `stages.execute.runs[]`
 - 执行**不得**直接改 `cycle.json`（REQ-002.5a 的写入权收口）
+
+> **`set-stage` 需要新增 `--run <run_id>` 参数**（D15）。
+> `runs[]` 是"这个轮次跑了哪几次执行"的追溯信息，必须是数组、必须可查 ——
+> 塞进 `artifacts` 里既不是数组也不可查，等于没有追溯。
+> 由于"状态写入权只归脚本"是 REQ-002.5a 的核心，这个参数在 **`cycle-state.mjs` 里加**，
+> 而不是让执行外壳直接改 `cycle.json`（那样收口就破功了）。
+> `cycle.json` 的字段表（`references/project-layout.md`）同步补 `stages.execute.runs[]`。
 
 ### F8 产物脱敏
 
