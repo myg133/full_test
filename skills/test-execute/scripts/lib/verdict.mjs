@@ -12,6 +12,10 @@
 //   blocked = 无法判定（缺少可机械判定的断言、凭证或环境缺失、执行器无法启动）
 //   skipped = 不执行（用例已废弃 / 用例自身被标记为 blocked）
 //
+// 判 skipped 的用例**一律不执行**（需求 D28）：执行外壳在调驱动之前先问
+// isNonExecutable()，一个请求都不发、证据条目数为 0。
+// 报告说"没跑"而被测系统其实被改了，比虚报通过更危险。
+//
 // 为什么"不可判定"必须判 blocked 而不是 passed：执行器"跑完了没报错"不等于"通过"。
 // 把不可判定的用例算作通过，等于把"没测"记成"测过且通过"。宁可漏报通过，不可虚报通过。
 //
@@ -34,6 +38,27 @@ export const STATUS_VALUES = Object.freeze([
   STATUS.BLOCKED,
   STATUS.SKIPPED,
 ]);
+
+/**
+ * 不执行的用例生命周期状态（需求 D28）。
+ *
+ * 这些状态的用例判 `skipped`，**一个请求都不许发，证据条目数必须为 0**。
+ * 判了不执行却真发请求，比"虚报通过"更危险：报告说这条没跑，被测系统却已经被改了。
+ */
+export const NON_EXECUTABLE_LIFECYCLES = Object.freeze(['deprecated', 'blocked']);
+
+/**
+ * 这个生命周期的用例是否"不执行"（判 `skipped`）。
+ *
+ * **生命周期 → 是否执行的映射只有这一份**：判定层（decide）与执行外壳
+ * （run-suite 在调驱动之前先问一句）都调它，两边不会分叉。
+ *
+ * @param {string} lifecycle 用例生命周期状态
+ * @returns {boolean}
+ */
+export function isNonExecutable(lifecycle) {
+  return NON_EXECUTABLE_LIFECYCLES.includes(String(lifecycle || 'active'));
+}
 
 /** 阻塞原因类型 */
 export const BLOCK_TYPES = Object.freeze({
@@ -165,11 +190,14 @@ export function decide(spec) {
   const execution = isObject(spec.execution) ? spec.execution : {};
   const empty = { status: STATUS.BLOCKED, error: null, failures: [], reason: null };
 
-  if (lifecycle === 'deprecated') {
-    return { ...empty, status: STATUS.SKIPPED, reason: '用例已废弃（status: deprecated），不执行' };
-  }
-  if (lifecycle === 'blocked') {
-    return { ...empty, status: STATUS.SKIPPED, reason: '用例自身被标记为 blocked（status: blocked），不执行' };
+  if (isNonExecutable(lifecycle)) {
+    // 需求 D28：判 skipped 的用例**不执行** —— 执行外壳在调驱动之前就会先问
+    // isNonExecutable()，一个请求都不发，证据条目数为 0。
+    const reasonText =
+      lifecycle === 'deprecated'
+        ? '用例已废弃（status: deprecated），不执行'
+        : '用例自身被标记为 blocked（status: blocked），不执行';
+    return { ...empty, status: STATUS.SKIPPED, reason: reasonText };
   }
   if (assertions.length === 0) {
     // 需求 D26：判定类型取更根本的那个（没有断言 → 补上 path 也不会变得可判定），

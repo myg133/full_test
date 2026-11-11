@@ -101,7 +101,9 @@ async function handle(req, res) {
     const limit = Number(endpointTable.limits && endpointTable.limits.max_delay_ms) || 60000;
     const delayMs = Number.isFinite(asked) && asked > 0 ? Math.min(asked, limit) : 0;
     await new Promise((resolve) => {
-      setTimeout(resolve, delayMs);
+      // 定时器不持有事件循环：客户端超时走了之后，剩下的延迟不该拖住进程退出
+      const timer = setTimeout(resolve, delayMs);
+      if (typeof timer.unref === 'function') timer.unref();
     });
     writeJson(res, endpoint.status, endpoint.body || {});
     return;
@@ -139,14 +141,25 @@ export async function start() {
 
 /**
  * 关闭内置 mock 服务（执行结束时调用）。
+ *
+ * 收尾必须让进程能退出：keep-alive 的空闲连接会让 `close()` 一直等下去，
+ * 所以连同残留连接一起断开（需求 D30：进程必须在有限时间内退出）。
  */
 export async function stop() {
   if (!server) return;
-  await new Promise((resolve) => {
-    server.close(() => resolve());
-  });
+  const current = server;
   server = null;
   serverUrl = null;
+  if (typeof current.closeAllConnections === 'function') {
+    try {
+      current.closeAllConnections();
+    } catch {
+      // 关不掉连接也不能让收尾失败 —— 继续关服务
+    }
+  }
+  await new Promise((resolve) => {
+    current.close(() => resolve());
+  });
 }
 
 /**

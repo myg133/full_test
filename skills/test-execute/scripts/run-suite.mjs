@@ -6,7 +6,8 @@
 //                 [--agent <标识>] [--strict]
 //
 // 退出码: 0 = 执行与证据链自校验通过
-//         1 = 校验失败或执行失败（配置非法、驱动起不来、证据链自校验不通过、执行器异常）
+//         1 = 校验失败或执行失败（配置非法、驱动起不来、证据链自校验不通过、执行器异常、
+//             轮次推进失败 —— 轮次推进是执行流程的一环，没记上就是没做完）
 //         2 = 调用方式错误
 //
 // 退出码说的是**执行流程本身**成不成功，不等于"用例有没有通过"：
@@ -39,7 +40,7 @@ import {
   writeOut,
 } from './lib/cli.mjs';
 import { collectAssertions, resolvePath } from './lib/assertion.mjs';
-import { decide, STATUS } from './lib/verdict.mjs';
+import { decide, isNonExecutable, STATUS } from './lib/verdict.mjs';
 import { createRedactor } from './lib/redaction.mjs';
 import {
   evidenceManifestFingerprint,
@@ -63,6 +64,40 @@ import { advanceExecuteStage } from './lib/cycle.mjs';
 const here = dirname(fileURLToPath(import.meta.url));
 const SKILL_DIR = resolve(here, '..');
 const EXECUTOR_DIR = join(SKILL_DIR, 'executors');
+
+/**
+ * 当前活跃的驱动（收尾用）。
+ *
+ * 需求 D30：mock 驱动会起一个内置 HTTP 桩服务，它持有事件循环 ——
+ * 不收尾，进程就永不退出。所以收尾必须在**异常路径上**也执行，
+ * 不能只挂在正常路径上。
+ *
+ * @type {{stop?: Function}|null}
+ */
+let activeDriver = null;
+
+/**
+ * 停止驱动（收尾钩子）。
+ *
+ * 幂等：正常路径上执行外壳主动停一次；异常路径上由 main() 的 finally 再兜一次
+ * （已停过的驱动直接返回，不会重复关）。
+ *
+ * @param {string[]} [logLines] 运行日志行（可选，收尾失败时记一笔）
+ * @returns {Promise<void>}
+ */
+async function stopActiveDriver(logLines) {
+  const driver = activeDriver;
+  activeDriver = null;
+  if (!driver || typeof driver.stop !== 'function') return;
+  try {
+    await driver.stop({});
+  } catch (err) {
+    const detail = err && err.message ? err.message : String(err);
+    if (Array.isArray(logLines)) {
+      logLines.push(`[${new Date().toISOString()}] 执行器结束钩子报错（忽略）: ${detail}`);
+    }
+  }
+}
 
 const USAGE = [
   '用法: node scripts/run-suite.mjs <suite.json> [--cycle <轮次目录>] [--json] [--dry-run]',
@@ -269,6 +304,8 @@ async function executeSuite(options) {
     stop: driverModule.stop,
     run: driverModule.run,
   };
+  // 登记活跃驱动：异常路径上的收尾靠它（需求 D30）
+  activeDriver = driver;
 
   const startedAt = new Date();
   const startedAtMs = Date.now();
@@ -309,7 +346,12 @@ async function executeSuite(options) {
 
     let execution = { observed: null, evidence: [], reproduction: null, error: null };
 
-    if (plan.incomplete || plan.conflict) {
+    if (isNonExecutable(lifecycle)) {
+      // 需求 D28：判 skipped 的用例**一个请求都不许发**，证据条目数必须为 0。
+      // 判了不执行却真发请求，比虚报通过更危险 —— 报告说这条没跑，
+      // 被测系统却已经被改了。生命周期 → 是否执行的映射只有 verdict.mjs 那一份。
+      execution = { observed: null, evidence: [], steps: [], reproduction: null, error: null };
+    } else if (plan.incomplete || plan.conflict) {
       // 载体不完整（缺 path）或载体冲突：显式拒，一个请求都不发。
       // 前者是「补齐 path」，后者是「一次调用还是多次调用要需求方裁定」——
       // 两者都是需求方的意图，实现不替需求方猜。
@@ -412,6 +454,7 @@ async function executeSuite(options) {
     // 拿声明当执行，就是让证据链说的与实际做的不一致。
     // 一个请求都没执行时（凭证缺失、载体冲突）才回退到用例声明的步骤，
     // 那表达的是"要复现得跑这些"，不是"这些跑过了"。
+    // 判 skipped 的用例例外：它**本来就不该跑**，列步骤等于谎称跑过 —— 留空。
     const declaredSteps = (Array.isArray(caseObj.steps) ? caseObj.steps : [])
       .map((step) => (step && typeof step.action === 'string' ? step.action : ''))
       .filter((item) => item !== '');
@@ -429,7 +472,12 @@ async function executeSuite(options) {
         ? execution.reproduction.steps.filter((item) => typeof item === 'string' && item !== '')
         : [];
     const actualActions = executedActions.length > 0 ? executedActions : reportedActions;
-    const steps = actualActions.length > 0 ? actualActions : declaredSteps;
+    const steps =
+      actualActions.length > 0
+        ? actualActions
+        : isNonExecutable(lifecycle)
+          ? []
+          : declaredSteps;
     const reproduction = execution.reproduction && typeof execution.reproduction === 'object'
       ? {
           steps,
@@ -457,13 +505,8 @@ async function executeSuite(options) {
     log(`用例 ${caseId}: ${verdict.status}${verdict.reason ? `（${verdict.reason}）` : ''}`);
   }
 
-  if (typeof driver.stop === 'function') {
-    try {
-      await driver.stop({});
-    } catch {
-      log('执行器结束钩子报错（忽略）');
-    }
-  }
+  // 正常路径上的收尾（异常路径上的兜底见 main() 的 finally，需求 D30）
+  await stopActiveDriver(logLines);
 
   const finishedAtMs = Date.now();
   const counts = {
@@ -491,10 +534,13 @@ async function executeSuite(options) {
       exit_code: advanced.code,
       message: advanced.message,
       stage: 'execute',
-      stage_status: 'in_progress',
+      // 推进成功 → execute 阶段确实是 in_progress；
+      // 推进失败 → 阶段状态未知（不写 in_progress —— 那会与同段的 ok:false 自相矛盾）。
+      stage_status: advanced.ok ? 'in_progress' : null,
       artifact_path: artifactPath,
       run_id: runId,
-      runs_recorded: true,
+      // 只有真的把本次执行标识记进了 stages.execute.runs[] 才算"已记录"。
+      runs_recorded: advanced.ok,
     };
     log(advanced.message);
   }
@@ -558,7 +604,7 @@ async function executeSuite(options) {
   }
 
   const payload = {
-    ok: selfProblems.length === 0,
+    ok: selfProblems.length === 0 && (cycleInfo ? cycleInfo.ok : true),
     command: 'run-suite',
     run_id: runId,
     run_dir: runDir,
@@ -587,6 +633,9 @@ async function executeSuite(options) {
 
   let exitCode = EXIT_OK;
   if (selfProblems.length > 0) exitCode = EXIT_FAIL;
+  // 轮次推进失败 = 这次执行流程没做完（用户要求把这次执行记进轮次，没记上就是没做完）。
+  // 用例本身全通过不改变这一点（需求 D31 / D18）。
+  if (cycleInfo && !cycleInfo.ok) exitCode = EXIT_FAIL;
   if (options.strict && (counts.failed > 0 || counts.blocked > 0)) exitCode = EXIT_FAIL;
   return { payload, exitCode };
 }
@@ -632,34 +681,41 @@ async function main() {
     strict,
   };
 
-  const result = await executeSuite(options);
-  if (json) {
-    writeJson({ ...result.payload, exit_code: result.exitCode });
-  } else {
-    const lines = [];
-    lines.push(`套件: ${result.payload.suite}（执行器 ${result.payload.executor.name} ${result.payload.executor.version}）`);
-    if (result.payload.dry_run) {
-      lines.push(`[dry-run] 计划执行 ${result.payload.cases_total} 条用例，不发请求、不写产物`);
-      for (const item of result.payload.plan) {
-        lines.push(
-          `  - ${item.case_id} ${item.title} 断言 ${item.assertions.length} 条${item.mechanical ? '' : '（不可机械判定 → blocked）'}`,
-        );
-      }
+  try {
+    const result = await executeSuite(options);
+    if (json) {
+      writeJson({ ...result.payload, exit_code: result.exitCode });
     } else {
-      lines.push(`产物: ${result.payload.run_dir}`);
-      lines.push(
-        `用例: 共 ${result.payload.cases_total} 条 → 通过 ${result.payload.cases_passed} / 失败 ${result.payload.cases_failed}` +
-          ` / 阻塞 ${result.payload.cases_blocked} / 跳过 ${result.payload.cases_skipped}`,
-      );
-      for (const item of result.payload.results) {
-        lines.push(`  - ${item.case_id}: ${item.status}${item.error ? `（${item.error}）` : ''}`);
+      const lines = [];
+      lines.push(`套件: ${result.payload.suite}（执行器 ${result.payload.executor.name} ${result.payload.executor.version}）`);
+      if (result.payload.dry_run) {
+        lines.push(`[dry-run] 计划执行 ${result.payload.cases_total} 条用例，不发请求、不写产物`);
+        for (const item of result.payload.plan) {
+          lines.push(
+            `  - ${item.case_id} ${item.title} 断言 ${item.assertions.length} 条${item.mechanical ? '' : '（不可机械判定 → blocked）'}`,
+          );
+        }
+      } else {
+        lines.push(`产物: ${result.payload.run_dir}`);
+        lines.push(
+          `用例: 共 ${result.payload.cases_total} 条 → 通过 ${result.payload.cases_passed} / 失败 ${result.payload.cases_failed}` +
+            ` / 阻塞 ${result.payload.cases_blocked} / 跳过 ${result.payload.cases_skipped}`,
+        );
+        for (const item of result.payload.results) {
+          lines.push(`  - ${item.case_id}: ${item.status}${item.error ? `（${item.error}）` : ''}`);
+        }
+        if (result.payload.cycle) lines.push(`轮次: ${result.payload.cycle.message}`);
       }
-      if (result.payload.cycle) lines.push(`轮次: ${result.payload.cycle.message}`);
+      for (const problem of result.payload.problems || []) lines.push(`[FAIL] ${problem}`);
+      writeOut(`${lines.join('\n')}\n`);
     }
-    for (const problem of result.payload.problems || []) lines.push(`[FAIL] ${problem}`);
-    writeOut(`${lines.join('\n')}\n`);
+    process.exitCode = result.exitCode;
+  } finally {
+    // 收尾必须在**异常路径上**也执行（需求 D30）：
+    // mock 驱动会起一个内置 HTTP 桩服务，它持有事件循环 ——
+    // 任何异常跳过收尾，进程就永不退出（一个套件就能把 CI 吊死）。
+    await stopActiveDriver();
   }
-  process.exitCode = result.exitCode;
 }
 
 main().catch((err) => {

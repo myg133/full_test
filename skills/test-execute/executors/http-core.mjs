@@ -304,6 +304,11 @@ export function buildCurlCommand(spec) {
  * 计划由执行外壳给出（`context.steps`）：`[{step_index, request, action}]`，按顺序执行。
  * 本函数**不做任何判定**，只负责"跑"与"报告"（需求 F3 的分层）。
  *
+ * **传输层错误不得抹掉已经发生的执行事实**（需求 D29）：
+ * 中途超时/网络错误时，此前已成功步骤的响应照样留证，
+ * `reproduction.steps` 只列**真正拿到响应**的步骤 ——
+ * "列了但没证据"与"有证据但没列"都不行。
+ *
  * @param {object} caseObj 用例
  * @param {object} context 执行上下文
  * @returns {Promise<object>}
@@ -315,6 +320,38 @@ export async function executePlan(caseObj, context) {
   const commands = [];
   const executedActions = [];
 
+  /**
+   * 把"已经发生的事实"打包成返回值。
+   *
+   * 成功走完时 error 为 null；中途出错时 error 非空，
+   * 但已成功步骤的证据、复现步骤**照样带上**（需求 D29）。
+   *
+   * @param {object|null} error 出错描述
+   * @returns {object}
+   */
+  const snapshot = (error) => {
+    const flatEvidence = [];
+    for (const item of steps) {
+      for (const evidence of item.evidence) flatEvidence.push(evidence);
+    }
+    const last = steps.length > 0 ? steps[steps.length - 1] : null;
+    return {
+      steps,
+      observed: last ? last.observed : null,
+      evidence: flatEvidence,
+      error: error || null,
+      reproduction: {
+        // 只列真正拿到响应的步骤 —— 与证据份数一一对应
+        steps: executedActions,
+        command: commands.length > 0 ? commands.join('\n') : null,
+        expected: (Array.isArray(caseObj.steps) ? caseObj.steps : [])
+          .map((step) => (step && typeof step.expected === 'string' ? step.expected : ''))
+          .filter((item) => item !== '')
+          .join('; '),
+      },
+    };
+  };
+
   for (const item of plan) {
     const request = item.request || {};
     const method = String(request.method || 'GET').toUpperCase();
@@ -324,12 +361,11 @@ export async function executePlan(caseObj, context) {
 
     const auth = buildAuthHeaders(context.auth, context.resolved_credentials);
     if (auth.missing.length > 0) {
-      return {
-        error: {
-          type: 'credential_missing',
-          message: `环境变量未设置: ${auth.missing.join(' / ')}（读不到凭证 → 该用例算阻塞，不是失败）`,
-        },
-      };
+      // 同样不抹掉已完成的步骤（需求 D29）
+      return snapshot({
+        type: 'credential_missing',
+        message: `环境变量未设置: ${auth.missing.join(' / ')}（读不到凭证 → 该用例算阻塞，不是失败）`,
+      });
     }
     const allHeaders = { ...headers, ...auth.headers };
     const url = buildUrl(context.base_url, path, interpolateDeep(request.query || {}, variables));
@@ -341,7 +377,16 @@ export async function executePlan(caseObj, context) {
       timeoutMs: context.timeout_ms,
       retries: context.retries,
     });
-    if (!outcome.ok) return { error: outcome.error };
+    if (!outcome.ok) {
+      // 传输层错误（超时/网络错误）：已成功步骤的证据保留，
+      // 出错这一步**不列进 reproduction.steps**（它没有响应，也就没有证据）。
+      const where = `steps[${item.step_index}] ${describeRequest(request)}`;
+      const kept = steps.length > 0 ? `此前已成功 ${steps.length} 步的证据保留` : '此前没有成功的步骤';
+      return snapshot({
+        type: outcome.error && outcome.error.type ? outcome.error.type : 'network_error',
+        message: `${outcome.error && outcome.error.message ? outcome.error.message : '请求失败'}（失败于 ${where}；${kept}）`,
+      });
+    }
 
     const observed = outcome.observed;
     const content = `${JSON.stringify(
@@ -371,22 +416,5 @@ export async function executePlan(caseObj, context) {
     else executedActions.push(describeRequest(request));
   }
 
-  const last = steps.length > 0 ? steps[steps.length - 1] : null;
-  const flatEvidence = [];
-  for (const item of steps) {
-    for (const evidence of item.evidence) flatEvidence.push(evidence);
-  }
-  return {
-    steps,
-    observed: last ? last.observed : null,
-    evidence: flatEvidence,
-    reproduction: {
-      steps: executedActions,
-      command: commands.length > 0 ? commands.join('\n') : null,
-      expected: (Array.isArray(caseObj.steps) ? caseObj.steps : [])
-        .map((step) => (step && typeof step.expected === 'string' ? step.expected : ''))
-        .filter((item) => item !== '')
-        .join('; '),
-    },
-  };
+  return snapshot(null);
 }

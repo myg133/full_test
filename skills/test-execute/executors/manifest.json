@@ -10,8 +10,8 @@
     },
     {
       "path": "http-core.mjs",
-      "sha256": "dc71a22d564a76a5a4833acd6e71831258c796f96b9ee502017e45dc3c3e1612",
-      "bytes": 14258
+      "sha256": "5cd46a9d38f829ab68cba5f1873ebba57f74c8080dc7562a148770ce59fad4c5",
+      "bytes": 15715
     },
     {
       "path": "index.json",
@@ -25,8 +25,8 @@
     },
     {
       "path": "mock.mjs",
-      "sha256": "887113a13b466c3bbefff76b433aba4017fab4b03c07d3ccdf64649458ea1cf4",
-      "bytes": 5598
+      "sha256": "c2fb4ae042c65b6601558d9f0144b84cc1e2274cac9948aeea26391fdbd73162",
+      "bytes": 6212
     }
   ]
 }
