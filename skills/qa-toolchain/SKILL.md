@@ -80,7 +80,10 @@ description: |
 
 三条硬规则：
 
-1. **版本必须锁定** —— `==` / `@` 精确版本；`>=` / `latest` 一律拒绝安装（报"版本未锁定"）。
+1. **版本必须锁定** —— 形态按 `kind` 分：`python` 用 `name==version`（`bandit==1.7.7`）、
+   `node` 用 `name@version`（`semver@7.7.2`）、`binary` 用**纯版本号或完整下载 URL**
+   （`1.0.0` / `https://host/tool-linux-amd64`，binary 没有包名，不能写 `name@version`）。
+   `>=` / `latest` 一律拒绝安装（报"版本未锁定"）。
 2. **install 不得写到 `.tools/` 之外** —— `--user` / `--system` / `--prefix` /
    `.tools/` 外的绝对路径等一律拒绝安装（报"安装路径越界"）。
 3. **verify 必须存在** —— 装完不验证等于没装。

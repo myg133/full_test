@@ -16,6 +16,19 @@ bash /tmp/qa-0024/acceptance.sh
 
 结果：**PASS=51 FAIL=0**（逐条明细见 `feature-meta/traceability.md`）。
 
+### BA 独立交叉验证
+
+BA 侧另有一份独立验收脚本（`BA/demands/REQ-002-suite-foundation/REQ-002.4-tools-bootstrap/verify-acceptance.sh`），
+2026-11-11 在本分支上实测：
+
+```bash
+bash BA/demands/REQ-002-suite-foundation/REQ-002.4-tools-bootstrap/verify-acceptance.sh \
+  <REPO_ROOT>/feature-REQ-002.4
+```
+
+结果：**16 PASS / 0 FAIL**（AC-001 ~ AC-016 全通过，含真实安装、隔离负向验证、
+幂等、404→failed / 连接被拒→unavailable 的边界断言、分发链路核对）。
+
 ## 2. 关键实测记录
 
 | 事项 | 实测结果 |
