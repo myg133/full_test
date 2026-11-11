@@ -190,7 +190,10 @@ node scripts/check-methods.mjs --methods <路径> --dimensions <路径>   # 换�
 - **不做**方法推荐引擎（"这条需求我建议你用 M0.3"）—— 那是模型的活，脚本只管**核验声称**
 - **不做**通用表达式引擎（`required_outputs` 不允许写任意表达式）—— 通用表达式等于让模型写代码
 - **不改** `cases.json` 的 schema（不新增字段）—— 方法核验只读现有字段
-- **不改** REQ-002A 的校验语义 —— `validate-cases.mjs` 的职责不变，`check-methods.mjs` 是**另一个脚本**
+- **不改** REQ-002A 的校验**职责** —— `validate-cases.mjs` 的职责不变，`check-methods.mjs` 是**另一个脚本**。
+  **例外（唯一一处，D11）**：允许 `validate-cases.mjs` 对 `skipped[].method` 的格式检查**向后兼容地放宽**，
+  接受 `dimension:<维度名>` 前缀 —— 否则 D7 的"维度跳过"写出来根本交不出去（契约与实现分叉）。
+  放宽带向后兼容：旧用例集行为完全不变，REQ-002A 回归 19/0 必须保持
 - **不做**"自动生成用例" —— 本 REQ 只核验，不生成
 
 ---
