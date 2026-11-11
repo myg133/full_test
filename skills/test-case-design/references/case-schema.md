@@ -194,8 +194,13 @@
 
 - `method`：被跳过的对象 —— **方法编号**（如 `M1.4`，格式同 `methods_applied`），
   或**维度跳过标识** `"dimension:<维度名>"`（如 `dimension:concurrency`；维度名取
-  `references/coverage-dimensions.md` 的 8 个枚举值之一）。
+  `references/dimensions.json` 的枚举值之一 —— 它是维度枚举的唯一来源）。
 - `reason`：为什么跳过。必须是具体理由（"不适用"不算），否则等于没留痕。**两种写法都必须写 `reason`**。
+  报错文案按**实际跳过的对象**分词并点名该对象（跳方法说"跳过的方法 `M1.4`"，跳维度说"跳过的维度 `concurrency`"）。
+
+> 旧写法 `{ "dimension": "<维度名>", "reason": "..." }` **非法** —— 两个脚本都判非法（退出码非 0），
+> 并在报错里指明正确写法：`{ "method": "dimension:<维度名>", "reason": "..." }`。
+> 维度名拼错同样是 **ERROR**（不是 WARN）：拼错的跳过声明从来不会生效。
 
 > 方法编号格式 `^M\d+\.\d+$`（如 `M1.1`、`M1.2`）。当前阶段只校验格式，
 > 不校验该编号是否真实存在于方法库中。
@@ -209,7 +214,7 @@
 | `id` | string | 是 | 匹配 `^TC-\d{3}$`，全局唯一 | 用例编号，`TC-001` 起递增 |
 | `title` | string | 是 | 非空 | 一句话说清这条用例验证什么 |
 | `requirement_refs` | string[] | 是 | 非空数组，每项必须存在于 `requirements[].id` | 这条用例覆盖哪些需求条目（可多选） |
-| `dimension` | string | 是 | 8 个枚举值之一 | 覆盖维度，见 `coverage-dimensions.md` |
+| `dimension` | string | 是 | `references/dimensions.json` 的枚举值之一（唯一来源） | 覆盖维度，人读清单见 `coverage-dimensions.md` |
 | `priority` | string | 是 | `P0` / `P1` / `P2` / `P3` | 缺陷漏掉的代价分级 |
 | `method` | string[] | 是² | 元素匹配 `^M\d+\.\d+$` | 这条用例用了哪些测试方法（v2 新增） |
 | `status` | string | 是² | `active` / `deprecated` / `modified` / `blocked` | 用例生命周期状态（v2 新增） |

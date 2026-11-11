@@ -255,17 +255,22 @@
 - `skipped[]` 的元素结构固定为 `method` + `reason` 两个字段（REQ-002A 的契约），**不新增 `dimension` 字段**。
 - 跳过某个**方法**：`method` 写方法编号，如 `"M1.4"`。
 - 跳过某个**覆盖维度**：`method` 写 `"dimension:<维度名>"`，如 `"dimension:concurrency"`（D7 裁决）。
-  - 契约只承认这一种前缀写法。脚本对 `{ "dimension": "..." }` 形式**兼容**（读得懂、照样要求 reason），
-    但那是历史写法，别再新增——`validate-cases.mjs` 只认 `method` 字段。
+  - 契约**只承认**这一种前缀写法。旧写法 `{ "dimension": "..." }` **两个脚本都判非法**
+    （`validate-cases.mjs` 与 `check-methods.mjs` 结论一致，退出码非 0），报错会指明正确写法。
+    别再新增旧写法。
   - `validate-cases.mjs` 对 `skipped[].method` 同时接受**方法编号**与 `dimension:<维度名>` 两种写法（D11）；
     但 `cases[].method[]` 与 `coverage_matrix[].methods_applied[]` 仍然**只接受方法编号**。
 - 两种形式都必须带非空 `reason`；缺 `reason` 是 `ERROR`（跳过不留痕是用例变少却无人察觉的根因）。
+  报错文案按**实际跳过的对象**分词并点名该对象：跳方法说"跳过的方法 `M1.4`"，跳维度说"跳过的维度 `concurrency`"。
+- 维度名必须取自 `references/dimensions.json` 的枚举。**拼错的维度名是 `ERROR`**（不是 WARN）：
+  拼错的跳过声明从来不会生效，若只报 WARN 就等于"报了校验通过、那条维度实际没被跳过"。
 - 跳过**不等于**免检：被跳过的方法不再核验产出，被跳过的维度不再报"缺用例"，但跳过声明本身必须站得住。
 
 ## 5. 覆盖维度
 
 8 个维度（`functional` / `boundary` / `exception` / `permission` / `data` / `concurrency` / `performance` / `compatibility`）
-的适用信号与跳过理由要求在 `references/dimensions.json`，人读清单见 `references/coverage-dimensions.md`。
+的适用信号与跳过理由要求在 `references/dimensions.json` —— 它是**维度枚举的唯一来源**；
+人读清单见 `references/coverage-dimensions.md`，两者由 `check-methods.mjs --check-dimensions-doc` 对照保证一致。
 维度的适用性同样由脚本核验：有强适用信号却一条用例都没有 → `WARN`（`DIMENSION_MISSING`）。
 
 ## 6. 编号说明

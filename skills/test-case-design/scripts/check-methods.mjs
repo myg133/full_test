@@ -6,6 +6,8 @@
 //   node scripts/check-methods.mjs --methods <路径> --dimensions <路径>
 //   node scripts/check-methods.mjs --methods <路径> --selftest
 //   node scripts/check-methods.mjs --methods <路径> --doc <路径> --check-doc
+//   node scripts/check-methods.mjs --methods <路径> --dimensions <路径> \
+//     --dimensions-doc <路径> --check-dimensions-doc
 //
 // 退出码: 0 = 无 ERROR（可能有 WARN / 无法判定）; 1 = 有 ERROR; 2 = 用法错误
 //
@@ -29,6 +31,8 @@ const SEVERITY_WARNING = 'WARN';
 const SKILL_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const DEFAULT_METHODS_PATH = join(SKILL_ROOT, 'references', 'methods.json');
 const DEFAULT_DIMENSIONS_PATH = join(SKILL_ROOT, 'references', 'dimensions.json');
+// 维度清单文档（人读清单）的默认位置 —— 与维度库对照，保证清单不与库分叉（D16）
+const DEFAULT_DIMENSIONS_DOC_PATH = join(SKILL_ROOT, 'references', 'coverage-dimensions.md');
 
 // 维度跳过的前缀（D7）：skipped[] 的元素结构仍以 REQ-002A 为准（method + reason），
 // 跳过某个**维度**时把维度名写进 method 字段，前面加 "dimension:"。
@@ -182,8 +186,10 @@ function parseArgs(argv) {
     methods: null,
     dimensions: null,
     doc: null,
+    dimensionsDoc: null,
     selftest: false,
     checkDoc: false,
+    checkDimensionsDoc: false,
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -194,7 +200,14 @@ function parseArgs(argv) {
       opts.selftest = true;
     } else if (arg === '--check-doc') {
       opts.checkDoc = true;
-    } else if (arg === '--methods' || arg === '--dimensions' || arg === '--doc') {
+    } else if (arg === '--check-dimensions-doc') {
+      opts.checkDimensionsDoc = true;
+    } else if (
+      arg === '--methods' ||
+      arg === '--dimensions' ||
+      arg === '--doc' ||
+      arg === '--dimensions-doc'
+    ) {
       const value = argv[i + 1];
       if (value === undefined || value.startsWith('--')) {
         return { error: `参数 ${arg} 缺少取值` };
@@ -202,6 +215,7 @@ function parseArgs(argv) {
       i += 1;
       if (arg === '--methods') opts.methods = value;
       else if (arg === '--dimensions') opts.dimensions = value;
+      else if (arg === '--dimensions-doc') opts.dimensionsDoc = value;
       else opts.doc = value;
     } else if (arg.startsWith('--')) {
       return { error: `未知参数: ${arg}` };
@@ -446,6 +460,51 @@ function compareDocWithLibrary(library, doc) {
   return issues;
 }
 
+// ------------------------------------------------------------------------ 维度清单文档一致性
+
+/**
+ * 从维度清单文档里取出维度 id 集合。
+ *
+ * 只认表格**第一列**是反引号包裹的小写 id 的行（`| `functional` | 功能 | ... |`）——
+ * 这正是清单表格的写法；文档里其它表格（如"与设计方法的对应"）第一列是中文，不会被误取。
+ */
+function extractDimensionIdsFromDoc(doc) {
+  const ids = [];
+  const re = /^\|\s*`([a-z_]+)`\s*\|/gm;
+  let match = re.exec(doc);
+  while (match !== null) {
+    if (!ids.includes(match[1])) ids.push(match[1]);
+    match = re.exec(doc);
+  }
+  return ids;
+}
+
+/**
+ * 比对维度清单文档与维度库（D16）。
+ *
+ * 维度库为准；不一致时点名不一致的维度 id。
+ * 这条检查的意义：清单文档是 SKILL.md 明确让 agent 读的，它与库分叉 = agent
+ * 照文档写的维度名会被校验器拒绝，而 agent 无从知道该信哪个文件。
+ */
+function compareDimensionsDocWithLibrary(library, doc) {
+  const issues = [];
+  const docIds = extractDimensionIdsFromDoc(doc);
+  const libraryIds = library.dimensions.map((dimension) => dimension.id);
+
+  for (const id of libraryIds) {
+    if (!docIds.includes(id)) {
+      issues.push(`维度清单缺少维度 "${id}"（references/dimensions.json 有、清单里没有）`);
+    }
+  }
+  for (const id of docIds) {
+    if (!libraryIds.includes(id)) {
+      issues.push(`维度清单出现维度库里没有的维度 "${id}"（以 references/dimensions.json 为准）`);
+    }
+  }
+
+  return issues;
+}
+
 // ------------------------------------------------------------------------ 谓词求值
 
 /**
@@ -646,7 +705,11 @@ function checkCases(doc, methodsLibrary, dimensionsLibrary) {
 
     // --- 跳过声明：方法跳过与维度跳过都必须写 reason ---
     // D7：skipped[] 的元素结构以 REQ-002A 为准（只有 method + reason），
-    //      维度跳过用 method 字段记 "dimension:<维度名>"；{dimension: ...} 只是兼容写法。
+    //      维度跳过用 method 字段记 "dimension:<维度名>"。
+    // D14：旧写法 { "dimension": ... } **不再静默兼容** —— 明确报错并指明正确写法。
+    //      此前本脚本静默接受该写法、且让该维度跳过真实生效，与 validate-cases.mjs
+    //      对同一份文件给出相反结论（宽松的那个让非法写法静默放行）。
+    // D15：维度名不在枚举内是可机械判定的事实 → ERROR，并点名那个拼错的名字。
     const skippedMethods = new Set();
     const skippedDimensions = new Set();
     for (const skip of skipped) {
@@ -656,10 +719,23 @@ function checkCases(doc, methodsLibrary, dimensionsLibrary) {
       }
       const methodField = isFilledString(skip.method) ? skip.method.trim() : null;
       const legacyDimensionField = isFilledString(skip.dimension) ? skip.dimension.trim() : null;
+
+      // D14：探测旧写法 → 报错 + 指明正确写法（不是"既没有 method 也没有 dimension"）
+      if (legacyDimensionField !== null) {
+        addError(
+          'SKIP_FORMAT_INVALID',
+          requirementId,
+          null,
+          `需求条目 ${requirementId} 的 skipped 项用了旧写法 { "dimension": "${legacyDimensionField}" }：该写法非法。` +
+            `维度跳过必须写在 method 字段里 —— 写成 { "method": "dimension:${legacyDimensionField}", "reason": "..." }`,
+        );
+        continue;
+      }
+
       const isDimensionSkip = methodField !== null && methodField.startsWith(DIMENSION_SKIP_PREFIX);
       const skippedDimension = isDimensionSkip
         ? methodField.slice(DIMENSION_SKIP_PREFIX.length).trim()
-        : legacyDimensionField;
+        : null;
       const skippedMethod = isDimensionSkip ? null : methodField;
       const target = skippedMethod !== null ? skippedMethod : skippedDimension;
 
@@ -672,14 +748,33 @@ function checkCases(doc, methodsLibrary, dimensionsLibrary) {
         );
         continue;
       }
-      if (skippedMethod !== null) skippedMethods.add(skippedMethod);
-      if (skippedDimension) skippedDimensions.add(skippedDimension);
+
+      if (isDimensionSkip) {
+        // D15：维度名不在枚举内 → ERROR 并点名（此前只把它存进跳过集合，
+        // 而维度库遍历的是正确 id，永远匹配不上 → 该跳过静默失效）。
+        if (!dimensionById.has(skippedDimension)) {
+          addError(
+            'SKIP_DIMENSION_UNKNOWN',
+            requirementId,
+            skippedDimension,
+            `需求条目 ${requirementId} 跳过了维度 "${skippedDimension}"，但该维度名不在维度库枚举内` +
+              `（${[...dimensionById.keys()].join(' / ')}），该跳过声明不会生效，请检查是否拼错`,
+          );
+          continue;
+        }
+        skippedDimensions.add(skippedDimension);
+      } else {
+        skippedMethods.add(skippedMethod);
+      }
+
       if (!isFilledString(skip.reason)) {
+        // D13：文案按实际跳过的对象分词（跳方法说"方法"、跳维度说"维度"），并点名那个对象
+        const label = isDimensionSkip ? `跳过的维度 ${skippedDimension}` : `跳过的方法 ${skippedMethod}`;
         addError(
           'SKIP_REASON_MISSING',
           requirementId,
           target,
-          `需求条目 ${requirementId} 跳过了 ${target}，但没有写明 reason（跳过必须留痕，不能空跳过）`,
+          `需求条目 ${requirementId} ${label}，但没有写明 reason（跳过必须留痕，不能空跳过）`,
         );
       }
     }
@@ -919,7 +1014,9 @@ function main() {
         '用法: node scripts/check-methods.mjs <cases.json> [--json]\n' +
           '      node scripts/check-methods.mjs --methods <路径> --dimensions <路径>\n' +
           '      node scripts/check-methods.mjs --methods <路径> --selftest\n' +
-          '      node scripts/check-methods.mjs --methods <路径> --doc <路径> --check-doc\n',
+          '      node scripts/check-methods.mjs --methods <路径> --doc <路径> --check-doc\n' +
+          '      node scripts/check-methods.mjs --methods <路径> --dimensions <路径> ' +
+          '--dimensions-doc <路径> --check-dimensions-doc\n',
       );
     }
     process.exit(exitCode);
@@ -974,6 +1071,25 @@ function main() {
       addError('DOC_MISMATCH', null, null, issue);
     }
     return finish(jsonMode, { title: '方法库与说明文档一致性检查' });
+  }
+
+  // --- 维度清单文档一致性模式（D16）---
+  // 可从命令行单独触发（不依赖跑一遍用例集）：agent 交付前自查用。
+  if (opts.checkDimensionsDoc) {
+    const docPath = resolve(opts.dimensionsDoc || DEFAULT_DIMENSIONS_DOC_PATH);
+    const docRead = readTextFile(docPath, '维度清单文档');
+    if (docRead.error) {
+      addError('DOC_INVALID', null, null, docRead.error);
+      return finish(jsonMode, { title: '维度清单文档读取失败' });
+    }
+    const issues = compareDimensionsDocWithLibrary(dimensionsLibrary, docRead.value);
+    for (const issue of issues) {
+      addError('DIMENSION_DOC_MISMATCH', null, null, issue);
+    }
+    return finish(jsonMode, {
+      title: '维度库与维度清单文档一致性检查',
+      subtitle: `维度库: ${dimensionsPath}\n维度清单: ${docPath}`,
+    });
   }
 
   // --- 没有给用例集：只做库自检（换库用的快速入口） ---

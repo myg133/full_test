@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "description": "覆盖维度库（唯一来源）。references/coverage-dimensions.md 是人读清单，scripts/check-methods.mjs 是机器核验入口；维度 id 与 scripts/validate-cases.mjs 的 DIMENSIONS 枚举一一对应。",
+  "description": "覆盖维度库（唯一来源）。references/coverage-dimensions.md 是人读清单，scripts/check-methods.mjs 是机器核验入口；本文件是维度枚举的唯一来源 —— scripts/validate-cases.mjs 与 scripts/check-methods.mjs 都从这里读，不再各自带一份副本（清单与本文件的 id 集合由 check-methods.mjs --check-dimensions-doc 对照保证一致）。",
   "dimensions": [
     {
       "id": "functional",
