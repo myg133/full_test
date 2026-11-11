@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
-  "description": "测试方法库（唯一来源）。references/design-methods.md 是本文档的人读说明，scripts/check-methods.mjs 是本文档的机器核验入口；两者不一致时以本文件为准。",
+  "description": "测试方法库（唯一来源）。本库只收录 M1.x 段的**测试设计方法**（怎么测）；M0.x / M4.x 段是架构稿 Layer 0 的**必选测试点**（测什么），不在本库内 —— 用例里出现这类编号时 check-methods.mjs 报\"无法判定\"，不得默认通过（详见 references/design-methods.md §6）。references/design-methods.md 是本文档的人读说明，scripts/check-methods.mjs 是本文档的机器核验入口；两者不一致时以本文件为准。",
   "methods": [
     {
-      "id": "M0.1",
+      "id": "M1.1",
       "name": "等价类划分",
       "aliases": ["等价类", "等价类划分法", "EP", "Equivalence Partitioning"],
       "purpose": "把输入域划分成处理逻辑相同的若干等价类，每个等价类取一个代表值做用例。",
@@ -21,7 +21,7 @@
       ]
     },
     {
-      "id": "M0.2",
+      "id": "M1.2",
       "name": "边界值分析",
       "aliases": ["边界值", "边界值法", "BVA", "Boundary Value Analysis"],
       "purpose": "取边界及其邻近值做用例，重点测边界内外各一格。",
@@ -38,7 +38,7 @@
       ]
     },
     {
-      "id": "M0.3",
+      "id": "M1.3",
       "name": "判定表",
       "aliases": ["判定表法", "决策表", "Decision Table"],
       "purpose": "把条件组合与动作列成表，用尽量少的用例覆盖全部规则。",
@@ -56,7 +56,7 @@
       ]
     },
     {
-      "id": "M0.4",
+      "id": "M1.4",
       "name": "状态迁移",
       "aliases": ["状态迁移法", "状态机", "State Transition"],
       "purpose": "枚举状态与触发事件，验证合法迁移、非法迁移与被忽略的事件。",
@@ -74,7 +74,7 @@
       ]
     },
     {
-      "id": "M0.5",
+      "id": "M1.5",
       "name": "正交实验",
       "aliases": ["正交", "正交表", "正交实验法", "Orthogonal Array", "OA"],
       "purpose": "参数多且互相独立时，用少量组合覆盖各参数的两两组合。",
@@ -92,7 +92,7 @@
       ]
     },
     {
-      "id": "M0.6",
+      "id": "M1.6",
       "name": "场景法",
       "aliases": ["场景法", "用例法", "Scenario", "Use Case"],
       "purpose": "沿主成功流程加备选/扩展流程组织用例，覆盖端到端行为。",

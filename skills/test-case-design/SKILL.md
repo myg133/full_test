@@ -40,7 +40,7 @@ description: |
    原因：凭直觉罗列用例容易只覆盖"顺利路径"；每种方法对应一类系统性遗漏，选方法等于决定这轮能发现哪类缺陷。而 `methods_applied` 只是个字符串列表，写上编号不产生任何用例，光靠自觉填等于没填。
 
 5. **按覆盖维度清单补齐**：功能 / 边界 / 异常 / 权限 / 数据 / 并发 / 性能 / 兼容。维度取值与逐维度检查清单见 `references/coverage-dimensions.md`，各维度的适用信号与跳过理由要求在 `references/dimensions.json`。
-   维度不适用的，在 `coverage_matrix[].skipped[]` 里写明维度与理由（跳过必须留痕），不要静默跳过。
+   维度不适用的，在 `coverage_matrix[].skipped[]` 里写明维度与理由（跳过必须留痕），不要静默跳过。**写法**：跳过维度用 `method` 字段记 `"dimension:<维度名>"`（如 `{"method":"dimension:concurrency","reason":"该接口为纯查询，无并发写入语义"}`）——`skipped[]` 的元素结构固定是 `method` + `reason`，不新增 `dimension` 字段。
    原因：维度清单是查漏网用的统一视角，每个维度都问一遍"这一条适用吗"，比凭经验想更容易发现被忽略的维度。
 
 6. **先拿骨架，再填内容**：
@@ -62,7 +62,8 @@ description: |
    ```
    node scripts/check-methods.mjs cases.json
    ```
-   原因：`methods_applied` 只是声明，脚本才会到用例集里找该方法的必需产出（"用了 M0.2"必须能在用例集里找到边界值用例）。这一步是"声明"变成"可核验事实"的唯一入口。
+   原因：`methods_applied` 只是声明，脚本才会到用例集里找该方法的必需产出（"用了 M1.2"必须能在用例集里找到边界值用例）。这一步是"声明"变成"可核验事实"的唯一入口。
+   **方法编号分两段，别混用**：`M1.x` 是本 skill 的**测试设计方法**（等价类/边界值/判定表/状态迁移/正交/场景）；`M0.x` / `M4.x` 是架构稿 Layer 0 的**必选测试点**（正常路径/边界值/异常输入/非法迁移/幂等/服务端校验/数据质量），**不在方法库内** —— 写进 `methods_applied[]` 或 `cases[].method[]` 会被判**"无法判定"**，不会默认通过。
    **三类结论的后果**：
    - **ERROR**：产出确实缺失，是可机械判定的事实 → **必须修**，修完重跑直到退出码 0；
    - **WARN**：适用性存疑，是主观判断 → 退出码仍为 0，但**必须在报告里说明**（写清为什么这条不适用/为什么用这个方法），不得静默忽略；
@@ -174,7 +175,7 @@ node scripts/cycle-state.mjs show test-assets/cycles/R1-REQ-001 --json
   - `meta`：`source`（需求来源标识）、`generated_at`（ISO-8601）、`case_count`（用例总数）
   - `requirements[]`：`id`、`title`、`source_ref`、`testable`
   - `open_questions[]`（v2）：`id`（`Q1` 起）、`question`、`requirement_refs[]`、`interpretations[{reading, impact}]`（**至少 2 条**——只列一种解读等于替需求方做了裁定）、`affected_cases[]`、`severity`（`blocking` / `non-blocking`）、`coverage`（`cases` / `deferred`，`deferred` 时须给 `defer_reason`）
-  - `coverage_matrix[]`（v2）：`requirement`、`methods_applied[]`、`skipped[]`（**跳过方法或维度都必须写 reason**，空理由即 FAIL）、`dimensions[]`
+  - `coverage_matrix[]`（v2）：`requirement`、`methods_applied[]`（写**方法编号** `M1.x`）、`skipped[]`（元素固定为 `method` + `reason`；跳过方法写编号，跳过维度写 `"dimension:<维度名>"`；**两种都必须写 reason**，空理由即 FAIL）、`dimensions[]`
   - `cases[]`：`id`、`title`、`requirement_refs[]`、`dimension`、`priority`、`method[]`（v2）、`status`（v2：`active` / `deprecated` / `modified` / `blocked`）、`revision`（`status` 非 `active` 时必填）、`preconditions[]`、`steps[{action, expected}]`、`data`、`tags[]`
 - **Markdown 报告**（`render-report.mjs` 的 stdout）：用例总览表、追溯矩阵（需求条目 → 覆盖用例 ID → 覆盖状态）、未覆盖需求条目清单、未决问题、覆盖矩阵。
 - **覆盖汇报**：未覆盖需求条目 ID 列表 + 未决问题列表 + `check-methods.mjs` 的 WARN 与无法判定项，三项都不能省略。
@@ -187,7 +188,7 @@ node scripts/cycle-state.mjs show test-assets/cycles/R1-REQ-001 --json
 - **`check-methods.mjs` 报无法判定**：证据不足（如 `expected` 写成了人读字符串），既不算通过也不算失败——写进报告，并把 `expected` 改成结构化断言对象，让脚本能真正核验。
 - **需求有歧义或缺前置条件**：写进未决问题清单，列出你的两种以上可能理解与各自影响，请需求方裁定；不要自行选定一种然后当成既定事实。
 - **需求条目拆不出来 / 粒度明显不对**：回到第 2 步重新拆，或请用户补充上下文。用例集对不上需求原文时，多半是条目拆错了，而不是用例写得少。
-- **某个维度确实不适用**（如纯离线批处理任务没有并发语义）：在 `coverage_matrix[].skipped[]` 里写明维度与理由，让不覆盖成为显式决定而不是空白。
+- **某个维度确实不适用**（如纯离线批处理任务没有并发语义）：在 `coverage_matrix[].skipped[]` 里写明维度与理由（`{"method":"dimension:concurrency","reason":"..."}`），让不覆盖成为显式决定而不是空白。
 - **文件读不到 / JSON 语法错误**：原样把错误信息报给用户并停止，不要凭空修补一个损坏的用例集。
 - **覆盖缺口过大**（多数可测试条目没有用例）：说明缺的是输入信息还是设计工作量，并给出补齐建议，而不是交付一个"结构合法但覆盖稀薄"的集合。
 
@@ -200,7 +201,7 @@ node scripts/cycle-state.mjs show test-assets/cycles/R1-REQ-001 --json
 拆解与产出要点：
 
 - 需求条目：`R-1` 密码长度 8–20 位；`R-2` 必须含字母与数字；`R-3` 连错 5 次锁定 15 分钟。
-- `R-1` 用边界值法生成 `boundary` 维度用例：长度 7（拒绝）、8（接受）、20（接受）、21（拒绝）；`methods_applied` 写 `["M0.2"]`，期望结果各不相同。
+- `R-1` 用边界值法生成 `boundary` 维度用例：长度 7（拒绝）、8（接受）、20（接受）、21（拒绝）；`methods_applied` 写 `["M1.2"]`，期望结果各不相同。
 - `R-2` 用等价类 + 判定表生成 `functional` 维度用例：纯数字、纯字母、字母+数字；规则组合用判定表覆盖"只有字母""只有数字""两者都有"。
 - `R-3` 用状态迁移生成 `exception` 维度用例：错误次数 4→5 的迁移点、锁定后第 6 次输入、15 分钟到期后第 1 次输入。
 - 交付前跑 `node scripts/validate-cases.mjs cases.json`、`node scripts/check-methods.mjs cases.json` 与 `node scripts/render-report.mjs cases.json`，把追溯矩阵里"未覆盖"一栏为空、且 `check-methods.mjs` 没有 ERROR 的结果，连同未决问题一起交给需求方；WARN 与无法判定项在报告里逐条说明。

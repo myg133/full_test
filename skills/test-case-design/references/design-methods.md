@@ -20,7 +20,7 @@
 2. **选方法**：对照下面的**适用信号**挑方法，把选中的方法编号写进 `coverage_matrix[].methods_applied[]`。
 3. **核验**：跑 `scripts/check-methods.mjs`，按脚本给的结论改或说明。
 
-**第 3 步不能省。** `methods_applied[]` 只是一个字符串列表，写上 `"M0.2"` 不等于真的做了边界值分析——
+**第 3 步不能省。** `methods_applied[]` 只是一个字符串列表，写上 `"M1.2"` 不等于真的做了边界值分析——
 本套件的做法是让脚本到**用例集本身**里找该方法的必需产出，找不到就报错。
 
 ### 1.2 三类结论各自的后果
@@ -43,7 +43,7 @@
 | `kind` | 含义 |
 |---|---|
 | `min_cases_by_dimension` | 该需求条目下，指定维度的用例数 ≥ `min` |
-| `distinct_expected` | 上述用例的 `steps[].expected`（断言对象的 `expected` 值）至少有 `min` 个不同取值 |
+| `distinct_expected` | **子字段**（D6）：挂在 `min_cases_by_dimension` 上的 `distinct_expected: true` —— 上述用例的 `steps[].expected`（断言对象的 `expected` 值）至少有 2 个不同取值 |
 | `has_dimension` | 该需求条目下存在指定维度的用例 |
 | `min_assertions_per_case` | 该需求条目下每条用例的断言数 ≥ `min` |
 | `min_cases_total` | 该需求条目下用例总数 ≥ `min` |
@@ -58,20 +58,20 @@
 
 | 编号 | 方法 | 一句话 | 典型维度 |
 |---|---|---|---|
-| `M0.1` | 等价类划分 | 输入域切成等价类，每类取一个代表值 | functional、exception |
-| `M0.2` | 边界值分析 | 边界及内外各一格 | boundary |
-| `M0.3` | 判定表 | 条件组合与动作成表，最少用例覆盖全部规则 | functional、permission |
-| `M0.4` | 状态迁移 | 状态 × 事件，合法与非法迁移都要测 | functional、exception |
-| `M0.5` | 正交实验 | 少量组合覆盖各参数的两两组合 | functional、data、compatibility |
-| `M0.6` | 场景法 | 主成功流程 + 备选/扩展流程 | functional、exception |
+| `M1.1` | 等价类划分 | 输入域切成等价类，每类取一个代表值 | functional、exception |
+| `M1.2` | 边界值分析 | 边界及内外各一格 | boundary |
+| `M1.3` | 判定表 | 条件组合与动作成表，最少用例覆盖全部规则 | functional、permission |
+| `M1.4` | 状态迁移 | 状态 × 事件，合法与非法迁移都要测 | functional、exception |
+| `M1.5` | 正交实验 | 少量组合覆盖各参数的两两组合 | functional、data、compatibility |
+| `M1.6` | 场景法 | 主成功流程 + 备选/扩展流程 | functional、exception |
 
 ---
 
 ## 3. 各方法详解
 
-### M0.1 等价类划分
+### M1.1 等价类划分
 
-- **id**: `M0.1`
+- **id**: `M1.1`
 - **name**: 等价类划分
 - **aliases**: 等价类、等价类划分法、EP、Equivalence Partitioning
 - **purpose**: 把输入域划分成处理逻辑相同的若干等价类，每个等价类取一个代表值做用例。
@@ -97,9 +97,9 @@
 
 ---
 
-### M0.2 边界值分析
+### M1.2 边界值分析
 
-- **id**: `M0.2`
+- **id**: `M1.2`
 - **name**: 边界值分析
 - **aliases**: 边界值、边界值法、BVA、Boundary Value Analysis
 - **purpose**: 取边界及其邻近值做用例，重点测边界内外各一格。
@@ -124,9 +124,9 @@
 
 ---
 
-### M0.3 判定表
+### M1.3 判定表
 
-- **id**: `M0.3`
+- **id**: `M1.3`
 - **name**: 判定表
 - **aliases**: 判定表法、决策表、Decision Table
 - **purpose**: 把条件组合与动作列成表，用尽量少的用例覆盖全部规则。
@@ -153,9 +153,9 @@
 
 ---
 
-### M0.4 状态迁移
+### M1.4 状态迁移
 
-- **id**: `M0.4`
+- **id**: `M1.4`
 - **name**: 状态迁移
 - **aliases**: 状态迁移法、状态机、State Transition
 - **purpose**: 枚举状态与触发事件，验证合法迁移、非法迁移与被忽略的事件。
@@ -182,9 +182,9 @@
 
 ---
 
-### M0.5 正交实验
+### M1.5 正交实验
 
-- **id**: `M0.5`
+- **id**: `M1.5`
 - **name**: 正交实验
 - **aliases**: 正交、正交表、正交实验法、Orthogonal Array、OA
 - **purpose**: 参数多且互相独立时，用少量组合覆盖各参数的两两组合。
@@ -211,9 +211,9 @@
 
 ---
 
-### M0.6 场景法
+### M1.6 场景法
 
-- **id**: `M0.6`
+- **id**: `M1.6`
 - **name**: 场景法
 - **aliases**: 场景法、用例法、Scenario、Use Case
 - **purpose**: 沿主成功流程加备选/扩展流程组织用例，覆盖端到端行为。
@@ -244,16 +244,19 @@
 
 ```jsonc
 { "requirement": "R-1",
-  "methods_applied": ["M0.1"],
+  "methods_applied": ["M1.1"],
   "skipped": [
-    { "method": "M0.4", "reason": "该条目为纯计算无状态流转" },
-    { "dimension": "concurrency", "reason": "该条目无共享资源，无并发语义" }
+    { "method": "M1.4", "reason": "该条目为纯计算无状态流转" },
+    { "method": "dimension:concurrency", "reason": "该条目无共享资源，无并发语义" }
   ],
   "dimensions": ["functional"] }
 ```
 
-- `method` 形式：跳过某个**方法**。
-- `dimension` 形式：跳过某个**覆盖维度**。
+- `skipped[]` 的元素结构固定为 `method` + `reason` 两个字段（REQ-002A 的契约），**不新增 `dimension` 字段**。
+- 跳过某个**方法**：`method` 写方法编号，如 `"M1.4"`。
+- 跳过某个**覆盖维度**：`method` 写 `"dimension:<维度名>"`，如 `"dimension:concurrency"`（D7 裁决）。
+  - 契约只承认这一种前缀写法。脚本对 `{ "dimension": "..." }` 形式**兼容**（读得懂、照样要求 reason），
+    但那是历史写法，别再新增——`validate-cases.mjs` 只认 `method` 字段。
 - 两种形式都必须带非空 `reason`；缺 `reason` 是 `ERROR`（跳过不留痕是用例变少却无人察觉的根因）。
 - 跳过**不等于**免检：被跳过的方法不再核验产出，被跳过的维度不再报"缺用例"，但跳过声明本身必须站得住。
 
@@ -265,10 +268,18 @@
 
 ## 6. 编号说明
 
-- 本库用 `M0.1`–`M0.6` 标识上表 6 种方法。`coverage_matrix[].methods_applied[]` 与 `cases[].method[]`
-  都引用这里的编号。
-- 方法库里没有登记的编号（例如其它设计稿里出现过的 `M4.5`）**无法核验**——脚本会把它列为"无法判定"，
-  而不是默认通过。
+**方法编号分两段，不要混用**（D8 裁决）：
+
+| 编号段 | 含义 | 归属 | 在本库内？ |
+|--------|------|------|-----------|
+| `M1.1`–`M1.6` | **测试设计方法**（怎么测：等价类 / 边界值 / 判定表 / 状态迁移 / 正交 / 场景） | 本方法库（`methods.json`） | 是 |
+| `M0.x` / `M4.x` | **Layer 0 必选测试点**（测什么：正常路径 / 边界值 / 异常输入 / 非法迁移 / 幂等 / 服务端校验 / 数据质量） | 架构稿 `schema-v2-design.md` | 否 |
+
+- `coverage_matrix[].methods_applied[]` 与 `cases[].method[]` 里要写的是**本库的方法编号**（`M1.x`）。
+- 出现 `M0.x` / `M4.x`（例如照着 `references/case-schema.md` 的示例写 `method: ["M0.1","M4.5"]`）时，
+  脚本报**"无法判定"**（该编号不在设计方法库内），**不得默认通过**。
+- 编号格式仍满足 `^M\d+\.\d+$`，所以两段都用 `M` 前缀，靠**段位**区分而不是靠前缀字母。
+- 两段同号不同义（架构稿 `M0.5` = 幂等，本库 `M1.5` = 正交实验），混用会让核验结果错乱 —— 所以必须先看清自己在写哪一段。
 
 ## 7. 常见反模式
 

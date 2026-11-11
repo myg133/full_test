@@ -30,6 +30,15 @@ const SKILL_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const DEFAULT_METHODS_PATH = join(SKILL_ROOT, 'references', 'methods.json');
 const DEFAULT_DIMENSIONS_PATH = join(SKILL_ROOT, 'references', 'dimensions.json');
 
+// 维度跳过的前缀（D7）：skipped[] 的元素结构仍以 REQ-002A 为准（method + reason），
+// 跳过某个**维度**时把维度名写进 method 字段，前面加 "dimension:"。
+const DIMENSION_SKIP_PREFIX = 'dimension:';
+
+// 本方法库收录的编号段（D8）：M1.x = 测试设计方法。
+// M0.x / M4.x = 架构稿 Layer 0 的必选测试点段，不在本库内 —— 出现即判"无法判定"。
+const DESIGN_METHOD_SEGMENT = /^M1\.\d+$/;
+const LAYER0_SEGMENT = /^M[04]\.\d+$/;
+
 // 谓词种类（D3：只支持有限几种，不做通用表达式）
 const PREDICATE_KINDS = [
   'min_cases_by_dimension',
@@ -77,6 +86,21 @@ function matchSignals(signals, text) {
   return matched;
 }
 
+/**
+ * 编号分段的提示（D8）。
+ *
+ * M1.x = 本库收录的测试设计方法；M0.x / M4.x = 架构稿 Layer 0 的必选测试点段，
+ * 不在设计方法库内 —— 出现这类编号时判"无法判定"，不得默认通过。
+ */
+function numberingHint(methodId) {
+  if (typeof methodId !== 'string') return '';
+  if (DESIGN_METHOD_SEGMENT.test(methodId)) return '';
+  if (LAYER0_SEGMENT.test(methodId)) {
+    return `（编号 ${methodId} 属于 Layer 0 必选测试点段，不在本设计方法库内；本库只收录 M1.x 设计方法）`;
+  }
+  return '';
+}
+
 // ------------------------------------------------------------------------ 结论收集
 
 const findings = {
@@ -86,7 +110,24 @@ const findings = {
   verdicts: [],
 };
 
+/** F5.1 的组合键：(requirement, method)。 */
+function findingKey(requirement, method) {
+  const req = requirement === undefined || requirement === null ? '' : String(requirement);
+  const met = method === undefined || method === null ? '' : String(method);
+  return `${req}|${met}`;
+}
+
 function addError(type, requirement, method, message) {
+  // F5.1 硬约束 1：同一条 (requirement, method) 不得同时出现在 errors 与 warnings。
+  // ERROR 更根本（产出缺失是事实，适用性存疑是判断）——同键的 WARN 让位，
+  // 这样"互斥"由构造保证，不依赖调用顺序。
+  const key = findingKey(requirement, method);
+  for (let i = findings.warnings.length - 1; i >= 0; i -= 1) {
+    const warning = findings.warnings[i];
+    if (findingKey(warning.requirement, warning.method) === key) {
+      findings.warnings.splice(i, 1);
+    }
+  }
   findings.errors.push({
     type,
     requirement: requirement === undefined ? null : requirement,
@@ -97,6 +138,11 @@ function addError(type, requirement, method, message) {
 }
 
 function addWarning(type, requirement, method, message) {
+  const key = findingKey(requirement, method);
+  if (findings.errors.some((item) => findingKey(item.requirement, item.method) === key)) {
+    // 同键已有 ERROR：不再重复报 WARN（三分类互斥）
+    return;
+  }
   findings.warnings.push({
     type,
     requirement: requirement === undefined ? null : requirement,
@@ -107,6 +153,19 @@ function addWarning(type, requirement, method, message) {
 }
 
 function addUndecidable(requirement, method, reason) {
+  // 一条 (requirement, method) 只留一条结论：同一个组合可能从多个角度被判"无法判定"
+  // （例如既在 methods_applied 里声明、又被某条用例引用），把理由并进同一条，
+  // 免得同一个组合在报告里重复出现。
+  const key = findingKey(requirement, method);
+  const existing = findings.undecidable.find(
+    (item) => findingKey(item.requirement, item.method) === key,
+  );
+  if (existing) {
+    if (reason && !existing.reason.includes(reason)) {
+      existing.reason = `${existing.reason}；${reason}`;
+    }
+    return;
+  }
   findings.undecidable.push({ requirement, method, reason });
 }
 
@@ -586,6 +645,8 @@ function checkCases(doc, methodsLibrary, dimensionsLibrary) {
     }
 
     // --- 跳过声明：方法跳过与维度跳过都必须写 reason ---
+    // D7：skipped[] 的元素结构以 REQ-002A 为准（只有 method + reason），
+    //      维度跳过用 method 字段记 "dimension:<维度名>"；{dimension: ...} 只是兼容写法。
     const skippedMethods = new Set();
     const skippedDimensions = new Set();
     for (const skip of skipped) {
@@ -593,12 +654,16 @@ function checkCases(doc, methodsLibrary, dimensionsLibrary) {
         addError('SKIP_REASON_MISSING', requirementId, null, `需求条目 ${requirementId} 的 skipped 项不是对象`);
         continue;
       }
-      const target = isFilledString(skip.method)
-        ? skip.method
-        : isFilledString(skip.dimension)
-          ? skip.dimension
-          : null;
-      if (target === null) {
+      const methodField = isFilledString(skip.method) ? skip.method.trim() : null;
+      const legacyDimensionField = isFilledString(skip.dimension) ? skip.dimension.trim() : null;
+      const isDimensionSkip = methodField !== null && methodField.startsWith(DIMENSION_SKIP_PREFIX);
+      const skippedDimension = isDimensionSkip
+        ? methodField.slice(DIMENSION_SKIP_PREFIX.length).trim()
+        : legacyDimensionField;
+      const skippedMethod = isDimensionSkip ? null : methodField;
+      const target = skippedMethod !== null ? skippedMethod : skippedDimension;
+
+      if (target === null || target === '') {
         addError(
           'SKIP_REASON_MISSING',
           requirementId,
@@ -607,8 +672,8 @@ function checkCases(doc, methodsLibrary, dimensionsLibrary) {
         );
         continue;
       }
-      if (isFilledString(skip.method)) skippedMethods.add(skip.method);
-      if (isFilledString(skip.dimension)) skippedDimensions.add(skip.dimension);
+      if (skippedMethod !== null) skippedMethods.add(skippedMethod);
+      if (skippedDimension) skippedDimensions.add(skippedDimension);
       if (!isFilledString(skip.reason)) {
         addError(
           'SKIP_REASON_MISSING',
@@ -690,15 +755,21 @@ function checkCases(doc, methodsLibrary, dimensionsLibrary) {
     }
 
     // --- 声明了但方法库里没有登记的编号：判不了 ---
+    // D8：M0.x / M4.x 属于 Layer 0 必选测试点段，不在设计方法库内 —— 判"无法判定"，不得默认通过。
     for (const methodId of applied) {
       if (methodById.has(methodId)) continue;
       if (skippedMethods.has(methodId)) continue;
       addUndecidable(
         requirementId,
         methodId,
-        `需求条目 ${requirementId} 声明使用 ${methodId}，但该编号未在方法库中登记，无法核验其必需产出`,
+        `需求条目 ${requirementId} 声明使用 ${methodId}，但该编号未在方法库中登记${numberingHint(methodId)}，无法核验其必需产出`,
       );
-      addVerdict(requirementId, methodId, 'undecidable', `方法编号 ${methodId} 未在方法库中登记，无法核验`);
+      addVerdict(
+        requirementId,
+        methodId,
+        'undecidable',
+        `方法编号 ${methodId} 未在方法库中登记${numberingHint(methodId)}，无法核验`,
+      );
     }
 
     // --- 覆盖维度适用性 ---
@@ -721,19 +792,24 @@ function checkCases(doc, methodsLibrary, dimensionsLibrary) {
   }
 
   // --- 用例级方法编号未在方法库登记 ---
-  // 这里刻意不带 requirement：结论落在“方法编号”上，不落在某条需求条目上，
-  // 避免与 (需求条目, 方法) 组合的其它结论混在一起。
+  // D8：这类编号（M0.x / M4.x）属于 Layer 0 必选测试点段，不在设计方法库内，
+  //      判"无法判定"（既不算通过也不算失败），不得默认通过。
+  //      结论落在该用例关联的需求条目上，与其它结论保持同一粒度。
   for (const testCase of cases) {
     if (!isObject(testCase) || !Array.isArray(testCase.method)) continue;
     for (const methodId of testCase.method) {
       if (!isFilledString(methodId) || methodById.has(methodId)) continue;
-      const refs = Array.isArray(testCase.requirement_refs) ? testCase.requirement_refs.join('、') : '未标注';
-      addWarning(
-        'UNKNOWN_CASE_METHOD',
-        null,
-        methodId,
-        `用例 ${testCase.id || '未标注'} 声明了方法 ${methodId}，但该编号未在方法库中登记（关联需求条目: ${refs}）`,
-      );
+      const refs = Array.isArray(testCase.requirement_refs)
+        ? testCase.requirement_refs.filter((ref) => isFilledString(ref))
+        : [];
+      const targets = refs.length > 0 ? refs : [null];
+      for (const requirementId of targets) {
+        addUndecidable(
+          requirementId,
+          methodId,
+          `用例 ${testCase.id || '未标注'} 声明了方法 ${methodId}，但该编号未在方法库中登记${numberingHint(methodId)}，无法核验其必需产出`,
+        );
+      }
     }
   }
 }
