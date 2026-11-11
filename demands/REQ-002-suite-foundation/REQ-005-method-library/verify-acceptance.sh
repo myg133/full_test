@@ -1408,6 +1408,70 @@ else
   fi
 fi
 
+# ---------------------------------------------------------------- AC-034
+step "AC-034 feature-meta 里的判据条数 / 决策号 / 验收数字必须与实际一致（D25）"
+# 为什么要有这条：独立验收第三轮发现 —— `feature-meta/` 三份文件里写的
+# 「`acceptance.md` 31 条判据 / `decisions.md` D1~D22 / 主验收 31 PASS / 0 FAIL」
+# 在 BA 侧判据扩到 34 条、决策写到 D25 之后**全部陈旧**，而**没有任何判据守这个**。
+# 后果：追溯链上的数字是**没人核过的** —— 这正是本套件要消灭的那类"看着像已验、其实没验"。
+# 这条把「元数据里的数字」也纳入机械核验：数字必须与**当前**的判据数、决策号、验收结果一致。
+if [ ! -d "$FMETA" ]; then
+  ok "AC-034 feature-meta 数字与实际一致（被验目录无 feature-meta，不适用）"
+else
+  M34="$(node -e '
+  const fs=require("fs");
+  const fmeta=process.argv[1], acc=process.argv[2], dec=process.argv[3];
+  let prob=[];
+  let accText=""; try{ accText=fs.readFileSync(acc,"utf8"); }catch(e){}
+  const actual=(accText.match(/^### AC-/gm)||[]).length;
+  let decText=""; try{ decText=fs.readFileSync(dec,"utf8"); }catch(e){}
+  const dnums=[...decText.matchAll(/^\| D(\d+) \|/gm)].map(m=>Number(m[1]));
+  const dmax=dnums.length?Math.max(...dnums):0;
+  const files=["status.md","traceability.md","verification-report.md"];
+  let nCount=0, dCount=0, repLine=null;
+  for(const F of files){
+    const p=fmeta+"/"+F;
+    let t=""; try{ t=fs.readFileSync(p,"utf8"); }catch(e){ continue; }
+    for(const m of t.matchAll(/(\d+)\s*条判据/g)){
+      nCount++;
+      if(Number(m[1])!==actual) prob.push(F+": 判据条数写 "+m[1]+"，实际 "+actual);
+    }
+    for(const m of t.matchAll(/D1~D(\d+)/g)){
+      dCount++;
+      if(Number(m[1])!==dmax) prob.push(F+": 决策号写 D1~D"+m[1]+"，实际 D1~D"+dmax);
+    }
+    if(F==="verification-report.md"){
+      for(const ln of t.split(/\r?\n/)){
+        if(ln.includes("主验收") && ln.includes("PASS")) { repLine=ln; break; }
+      }
+    }
+  }
+  // 主验收那一行的 PASS/FAIL 计数：P+F 必须等于判据条数，且 F 必须为 0（交付态必须全绿）
+  if(!repLine){ prob.push("verification-report.md: 找不到含「主验收」与「PASS」的结果行"); }
+  else{
+    const m=repLine.match(/(\d+)\s*PASS\s*\/\s*(\d+)\s*FAIL/);
+    if(!m) prob.push("verification-report.md: 主验收行里没有「N PASS / N FAIL」");
+    else{
+      const P=Number(m[1]), F=Number(m[2]);
+      if(P+F!==actual) prob.push("verification-report.md: 主验收 "+P+"+"+F+" ≠ 判据条数 "+actual);
+      if(F!==0) prob.push("verification-report.md: 主验收写着 "+F+" 条 FAIL —— 交付态不应有 FAIL");
+    }
+  }
+  if(nCount===0) prob.push("三份文件里一处「N 条判据」都没有 —— 追溯链缺判据条数");
+  if(dCount===0) prob.push("三份文件里一处「D1~D<n>」都没有 —— 追溯链缺决策号");
+  console.log("prob="+prob.length);
+  console.log("actual="+actual+" dmax="+dmax+" nCount="+nCount+" dCount="+dCount);
+  console.log("detail="+(prob.slice(0,4).join(" ; ")||"none"));
+  ' "$FMETA" "$SELF_DIR/acceptance.md" "$SELF_DIR/decisions.md" 2>/dev/null)"
+  P34="$(printf '%s\n' "$M34" | sed -n 's/^prob=//p')"
+  D34="$(printf '%s\n' "$M34" | sed -n 's/^detail=//p')"
+  if [ "${P34:-1}" -eq 0 ] 2>/dev/null; then
+    ok "AC-034 feature-meta 的判据条数 / 决策号 / 验收数字与实际一致"
+  else
+    bad "AC-034 feature-meta 数字与实际一致" "问题数=$P34 明细=$D34"
+  fi
+fi
+
 # ---------------------------------------------------------------- 结论
 printf '\n────────────────────────────────────────\n'
 printf '结论: %d PASS / %d FAIL\n' "$PASS" "$FAIL"
