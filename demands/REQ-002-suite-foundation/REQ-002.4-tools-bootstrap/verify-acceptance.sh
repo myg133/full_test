@@ -18,6 +18,19 @@ QA="$ROOT/bin/qa"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/qa-0024-XXXXXX")"
 trap 'kill ${SRV_PID:-0} 2>/dev/null; rm -rf "$WORK"' EXIT
 
+# ---------------------------------------------------------------- 环境可复现性
+# uv **不认** PIP_INDEX_URL，也不读 /etc/pip.conf —— 默认走 pypi.org（本机时通时不通）。
+# 不显式指定索引，"16 PASS" 就依赖当时的外网状态，换台机器/换个时段就不一样。
+export UV_DEFAULT_INDEX="${UV_DEFAULT_INDEX:-https://mirrors.aliyun.com/pypi/simple}"
+export UV_INDEX_URL="${UV_INDEX_URL:-$UV_DEFAULT_INDEX}"
+export npm_config_registry="${npm_config_registry:-https://registry.npmmirror.com}"
+# 前置体检：索引不可达时**明确提示"环境不满足"**，而不是让一堆 AC 莫名其妙地挂掉
+ENV_NOTE=""
+if ! curl -s -o /dev/null --max-time 8 "$UV_DEFAULT_INDEX" 2>/dev/null; then
+  ENV_NOTE="索引源不可达: $UV_DEFAULT_INDEX（设 UV_DEFAULT_INDEX 指向可达镜像）"
+  printf '\033[33m[warn]\033[0m %s —— 依赖安装的 AC 结果不可信\n' "$ENV_NOTE" >&2
+fi
+
 PASS=0; FAIL=0; FAILED_LIST=()
 ok()  { PASS=$((PASS+1)); printf '  \033[32mPASS\033[0m  %s\n' "$1"; }
 bad() { FAIL=$((FAIL+1)); FAILED_LIST+=("$1"); printf '  \033[31mFAIL\033[0m  %s\n     ↳ %s\n' "$1" "${2:-}"; }
@@ -55,8 +68,9 @@ fi
 step "AC-002 qa list 列出清单工具与状态"
 P="$WORK/p2"; mkproj "$P" "[$PY_TOOL,$NODE_TOOL]"
 OUT="$(node "$QA" --project "$P" list 2>&1)"; RC=$?
-if [ $RC -eq 0 ] && echo "$OUT" | grep -q "pyflakes" && echo "$OUT" | grep -q "js-yaml" \
-   && echo "$OUT" | grep -qi "missing"; then
+# 锚定到"状态 + 工具名"同一行，而不是全文 grep —— 别的理由串里出现 missing 也会假通过
+if [ $RC -eq 0 ] && echo "$OUT" | grep -qE "^missing[[:space:]]+pyflakes" \
+   && echo "$OUT" | grep -qE "^missing[[:space:]]+js-yaml"; then
   ok "AC-002 qa list 列出清单工具与状态"
 else
   bad "AC-002 qa list 列出清单工具与状态" "rc=$RC out=$OUT"
@@ -167,13 +181,21 @@ if [ $RC2 -eq 0 ] && [ "$SB" = "$SA" ] && echo "$OUT2" | grep -qiE "跳过|已�
 else
   bad "AC-012 安装幂等" "rc=$RC2 state未变=$([ "$SB" = "$SA" ] && echo yes || echo no) out=$OUT2"
 fi
-# state.json 字段
-STATE="$(cat "$P/.tools/state.json" 2>/dev/null)"
-if echo "$STATE" | grep -q "pyflakes" && echo "$STATE" | grep -q "3.2.0" \
-   && echo "$STATE" | grep -qi "installed_at" && echo "$STATE" | grep -qi "source"; then
-  ok "AC-013 state.json 记录版本与来源"
+# state.json 字段 —— 必须断**字段值**，不能只断键名存在。
+# 键名存在但值为 null（安装其实失败）也算"记录了版本与来源"，那是假通过。
+STATE_FILE="$P/.tools/state.json"
+S13="$(node -e '
+const fs=require("fs");
+let o; try{o=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));}catch(e){console.log("PARSE_ERR");process.exit(0);}
+const t=(o.tools||{}).pyflakes||{};
+const iso=(v)=>typeof v==="string" && /^\d{4}-\d{2}-\d{2}T/.test(v);
+const okv = t.version==="3.2.0" && iso(t.installed_at) && typeof t.source==="string" && t.source!=="" && t.status==="ok";
+console.log(JSON.stringify({ok:okv, version:t.version, installed_at:t.installed_at, source:t.source, status:t.status}));
+' "$STATE_FILE" 2>/dev/null)"
+if echo "$S13" | grep -q '"ok":true'; then
+  ok "AC-013 state.json 记录版本与来源（字段值校验）"
 else
-  bad "AC-013 state.json 记录版本与来源" "state=$STATE"
+  bad "AC-013 state.json 记录版本与来源" "字段值=$S13"
 fi
 
 # ---------------------------------------------------------------- AC-008
@@ -209,7 +231,10 @@ fi
 step "AC-011 工具不可用时不得静默跳过"
 P11="$WORK/p11"
 # 清单必须**合法**（否则会先被清单校验拦掉，测不到"装不上"这条路径）
-UNREACH='{ "name":"unreachable-xyz","kind":"binary","spec":"1.0.0","purpose":"源不可达","required_by":["QA"],"install":{"url":"https://github.com/owner-does-not-exist-xyz/tool/releases/download/v1.0.0/tool-linux-amd64"},"verify":{"command":"unreachable-xyz --version","match":"v1"} }'
+# 下载源用**本地死端口**（连接必被拒 → unavailable），不依赖任何外网域名。
+# 外网域名会引入"当时通还是不通"的随机性，让验收结果不可复现。
+DEAD_PORT11="$(node -e 'const net=require("net");const s=net.createServer();s.listen(0,"127.0.0.1",()=>{const p=s.address().port;s.close(()=>console.log(p));});')"
+UNREACH='{ "name":"unreachable-xyz","kind":"binary","spec":"1.0.0","purpose":"源不可达","required_by":["QA"],"install":{"url":"http://127.0.0.1:'"$DEAD_PORT11"'/tool-linux-amd64"},"verify":{"command":"unreachable-xyz --version","match":"v1"} }'
 mkproj "$P11" "[$UNREACH]"
 OUT="$(node "$QA" --project "$P11" install 2>&1)"; RC1=$?
 DOC="$(node "$QA" --project "$P11" doctor 2>&1)"; RC2=$?
@@ -225,16 +250,58 @@ fi
 
 # ---------------------------------------------------------------- AC-014
 step "AC-014 .gitignore 精确忽略，manifest 进 Git"
-P14="$WORK/p14"; mkproj "$P14" "[$PY_TOOL]"
+P14="$WORK/p14"
+# 关键：`.gitignore` 必须由**交付物的 `qa init`** 生成。
+# 脚本自己手写规则 = 自证式测试，对交付物零检验力（把交付物的规则改坏也照样 PASS）。
+mkdir -p "$P14/.tools"
+printf '{\n  "version": 1,\n  "tools": [%s]\n}\n' "$PY_TOOL" > "$P14/.tools/manifest.json"
+INIT_OUT="$(node "$QA" --project "$P14" init 2>&1)"; RC_INIT=$?
 mkdir -p "$P14/.tools/.venv" && touch "$P14/.tools/.venv/x"
 ( cd "$P14" && git init -q 2>/dev/null && git add -A 2>/dev/null )
 IGN="$(cd "$P14" && git check-ignore -v .tools/.venv/x 2>&1)"
 IGN2="$(cd "$P14" && git check-ignore .tools/manifest.json 2>&1)"
 LS="$(cd "$P14" && git status --porcelain -uall 2>/dev/null | grep "manifest.json")"
-if echo "$IGN" | grep -q ".tools/" && [ -z "$IGN2" ] && echo "$LS" | grep -q "manifest.json"; then
-  ok "AC-014 .gitignore 精确忽略，manifest 进 Git"
+# 交付物写出的规则里必须**不含** `.tools/`（含它会让 `!.tools/manifest.json` 失效，清单静默丢失）
+GITFILE="$(cat "$P14/.gitignore" 2>/dev/null)"
+if [ $RC_INIT -eq 0 ] && echo "$IGN" | grep -q ".tools/" && [ -z "$IGN2" ] \
+   && echo "$LS" | grep -q "manifest.json" \
+   && ! printf '%s\n' "$GITFILE" | grep -qE "^\.tools/$"; then
+  ok "AC-014 .gitignore 精确忽略，manifest 进 Git（规则来自 qa init）"
 else
-  bad "AC-014 .gitignore 精确忽略，manifest 进 Git" "venv被忽略=$(echo "$IGN" | head -1) manifest被忽略='$IGN2' manifest在待提交='$LS'"
+  bad "AC-014 .gitignore 精确忽略，manifest 进 Git" "init rc=$RC_INIT 规则='$GITFILE' venv被忽略=$(echo "$IGN" | head -1) manifest被忽略='$IGN2' manifest在待提交='$LS'"
+fi
+
+# ---------------------------------------------------------------- AC-017
+# D3：qa doctor 是**只读体检** —— 体检命令却改了系统状态，是不可预期的副作用。
+# 独立验收发现：把 doctor 改成"会触发安装"，BA 脚本原来只能靠 AC-003 顺带抓到。
+# 这里给 D3 一条**专门**的断言。
+step "AC-017 qa doctor 是只读的（不触发安装、不改 .tools/）"
+P17="$WORK/p17"; mkproj "$P17" "[$PY_TOOL,$NODE_TOOL]"
+BEFORE="$(find "$P17/.tools" -type f -o -type d 2>/dev/null | sort | md5sum | cut -d' ' -f1)"
+OUT17="$(node "$QA" --project "$P17" doctor 2>&1)"; RC17=$?
+AFTER="$(find "$P17/.tools" -type f -o -type d 2>/dev/null | sort | md5sum | cut -d' ' -f1)"
+if [ "$BEFORE" = "$AFTER" ] && [ ! -d "$P17/.tools/.venv" ] && [ ! -f "$P17/.tools/state.json" ]; then
+  ok "AC-017 qa doctor 是只读的（.tools/ 前后不变，未生成 venv/state.json）"
+else
+  bad "AC-017 qa doctor 是只读的" "rc=$RC17 前后一致=$([ "$BEFORE" = "$AFTER" ] && echo yes || echo no) venv=$([ -d "$P17/.tools/.venv" ] && echo yes || echo no) state=$([ -f "$P17/.tools/state.json" ] && echo yes || echo no)"
+fi
+
+# ---------------------------------------------------------------- AC-018
+# P1-1：清单里的 entry 字段可以做路径穿越 —— 白名单只管"名字"，
+# 真正被执行的文件却可以指向 .tools/ 之外（qa which 也把它当"隔离副本"报出来）。
+# 契约的硬规则是"只跑 .tools/ 里那份"，越界入口必须被拒。
+step "AC-018 qa run 拒绝执行 .tools/ 之外的入口（entry 路径穿越）"
+P18="$WORK/p18"; mkdir -p "$P18/.tools"
+printf '#!/bin/sh\necho PWNED\n' > "$P18/evil.sh"; chmod +x "$P18/evil.sh"
+printf '{\n  "version": 1,\n  "tools": [{ "name":"innocent","kind":"binary","spec":"1.0.0","purpose":"越界入口","required_by":["QA"],"entry":"../../evil.sh",\n    "install":{"url":"http://127.0.0.1:1/x"},"verify":{"command":"true","match":""} }]\n}\n' > "$P18/.tools/manifest.json"
+OUT18="$(node "$QA" --project "$P18" run innocent -- x 2>&1)"; RC18=$?
+WHICH18="$(node "$QA" --project "$P18" which innocent 2>&1)"; RCW18=$?
+# 三条都要满足：执行被拒(非0) + 没有出现 PWNED + which 不得把越界路径当隔离副本报出
+if [ $RC18 -ne 0 ] && ! echo "$OUT18" | grep -q "PWNED" \
+   && { [ $RCW18 -ne 0 ] || ! echo "$WHICH18" | grep -q "evil.sh"; }; then
+  ok "AC-018 qa run 拒绝执行 .tools/ 之外的入口（entry 路径穿越）"
+else
+  bad "AC-018 qa run 拒绝执行 .tools/ 之外的入口" "run rc=$RC18 out=$OUT18 which rc=$RCW18 which=$WHICH18"
 fi
 
 # ---------------------------------------------------------------- AC-015
@@ -259,8 +326,9 @@ step "AC-016 全部交付文件都进了 npm 包"
 PACKLIST2="$WORK/packlist.txt"
 packlist "$ROOT" > "$PACKLIST2"
 MISS=""
+# 必须行尾锚定：否则 "bin/qa" 会被 "bin/qa-impl.mjs" 命中 —— 去掉 bin/qa 也照样 PASS。
 for f in bin/qa bin/qa-impl.mjs skills/qa-toolchain/SKILL.md skills/qa-toolchain/references/tools-chain-contract.md; do
-  grep -q "$f" "$PACKLIST2" || MISS="$MISS $f"
+  grep -qE "(^|[[:space:]])$(printf '%s' "$f" | sed 's/[.[\*^$]/\\&/g')$" "$PACKLIST2" || MISS="$MISS $f"
 done
 if [ -z "$MISS" ]; then
   ok "AC-016 全部交付文件都进了 npm 包"
