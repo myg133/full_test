@@ -12,7 +12,8 @@
   "license": "MIT",
   "type": "module",
   "bin": {
-    "test-agent-skills": "bin/test-agent-skills.mjs"
+    "test-agent-skills": "bin/test-agent-skills.mjs",
+    "qa": "bin/qa"
   },
   "files": [
     "skills/",
