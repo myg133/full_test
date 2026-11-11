@@ -4,7 +4,7 @@
 
 ### AC-001: 合法项目通过校验
 - **前置条件**: 在 `/tmp/qa-002b/proj/` 构造符合契约的完整项目（`test-assets/` 全目录 + `environments/` + `suites/` + `cycles/` + `.gitignore` 含 `.test-artifacts/`）
-- **测试步骤**: `node scripts/verify-layout.mjs /tmp/qa-002b/proj`
+- **测试步骤**: `node skills/test-case-design/scripts/verify-layout.mjs /tmp/qa-002b/proj`
 - **预期结果**: 退出码 0，输出全部 `[OK]`，无 `[FAIL]`
 - **类型**: 功能
 
@@ -82,8 +82,17 @@
   - 两次执行结果一致，且**项目文件未被脚本修改**（幂等）
 - **类型**: 性能
 
+### AC-012b: 产物可被分发（关键回归）
+- **前置条件**: 仓库处于 `feature/REQ-002B` 分支
+- **测试步骤**:
+  1. `npm pack --dry-run` 查看 tarball 包含清单
+  2. 确认 `package/skills/test-case-design/scripts/verify-layout.mjs` 与 `package/skills/test-case-design/references/project-layout.md` **都在清单中**
+  3. 确认清单中**没有**包根的 `scripts/`、`references/` 目录（原设计的错误位置）
+- **预期结果**: 两个新文件都出现在 tarball 清单里；包根不再有游离的 `scripts/` `references/` 目录
+- **类型**: 功能
+
 ### AC-013: 契约文档完整
-- **前置条件**: 读 `references/project-layout.md`
+- **前置条件**: 读 `skills/test-case-design/references/project-layout.md`
 - **测试步骤**: 核对文档是否覆盖 6 项
 - **预期结果**: 6 项全部有明确说明——目录结构与职责 / 三种 scope 的异同 / 环境与执行配置字段语义 / 轮次状态机与阶段 / 哪些进 Git 哪些不进 / 常见错误与修法
 - **类型**: 功能

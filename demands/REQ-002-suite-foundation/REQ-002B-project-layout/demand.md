@@ -230,7 +230,11 @@ REQ-002A 解决"用例集本身长什么样"，本 REQ 解决"用例集放在哪
 }
 ```
 
-### F5 校验脚本 `scripts/verify-layout.mjs`
+### F5 校验脚本 `skills/test-case-design/scripts/verify-layout.mjs`
+
+**位置说明（重要）**：脚本必须放在 `skills/test-case-design/scripts/` 下，**不能放包根**。原因：`package.json` 的 `files` 字段只含 `skills/ bin/ README.md LICENSE`，且安装器 `discoverSkills()` 只扫描 `skills/` 下含 `SKILL.md` 的子目录——放包根的文件既进不了 npm 包，也装不进用户的 `~/.agents/skills/`。这是 REQ-002B 开发阶段实测发现并修正的（原设计误放在包根）。
+
+同理，契约文档放 `skills/test-case-design/references/project-layout.md`。
 
 纯 Node.js，零第三方依赖。校验以下各项，**任一失败则退出码 1 并逐条列出**：
 
@@ -267,7 +271,7 @@ node scripts/verify-layout.mjs [project-root]
 结论: 3 FAIL / 12 OK
 ```
 
-### F6 契约文档 `references/project-layout.md`
+### F6 契约文档 `skills/test-case-design/references/project-layout.md`
 
 面向人与 agent 读，说明：
 - 目录结构与各目录职责
