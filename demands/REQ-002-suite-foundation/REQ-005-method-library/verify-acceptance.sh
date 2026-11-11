@@ -17,6 +17,12 @@ set -uo pipefail
 TCD="${1:?用法: verify-acceptance.sh <test-case-design-dir>}"
 TCD="$(cd "$TCD" 2>/dev/null && pwd)" || { echo "目录不存在: $1" >&2; exit 2; }
 
+# 本脚本自身的绝对路径。AC-026 需要**嵌套调用本脚本**（在副本上跑变异体），
+# 必须保证子进程用的是同一个脚本文件；DEMAND_ROOT 是工作区根（用于解析 demand_dir）。
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SELF="$SELF_DIR/$(basename "${BASH_SOURCE[0]}")"
+DEMAND_ROOT="$(cd "$SELF_DIR/../../../.." 2>/dev/null && pwd || echo "$SELF_DIR")"
+
 CM="$TCD/scripts/check-methods.mjs"
 VC="$TCD/scripts/validate-cases.mjs"
 MTH="$TCD/references/methods.json"
@@ -38,6 +44,14 @@ jget() { node -e '
   for(const p of path){ if(o===undefined||o===null){console.log("__UNDEF__");process.exit(0);} o=o[p]; }
   console.log(typeof o==="object"?JSON.stringify(o):String(o));
 ' "$@"; }
+
+# 同行判断：$1=文本 $2=词A $3=词B → 存在**同一行**同时含 A 与 B 则返回 0
+# ⚠️ 为什么必须同行：脚本输出末尾常有"按维度分布:"这类汇总行，
+#    只查"输出里出现过某个词"会被那行蒙混过关（恒真判据比不判还糟）。
+# ⚠️ 不用 `| grep -q`：pipefail 下 grep -q 提前退出会给上游发 SIGPIPE → 假失败。
+same_line() {
+  printf '%s\n' "$1" | grep -F "$2" | grep -F -c "$3" >/dev/null
+}
 
 # ---------------------------------------------------------------- 用例集工厂
 # 造一个 schema v2 用例集：$1=输出文件 $2=用例 JSON 数组 $3=coverage_matrix JSON 数组
@@ -308,7 +322,7 @@ fi
 
 # ---------------------------------------------------------------- AC-010
 step "AC-010 REQ-002A 回归不受影响"
-REG2A="$(cd "$(dirname "$0")" && pwd)/../REQ-002A-schema-v2/verify-regression-002a.sh"
+REG2A="$SELF_DIR/../REQ-002A-schema-v2/verify-regression-002a.sh"
 if [ -f "$REG2A" ]; then
   bash "$REG2A" "$TCD" > "$WORK/reg2a.log" 2>&1
   if [ $? -eq 0 ]; then
@@ -584,10 +598,12 @@ else
   mkcases "$WORK/skipd.json" "$CASES_PLAIN" "$MATRIX_SKIP_D"
   OUT_SD="$(node "$VC" "$WORK/skipd.json" 2>&1)"; RC_SD=$?
   SM_OK=0; SD_OK=0; SD_NEG=0
-  # A：点名 M1.4 + 出现"方法"二字
-  if [ $RC_SM -ne 0 ] && printf '%s' "$OUT_SM" | grep -q "M1.4" && printf '%s' "$OUT_SM" | grep -q "方法"; then SM_OK=1; fi
-  # B：点名 concurrency + 出现"维度"二字
-  if [ $RC_SD -ne 0 ] && printf '%s' "$OUT_SD" | grep -q "concurrency" && printf '%s' "$OUT_SD" | grep -q "维度"; then SD_OK=1; fi
+  # ⚠️ 必须**同行**判断：输出末尾有"按维度分布:"这类汇总行，
+  #    只查"出现过 维度"会被那行蒙混过关 —— 那样本条就恒真了。
+  # A：同一行里同时出现 M1.4 与"方法"
+  if [ $RC_SM -ne 0 ] && same_line "$OUT_SM" "M1.4" "方法"; then SM_OK=1; fi
+  # B：同一行里同时出现 concurrency 与"维度"
+  if [ $RC_SD -ne 0 ] && same_line "$OUT_SD" "concurrency" "维度"; then SD_OK=1; fi
   # B：不得出现"跳过方法"（那正是要修的措辞错误）
   if printf '%s' "$OUT_SD" | grep -q "跳过方法"; then SD_NEG=1; fi
   if [ $SM_OK -eq 1 ] && [ $SD_OK -eq 1 ] && [ $SD_NEG -eq 0 ]; then
@@ -816,6 +832,371 @@ else
   else
     bad "AC-022 新增契约自身要被验收" \
         "正反对消=$POS_OK/2(期望2) 删库变异=$M1_OK/1(期望1,rc=$RC_NL) 库文档漂移变异=$DR_OK/1(期望1,rc=$DR_RC) 漂移输出=$DR_OUT 删库输出=$OUT_NL 合法写法输出=$OUT_VS_CM"
+  fi
+fi
+
+# ---------------------------------------------------------------- AC-023
+step "AC-023 四个谓词分支必须真的生效（D17）"
+# 根因：验收样本只用了 M1.1/M1.2 —— M1.3/M1.5/M1.6 的谓词从未进入任何判据，
+# 把分支置空后验收脚本照样 23/0。本条给每个谓词各配一份"故意违反"的样本。
+if [ ! -f "$CM" ]; then
+  bad "AC-023 四个谓词分支生效" "缺 check-methods.mjs"
+else
+  # ⚠️ 每份样本必须**只违反一个谓词** —— 否则被测的谓词失效时，
+  #    同一个方法上的另一个谓词仍会报错，"缺少必需产出"照样出现 → 测不出目标谓词。
+  #    （第一版正是栽在这里：M1.4/M1.5/M1.3 各自还带第二个谓词，4 个场景只有 1 个真正隔离。）
+  # 场景 1：M1.4 状态迁移要求 exception 维度（has_dimension）→ 给 2 条 functional 用例
+  #         （min_cases_total(min=2) 满足、has_dimension(exception) 违反）
+  C1='[ { "id": "TC-001", "title": "功能用例", "requirement_refs": ["R-1"], "dimension": "functional", "priority": "P0", "method": ["M1.4"], "status": "active", "steps": [ { "action": "下单", "expected": { "path": "$.code", "op": "equals", "expected": "E001" } } ] }, { "id": "TC-002", "title": "功能用例2", "requirement_refs": ["R-1"], "dimension": "functional", "priority": "P0", "method": ["M1.4"], "status": "active", "steps": [ { "action": "下单2", "expected": { "path": "$.code", "op": "equals", "expected": "E002" } } ] } ]'
+  M1='[ { "requirement": "R-1", "methods_applied": ["M1.4"], "skipped": [], "dimensions": ["functional"] } ]'
+  mkcases "$WORK/p23a.json" "$C1" "$M1"
+  # 场景 2：M1.5 正交要求 functional+data 同时覆盖（dimension_pair_present）→ 给 4 条 functional 用例
+  #         （min_cases_total(min=4) 满足、dimension_pair_present 违反）
+  C2='[ { "id": "TC-001", "title": "功能用例", "requirement_refs": ["R-1"], "dimension": "functional", "priority": "P0", "method": ["M1.5"], "status": "active", "steps": [ { "action": "下单", "expected": { "path": "$.code", "op": "equals", "expected": "E001" } } ] }, { "id": "TC-002", "title": "功能用例2", "requirement_refs": ["R-1"], "dimension": "functional", "priority": "P0", "method": ["M1.5"], "status": "active", "steps": [ { "action": "下单2", "expected": { "path": "$.code", "op": "equals", "expected": "E002" } } ] }, { "id": "TC-003", "title": "功能用例3", "requirement_refs": ["R-1"], "dimension": "functional", "priority": "P0", "method": ["M1.5"], "status": "active", "steps": [ { "action": "下单3", "expected": { "path": "$.code", "op": "equals", "expected": "E003" } } ] }, { "id": "TC-004", "title": "功能用例4", "requirement_refs": ["R-1"], "dimension": "functional", "priority": "P0", "method": ["M1.5"], "status": "active", "steps": [ { "action": "下单4", "expected": { "path": "$.code", "op": "equals", "expected": "E004" } } ] } ]'
+  M2='[ { "requirement": "R-1", "methods_applied": ["M1.5"], "skipped": [], "dimensions": ["functional"] } ]'
+  mkcases "$WORK/p23b.json" "$C2" "$M2"
+  # 场景 3：M1.3 判定表要求每例 ≥2 条断言（min_assertions_per_case）→ 给 2 条 functional 用例、
+  #         每条只有 1 条断言，但两条的 expected 取值**互不相同**
+  #         （min_cases_by_dimension(functional,min=2) 与 distinct_expected 都满足）
+  C3='[ { "id": "TC-001", "title": "功能用例", "requirement_refs": ["R-1"], "dimension": "functional", "priority": "P0", "method": ["M1.3"], "status": "active", "steps": [ { "action": "下单", "expected": { "path": "$.code", "op": "equals", "expected": "E001" } } ] }, { "id": "TC-002", "title": "功能用例2", "requirement_refs": ["R-1"], "dimension": "functional", "priority": "P0", "method": ["M1.3"], "status": "active", "steps": [ { "action": "下单2", "expected": { "path": "$.code", "op": "equals", "expected": "E002" } } ] } ]'
+  M3='[ { "requirement": "R-1", "methods_applied": ["M1.3"], "skipped": [], "dimensions": ["functional"] } ]'
+  mkcases "$WORK/p23c.json" "$C3" "$M3"
+  # 场景 4：M1.6 场景法要求 ≥2 条用例（min_cases_total）→ 只给 1 条 functional 用例
+  #         （min_cases_by_dimension(functional,min=1) 满足、min_cases_total(min=2) 违反）
+  C4='[ { "id": "TC-001", "title": "功能用例", "requirement_refs": ["R-1"], "dimension": "functional", "priority": "P0", "method": ["M1.6"], "status": "active", "steps": [ { "action": "下单", "expected": { "path": "$.code", "op": "equals", "expected": "E001" } } ] } ]'
+  M4='[ { "requirement": "R-1", "methods_applied": ["M1.6"], "skipped": [], "dimensions": ["functional"] } ]'
+  mkcases "$WORK/p23d.json" "$C4" "$M4"
+  P23=0
+  DET23=""
+  for X in "a:M1.4" "b:M1.5" "c:M1.3" "d:M1.6"; do
+    F="${X%%:*}"; MID="${X##*:}"
+    OUT23="$(node "$CM" "$WORK/p23$F.json" --methods "$MTH" 2>&1)"; RC23=$?
+    # 必须退出码≠0，且**同一行**点名该方法编号与"缺少必需产出"
+    if [ $RC23 -ne 0 ] && printf '%s' "$OUT23" | grep -E "($MID).*缺少必需产出|缺少必需产出.*($MID)" >/dev/null; then
+      P23=$((P23+1))
+    else
+      DET23="$DET23 [$MID rc=$RC23]"
+    fi
+  done
+  if [ $P23 -eq 4 ]; then
+    ok "AC-023 四个谓词分支都真的生效（has_dimension / dimension_pair_present / min_assertions_per_case / min_cases_total）"
+  else
+    bad "AC-023 四个谓词分支都真的生效" "4 个谓词只测出 $P23/4 失败详情:$DET23"
+  fi
+fi
+
+# ---------------------------------------------------------------- AC-024
+step "AC-024 M0.x/M4.x 判无法判定，不得默认通过（虚报类红线，D17）"
+# 实测（独立验收）：把 M0.1 从"无法判定"改成 satisfied（假绿灯），验收脚本仍 23/0。
+# 这条是"宁可漏报通过，不可虚报通过"的直接护栏。
+if [ ! -f "$CM" ]; then
+  bad "AC-024 M0.x 判无法判定" "缺 check-methods.mjs"
+else
+  # M0.1 属于 Layer 0 必选测试点段，不在设计方法库内 → 必须判"无法判定"
+  CASES_M0='[ { "id": "TC-001", "title": "功能用例", "requirement_refs": ["R-1"], "dimension": "functional", "priority": "P0", "method": ["M0.1"], "status": "active", "steps": [ { "action": "下单", "expected": { "path": "$.code", "op": "equals", "expected": "E001" } } ] } ]'
+  MATRIX_M0='[ { "requirement": "R-1", "methods_applied": ["M0.1"], "skipped": [], "dimensions": ["functional"] } ]'
+  mkcases "$WORK/m0.json" "$CASES_M0" "$MATRIX_M0"
+  node "$CM" "$WORK/m0.json" --methods "$MTH" --json > "$WORK/m0.json.out" 2>/dev/null
+  M0_CHK="$(node -e '
+  const fs=require("fs");
+  let o; try{ o=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); }catch(e){ console.log("parse_err=1|undecl=0|sat=0|err=0"); process.exit(0); }
+  const undec=(Array.isArray(o.undecidable)?o.undecidable:[]);
+  const verd=(Array.isArray(o.verdicts)?o.verdicts:[]);
+  const errs=(Array.isArray(o.errors)?o.errors:[]);
+  const isM0=(x)=>String(x&&x.method)==="M0.1"||String(x&&x.method)==="M4.5";
+  // ① undecidable 里有 M0.1
+  const u=undec.some(isM0)?1:0;
+  // ② verdicts 里 M0.1 的 status 是 undecidable，绝不是 satisfied
+  const v=verd.find(isM0);
+  const s=(v&&v.status==="satisfied")?1:0;
+  // ③ errors 里不该有 M0.1（它是"判不了"不是"产出缺失"）
+  const e=errs.some(isM0)?1:0;
+  console.log(u+"|"+s+"|"+e+"|"+undec.length);
+  ' "$WORK/m0.json.out")"
+  M0_U="$(printf '%s' "$M0_CHK" | cut -d'|' -f1)"
+  M0_S="$(printf '%s' "$M0_CHK" | cut -d'|' -f2)"
+  M0_E="$(printf '%s' "$M0_CHK" | cut -d'|' -f3)"
+  M0_N="$(printf '%s' "$M0_CHK" | cut -d'|' -f4)"
+  if [ "${M0_U:-0}" -eq 1 ] && [ "${M0_S:-1}" -eq 0 ] && [ "${M0_E:-1}" -eq 0 ] && [ "${M0_N:-0}" -ge 1 ]; then
+    ok "AC-024 M0.x/M4.x 判无法判定、不判通过（undecidable 含 M0.1，satisfied 不含，errors 不含）"
+  else
+    bad "AC-024 M0.x/M4.x 判无法判定、不判通过" \
+        "undecidable含M0.1=${M0_U:-?} 判成satisfied=${M0_S:-?} 误入errors=${M0_E:-?} undecidable数=${M0_N:-?}（期望 1/0/0/≥1）"
+  fi
+fi
+
+# ---------------------------------------------------------------- AC-025
+step "AC-025 check-methods 侧跳过文案也区分方法/维度（D17 / D13 的另一侧）"
+if [ ! -f "$CM" ]; then
+  bad "AC-025 check-methods 侧文案区分" "缺 check-methods.mjs"
+else
+  MATRIX_CM_M='[ { "requirement": "R-1", "methods_applied": ["M1.1"], "skipped": [ { "method": "M1.4" } ], "dimensions": ["functional"] } ]'
+  mkcases "$WORK/cmskipm.json" "$CASES_PLAIN" "$MATRIX_CM_M"
+  OUT_CMM="$(node "$CM" "$WORK/cmskipm.json" --methods "$MTH" 2>&1)"; RC_CMM=$?
+  MATRIX_CM_D='[ { "requirement": "R-1", "methods_applied": ["M1.1"], "skipped": [ { "method": "dimension:concurrency" } ], "dimensions": ["functional"] } ]'
+  mkcases "$WORK/cmskipd.json" "$CASES_PLAIN" "$MATRIX_CM_D"
+  OUT_CMD="$(node "$CM" "$WORK/cmskipd.json" --methods "$MTH" 2>&1)"; RC_CMD=$?
+  CM1_OK=0; CM2_OK=0; CM2_NEG=0
+  if [ $RC_CMM -ne 0 ] && same_line "$OUT_CMM" "M1.4" "方法"; then CM1_OK=1; fi
+  if [ $RC_CMD -ne 0 ] && same_line "$OUT_CMD" "concurrency" "维度"; then CM2_OK=1; fi
+  printf '%s' "$OUT_CMD" | grep -q "跳过方法" && CM2_NEG=1
+  if [ $CM1_OK -eq 1 ] && [ $CM2_OK -eq 1 ] && [ $CM2_NEG -eq 0 ]; then
+    ok "AC-025 check-methods 侧跳过文案也区分方法/维度"
+  else
+    bad "AC-025 check-methods 侧跳过文案也区分方法/维度" \
+        "方法场景 rc=$RC_CMM(期望≠0,含M1.4+方法) ok=$CM1_OK | 维度场景 rc=$RC_CMD(期望≠0,含concurrency+维度) ok=$CM2_OK | 维度场景出现'跳过方法'=$CM2_NEG(期望0) out1=$OUT_CMM out2=$OUT_CMD"
+  fi
+fi
+
+# ---------------------------------------------------------------- AC-026
+step "AC-026 变异体必须 100% 被检出（合并前硬门槛，D17）"
+# 判据语义：**跑本脚本**看护栏能不能测出变异体 —— 不是看实现自己的输出变没变。
+# 理由（D17 的根因）：独立验收实测「把 M0.1 从"无法判定"改成 satisfied（假绿灯）后，
+# 验收脚本仍 23 PASS / 0 FAIL」—— 逃逸的根因是**验收样本没覆盖那条规则**，
+# 而不是实现的输出变了。所以本条的被测对象必须是**验收脚本的判定**。
+#
+# 两条注入纪律（BA 复现时踩过）：
+#   ① 变异必须**保持语法正确** —— 做成语法错误 → 脚本崩溃 → 退出码非 0 → 被"测出"，
+#      但那是**假检出**（测出的是崩溃，不是护栏失效）。
+#   ② 变异必须让**分支真的失效**而非让 kind 字符串消失 —— 改 kind 字符串会先让
+#      库结构校验失败，同样是被"崩溃"测出，不是真检出。
+if [ "${QA005_NO_MUT:-0}" = "1" ]; then
+  # 嵌套运行（子进程跑本脚本时）：本条在每层都跳过，基线与变异体同口径。
+  ok "AC-026 变异体检测（嵌套运行，本层跳过以防递归）"
+elif [ ! -f "$CM" ] || [ ! -f "$VC" ]; then
+  bad "AC-026 变异体 100% 被检出" "缺 check-methods.mjs 或 validate-cases.mjs"
+else
+  MUTROOT="$WORK/mutroot"
+  mkdir -p "$MUTROOT/skills"
+  cp -r "$TCD" "$MUTROOT/skills/test-case-design"
+  REPOROOT="$(cd "$TCD/../.." 2>/dev/null && pwd)"
+  if [ -d "$REPOROOT/feature-meta" ]; then cp -r "$REPOROOT/feature-meta" "$MUTROOT/feature-meta"; fi
+  MUT="$MUTROOT/skills/test-case-design"
+  MM="$MUT/scripts/check-methods.mjs"
+  MV="$MUT/scripts/validate-cases.mjs"
+  MTHM="$MUT/references/methods.json"
+
+  # 抽出「失败的 AC 键集合」—— 判定完全建立在它上面
+  failkeys() {
+    printf '%s\n' "$1" | sed 's/\x1b\[[0-9;]*m//g' | grep -E '^  FAIL' | grep -oE 'AC-[0-9]+[a-z]*' | sort -u
+  }
+  # 基线：未变异的副本跑本脚本（跳过 AC-026 自身以防递归）
+  BASE_OUT="$(QA005_NO_MUT=1 bash "$SELF" "$MUT" 2>&1)"
+  BASE_KEYS="$(failkeys "$BASE_OUT")"
+  TOT26=0; DET26=0; ESCAPED=""; INVALID=""; LAST_OUT=""
+  # 施加一个变异并判定是否被测出
+  # $1=描述  $2=目标文件  $3=node 表达式  $4=cm|vc
+  run_mut() {
+    TOT26=$((TOT26+1))
+    cp "$2" "$WORK/m26.bak"
+    if ! node -e "$3" "$2" >/dev/null 2>&1; then
+      cp "$WORK/m26.bak" "$2"; INVALID="$INVALID [$1:注入失败]"; return
+    fi
+    if ! node --check "$2" >/dev/null 2>&1; then
+      cp "$WORK/m26.bak" "$2"; INVALID="$INVALID [$1:变异后语法错误=假检出,不计入]"; return
+    fi
+    # 崩溃检测：变异后的脚本必须还能正常跑 —— 异常栈 = 假检出，不计入
+    if [ "$4" = "cm" ]; then
+      node "$2" "$WORK/a.json" --methods "$MTHM" >/dev/null 2>"$WORK/m26.err"
+    else
+      node "$2" "$WORK/a.json" >/dev/null 2>"$WORK/m26.err"
+    fi
+    if grep -qE "SyntaxError|ReferenceError|TypeError|is not a function|at Object\." "$WORK/m26.err" 2>/dev/null; then
+      cp "$WORK/m26.bak" "$2"; INVALID="$INVALID [$1:变异导致崩溃=假检出,不计入]"; return
+    fi
+    # 跑**本脚本**（嵌套）：护栏必须因为这个变异而多出一条失败
+    LAST_OUT="$(QA005_NO_MUT=1 bash "$SELF" "$MUT" 2>&1)"
+    K26="$(failkeys "$LAST_OUT")"
+    cp "$WORK/m26.bak" "$2"
+    # 判定口径：**失败项集合与基线不同**（对称差非空）——
+    # 不能只比"基线之上新增"：基线本来就红的 AC（如尚未修的 AC-027）被变异弄坏时，
+    # 集合没变 → 会被误判成"逃逸"。对称差同时覆盖两侧。
+    NEW26="$(comm -3 <(printf '%s\n' "$BASE_KEYS" | grep -v '^$') <(printf '%s\n' "$K26" | grep -v '^$'))"
+    if [ -n "$NEW26" ]; then
+      DET26=$((DET26+1))
+    else
+      ESCAPED="$ESCAPED [$1]"
+    fi
+  }
+  # ---- 1 min_cases_by_dimension 判定失效（kind 字符串保留，只让分支永不命中）----
+  run_mut "min_cases_by_dimension判定失效" "$MM" 'const fs=require("fs"),f=process.argv[1];let s=fs.readFileSync(f,"utf8");const from="kind === \x27min_cases_by_dimension\x27";if(!s.includes(from))process.exit(3);fs.writeFileSync(f,s.split(from).join("kind === \x27min_cases_by_dimension_NEVER\x27"));' cm
+  # ---- 2 ERROR 不再阻断（退出码恒 0）----
+  run_mut "ERROR不再阻断退出码恒0" "$MM" 'const fs=require("fs"),f=process.argv[1];let s=fs.readFileSync(f,"utf8");const from="findings.errors.length > 0 ? 1 : 0";if(!s.includes(from))process.exit(3);fs.writeFileSync(f,s.split(from).join("0"));' cm
+  # ---- 3 distinct_expected 子字段谓词失效 ----
+  run_mut "distinct_expected谓词失效" "$MM" 'const fs=require("fs"),f=process.argv[1];let s=fs.readFileSync(f,"utf8");const from="predicate.distinct_expected";if(!s.includes(from))process.exit(3);fs.writeFileSync(f,s.split(from).join("predicate.distinct_expected_DISABLED"));' cm
+  # ---- 4~7 四个谓词分支失效（kind 字符串保留）----
+  run_mut "dimension_pair_present判定失效" "$MM" 'const fs=require("fs"),f=process.argv[1];let s=fs.readFileSync(f,"utf8");const k="dimension_pair_present";const from="kind === \x27"+k+"\x27";if(!s.includes(from))process.exit(3);fs.writeFileSync(f,s.split(from).join("kind === \x27"+k+"_NEVER\x27"));' cm
+  run_mut "has_dimension判定失效" "$MM" 'const fs=require("fs"),f=process.argv[1];let s=fs.readFileSync(f,"utf8");const k="has_dimension";const from="kind === \x27"+k+"\x27";if(!s.includes(from))process.exit(3);fs.writeFileSync(f,s.split(from).join("kind === \x27"+k+"_NEVER\x27"));' cm
+  run_mut "min_assertions_per_case判定失效" "$MM" 'const fs=require("fs"),f=process.argv[1];let s=fs.readFileSync(f,"utf8");const k="min_assertions_per_case";const from="kind === \x27"+k+"\x27";if(!s.includes(from))process.exit(3);fs.writeFileSync(f,s.split(from).join("kind === \x27"+k+"_NEVER\x27"));' cm
+  run_mut "min_cases_total判定失效" "$MM" 'const fs=require("fs"),f=process.argv[1];let s=fs.readFileSync(f,"utf8");const k="min_cases_total";const from="kind === \x27"+k+"\x27";if(!s.includes(from))process.exit(3);fs.writeFileSync(f,s.split(from).join("kind === \x27"+k+"_NEVER\x27"));' cm
+  # ---- 8 M0.x/M4.x 由"无法判定"改成默认通过（虚报类）----
+  run_mut "M0.x默认通过假绿灯" "$MM" 'const fs=require("fs"),f=process.argv[1];let s=fs.readFileSync(f,"utf8");const anchor="`方法编号 ${methodId} 未在方法库中登记${numberingHint(methodId)}，无法核验`,";const i=s.indexOf(anchor);if(i<0)process.exit(3);const head=s.slice(0,i);const j=head.lastIndexOf("\x27undecidable\x27");if(j<0)process.exit(3);fs.writeFileSync(f,head.slice(0,j)+"\x27satisfied\x27"+s.slice(j+13));' cm
+  # ---- 9 维度适用性检查不再报 DIMENSION_MISSING ----
+  run_mut "维度适用性检查不再报DIMENSION_MISSING" "$MM" 'const fs=require("fs"),f=process.argv[1];let s=fs.readFileSync(f,"utf8");const from="\x27DIMENSION_MISSING\x27";if(!s.includes(from))process.exit(3);fs.writeFileSync(f,s.split(from).join("\x27DIMENSION_ABSENT\x27"));' cm
+  # ---- 10 verdicts 漏判（不覆盖每个 需求×方法 组合）----
+  run_mut "verdicts漏判" "$MM" 'const fs=require("fs"),f=process.argv[1];let s=fs.readFileSync(f,"utf8");const from="for (const method of methodsLibrary.methods) {";if(!s.includes(from))process.exit(3);fs.writeFileSync(f,s.split(from).join("for (const method of methodsLibrary.methods.slice(0, 1)) {"));' cm
+  # ---- 11 undecidable 误判成 satisfied（虚报类）----
+  run_mut "undecidable误判satisfied" "$MM" 'const fs=require("fs"),f=process.argv[1];let s=fs.readFileSync(f,"utf8");const from="\x27undecidable\x27";if(!s.includes(from))process.exit(3);fs.writeFileSync(f,s.split(from).join("\x27satisfied\x27"));' cm
+  # ---- 12 check-methods 侧文案回退成"跳过方法" ----
+  run_mut "check-methods文案回退成跳过方法" "$MM" 'const fs=require("fs"),f=process.argv[1];let s=fs.readFileSync(f,"utf8");const from="跳过的维度";if(!s.includes(from))process.exit(3);fs.writeFileSync(f,s.split(from).join("跳过的方法"));' cm
+  # ---- 13 validate-cases 删掉 dimension: 前缀放宽 ----
+  run_mut "VC删掉dimension前缀放宽" "$MV" 'const fs=require("fs"),f=process.argv[1];let s=fs.readFileSync(f,"utf8");const from="if (trimmed.startsWith(DIMENSION_SKIP_PREFIX)) return \x27dimension\x27;";if(!s.includes(from))process.exit(3);fs.writeFileSync(f,s.split(from).join("if (trimmed.startsWith(DIMENSION_SKIP_PREFIX)) return \x27invalid\x27;"));' vc
+  # ---- 14 validate-cases 拼错维度名 ERROR 降回 WARN ----
+  run_mut "VC拼错维度名ERROR降WARN" "$MV" 'const fs=require("fs"),f=process.argv[1];let s=fs.readFileSync(f,"utf8");const i=s.indexOf("不在覆盖维度枚举内");if(i<0)process.exit(3);const head=s.slice(0,i);const j=head.lastIndexOf("fail(");if(j<0)process.exit(3);fs.writeFileSync(f,head.slice(0,j)+"warn("+s.slice(j+5));' vc
+  # ---- 15 validate-cases 读不到 dimensions.json 改成静默降级到内置列表 ----
+  run_mut "VC读不到库静默降级内置列表" "$MV" 'const fs=require("fs"),f=process.argv[1];let s=fs.readFileSync(f,"utf8");const from="  } catch (err) {\n    fatal(`无法读取 ${DIMENSIONS_PATH}（${err.message}）`);\n  }";if(!s.includes(from))process.exit(3);fs.writeFileSync(f,s.split(from).join("  } catch (err) {\n    return [\x27functional\x27,\x27boundary\x27,\x27exception\x27,\x27permission\x27,\x27data\x27,\x27concurrency\x27,\x27performance\x27,\x27compatibility\x27];\n  }"));' vc
+  # ---- 16 validate-cases 文案统一回"跳过方法" ----
+  run_mut "VC文案回退成跳过方法" "$MV" 'const fs=require("fs"),f=process.argv[1];let s=fs.readFileSync(f,"utf8");const from="跳过的维度";if(!s.includes(from))process.exit(3);fs.writeFileSync(f,s.split(from).join("跳过的方法"));' vc
+  # ---- 17 validate-cases 放宽 cases[].method[] 接受 dimension: 前缀 ----
+  run_mut "VC放宽cases.method接受dimension前缀" "$MV" 'const fs=require("fs"),f=process.argv[1];let s=fs.readFileSync(f,"utf8");const from="if (!METHOD_PATTERN.test(method)) {";const i=s.indexOf(from);if(i<0)process.exit(3);fs.writeFileSync(f,s.slice(0,i)+"if (!(METHOD_PATTERN.test(method) || method.startsWith(DIMENSION_SKIP_PREFIX))) {"+s.slice(i+from.length));' vc
+  # ---- 18 validate-cases 放宽 coverage_matrix[].methods_applied[] 接受 dimension: 前缀 ----
+  run_mut "VC放宽methods_applied接受dimension前缀" "$MV" 'const fs=require("fs"),f=process.argv[1];let s=fs.readFileSync(f,"utf8");const from="if (!METHOD_PATTERN.test(method)) {";const i=s.indexOf(from);if(i<0)process.exit(3);const j=s.indexOf(from,i+from.length);if(j<0)process.exit(3);fs.writeFileSync(f,s.slice(0,j)+"if (!(METHOD_PATTERN.test(method) || method.startsWith(DIMENSION_SKIP_PREFIX))) {"+s.slice(j+from.length));' vc
+  # ---- 19 ERROR 的严重级别标签被改成 WARN ----
+  run_mut "ERROR严重级别标签改成WARN" "$MM" 'const fs=require("fs"),f=process.argv[1];let s=fs.readFileSync(f,"utf8");const from="const SEVERITY_ERROR = \x27ERROR\x27;";if(!s.includes(from))process.exit(3);fs.writeFileSync(f,s.split(from).join("const SEVERITY_ERROR = \x27WARN\x27;"));' cm
+  # 还原后必须回到基线（确认变异被还原干净）
+  RB_OUT="$(QA005_NO_MUT=1 bash "$SELF" "$MUT" 2>&1)"
+  RB_KEYS="$(failkeys "$RB_OUT")"
+  RB_OK=0
+  if [ "$RB_KEYS" = "$BASE_KEYS" ]; then RB_OK=1; fi
+  if [ $DET26 -eq $TOT26 ] && [ $TOT26 -ge 19 ] && [ -z "$INVALID" ] && [ $RB_OK -eq 1 ]; then
+    ok "AC-026 变异体 100% 被检出（$DET26/$TOT26，还原后回到基线）"
+  else
+    bad "AC-026 变异体 100% 被检出" \
+        "检出 $DET26/$TOT26（要求 19/19 且无注入异常）逃逸:$ESCAPED 注入异常:$INVALID 还原后回到基线=$RB_OK 基线失败项=[$(printf '%s' "$BASE_KEYS" | tr '\n' ' ')] 最后一次嵌套输出尾部=[$(printf '%s' "$LAST_OUT" | tail -5 | tr '\n' ' ')]"
+  fi
+fi
+
+# ---------------------------------------------------------------- AC-027
+step "AC-027 注释不得与实现相反（D19）"
+if [ ! -f "$VC" ]; then
+  bad "AC-027 注释与实现一致" "缺 validate-cases.mjs"
+else
+  # 注释里若说"只报 WARN"，实现就必须用 warn；实现用 fail 时注释不得再说"只报 WARN"
+  NOTE_SAYS_WARN="$(grep -c "只报 WARN" "$VC" 2>/dev/null)"
+  IMPL_IS_FAIL="$(node -e '
+  const fs=require("fs");
+  let s; try{ s=fs.readFileSync(process.argv[1],"utf8"); }catch(e){ console.log("0"); process.exit(0); }
+  // 定位"不在覆盖维度枚举内"那段，看它前面的 fail/warn
+  const i=s.indexOf("不在覆盖维度枚举内");
+  if(i<0){ console.log("0"); process.exit(0); }
+  const head=s.slice(Math.max(0,i-600),i);
+  const f=head.lastIndexOf("fail(");
+  const w=head.lastIndexOf("warn(");
+  console.log(f>w?1:0);
+  ' "$VC" 2>/dev/null)"
+  N27_OK=0
+  if [ "${NOTE_SAYS_WARN:-0}" -eq 0 ] || [ "${IMPL_IS_FAIL:-0}" -eq 0 ]; then N27_OK=1; fi
+  if [ $N27_OK -eq 1 ]; then
+    ok "AC-027 注释与实现一致（无'只报 WARN'残留或实现确为 warn）"
+  else
+    bad "AC-027 注释与实现一致" "注释仍说'只报 WARN'出现${NOTE_SAYS_WARN:-?}次，但实现用的是 fail(ERROR) —— 后人照注释改回去即制造回归"
+  fi
+fi
+
+# ---------------------------------------------------------------- AC-028
+step "AC-028 feature-meta 不得张冠李戴（D19 / D20）"
+# feature-meta 在**仓库根**（skills/<name>/ 的上上级），不是 skill 目录的同级。
+FMETA="$(cd "$TCD/../.." 2>/dev/null && pwd)/feature-meta"
+if [ ! -d "$FMETA" ]; then
+  # 被验目录没有 feature-meta（例如验收脚本被单独拷走）→ 不适用，但不静默
+  ok "AC-028 feature-meta 不适用（被验目录无 feature-meta，跳过）"
+else
+  FM_OTHER=""
+  for F in status.md traceability.md verification-report.md; do
+    if [ -f "$FMETA/$F" ]; then
+      # 出现**其它 REQ 编号** = 张冠李戴。
+      # 允许出现：REQ-005（本体）、REQ-001 / REQ-002*（上游基线，REQ-005 依赖它们）。
+      HIT="$(node -e '
+      const fs=require("fs");
+      let s; try{ s=fs.readFileSync(process.argv[1],"utf8"); }catch(e){ console.log(""); process.exit(0); }
+      const allowed=(id)=> id==="REQ-005" || id==="REQ-001" || id.indexOf("REQ-002")===0;
+      const bad=[...new Set((s.match(/REQ-[0-9A-Za-z.]+/g)||[]).filter((x)=>!allowed(x)))];
+      console.log(bad.join(","));
+      ' "$FMETA/$F" 2>/dev/null)"
+      if [ -n "$HIT" ]; then FM_OTHER="$FM_OTHER [$F:$HIT]"; fi
+    fi
+  done
+  # manifest.json 的 demand_dir 必须指向真实存在的目录
+  DMISS=""
+  if [ -f "$FMETA/manifest.json" ]; then
+    DDIR="$(node -e 'const fs=require("fs");let o;try{o=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));}catch(e){process.exit(0);}console.log(o.demand_dir||"");' "$FMETA/manifest.json" 2>/dev/null)"
+    if [ -n "$DDIR" ]; then
+      FOUND=0
+      for R in "$DEMAND_ROOT" "$(cd "$TCD/../../.." 2>/dev/null && pwd)" "$(cd "$TCD/../../../.." 2>/dev/null && pwd)"; do
+        [ -n "$R" ] || continue
+        if [ -d "$R/$DDIR" ]; then FOUND=1; break; fi
+      done
+      if [ $FOUND -eq 0 ]; then DMISS="$DDIR"; fi
+    fi
+  fi
+  if [ -z "$FM_OTHER" ] && [ -z "$DMISS" ]; then
+    ok "AC-028 feature-meta 归属正确、demand_dir 存在"
+  else
+    bad "AC-028 feature-meta 归属正确、demand_dir 存在" "其它REQ编号:$FM_OTHER demand_dir不存在:$DMISS"
+  fi
+fi
+
+# ---------------------------------------------------------------- AC-029
+step "AC-029 ERROR 必须真的标成 ERROR（不得被降级成 WARN）"
+# 为什么要有这条：AC-026 的变异清单第 19 条「ERROR 的严重级别标签被改成 WARN」
+# **此前没有任何 AC 护栏** —— 改完之后验收脚本照样全绿。
+# 后果不是"退出码变了"（退出码由 errors.length 决定，仍是 1），而是**输出骗人**：
+# agent 看到 "WARN 明细" 就以为可以放过，而契约要求"ERROR 必须修、WARN 必须说明"。
+# 这是 D9 的第四次应验：实现写了、验收没测 → 随时会被悄悄改回去。
+#
+# ⚠️ 查的是**人读输出**（不带 --json）：severity 标签只出现在人读报告里，
+#    --json 的 findings 字段把 severity 裁掉了（errors[]/warnings[] 两个数组本身
+#    已经表达了严重度，JSON 里再放一份是冗余）。查 JSON 会得到假阴性。
+if [ ! -f "$CM" ]; then
+  bad "AC-029 ERROR 必须真的标成 ERROR" "缺 check-methods.mjs"
+else
+  SEVOUT="$(node "$CM" "$WORK/a.json" --methods "$MTH" 2>&1)"
+  node "$CM" "$WORK/a.json" --methods "$MTH" --json > "$WORK/sev.json" 2>/dev/null
+  SEVJ="$(node -e '
+  const fs=require("fs");
+  let o; try{ o=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); }catch(e){ console.log("e=0"); process.exit(0); }
+  console.log("e="+(o.summary&&Number(o.summary.errors)||0));
+  ' "$WORK/sev.json" 2>/dev/null)"
+  SE="$(printf '%s\n' "$SEVJ" | sed -n 's/^e=//p')"
+  # ① 产出缺失那一节的标题必须是 "ERROR 明细"
+  L1=0; printf '%s\n' "$SEVOUT" | grep -F "ERROR 明细" >/dev/null && L1=1
+  # ② "结论:" 那一行里，错误计数必须标成 ERROR
+  L2=0; same_line "$SEVOUT" "结论:" "个 ERROR" && L2=1
+  # ③ 适用性存疑那一节的标题必须是 "WARN 明细"
+  L3=0; printf '%s\n' "$SEVOUT" | grep -F "WARN 明细" >/dev/null && L3=1
+  # ④ 人读输出里的错误条数必须与 --json 的 summary.errors 一致（标签对了、计数也得对）
+  L4=0
+  CNTN="$(printf '%s\n' "$SEVOUT" | grep -F "结论:" | head -1 | sed -n 's/.*结论: \([0-9][0-9]*\) 个.*/\1/p')"
+  if [ -n "$CNTN" ] && [ "${SE:-0}" -gt 0 ] && [ "$CNTN" = "$SE" ]; then L4=1; fi
+  if [ $L1 -eq 1 ] && [ $L2 -eq 1 ] && [ $L3 -eq 1 ] && [ $L4 -eq 1 ]; then
+    ok "AC-029 ERROR/WARN 的严重级别标签与实际后果一致（产出缺失必须标成 ERROR）"
+  else
+    bad "AC-029 ERROR/WARN 的严重级别标签与实际后果一致" \
+        "ERROR明细标题=$L1(期望1) 结论行标ERROR=$L2(期望1) WARN明细标题=$L3(期望1) 计数一致=$L4(期望1,人读=$CNTN json=${SE:-?}) 输出=[$(printf '%s' "$SEVOUT" | head -8 | tr '\n' ' ')]"
+  fi
+fi
+
+# ---------------------------------------------------------------- AC-030
+step "AC-030 --help 属用法错误：两个脚本都必须退出码 2 并给出用法（D19 第②项）"
+# 为什么要有这条：D19 列的三项 P2 里，只有①（注释）和③（feature-meta）有 AC 护栏，
+# ②（--help 退出码口径）**此前完全没有 AC** —— 实测两个脚本对同一个 --help
+# 给出不同结论：check-methods rc=2（用法错误），validate-cases rc=1
+# （把 --help 当成用例集文件路径 → "无法读取用例集文件"）。
+# 两个脚本的脚本头都声明「2 = 调用方式错误」，所以 validate-cases 的 rc=1 是错的。
+# 又一次 D9：实现写了、验收没测 → 随时会被改回去。
+if [ ! -f "$CM" ] || [ ! -f "$VC" ]; then
+  bad "AC-030 --help 退出码口径一致" "缺 check-methods.mjs 或 validate-cases.mjs"
+else
+  HCM="$(node "$CM" --help 2>&1)"; HCM_RC=$?
+  HVC="$(node "$VC" --help 2>&1)"; HVC_RC=$?
+  H1=0; H2=0
+  if [ $HCM_RC -eq 2 ] && printf '%s\n' "$HCM" | grep -F "用法" >/dev/null; then H1=1; fi
+  if [ $HVC_RC -eq 2 ] && printf '%s\n' "$HVC" | grep -F "用法" >/dev/null; then H2=1; fi
+  if [ $H1 -eq 1 ] && [ $H2 -eq 1 ]; then
+    ok "AC-030 --help 两个脚本都退出码 2 并给出用法"
+  else
+    bad "AC-030 --help 退出码口径一致" \
+        "check-methods rc=$HCM_RC(期望2且含用法) ok=$H1 | validate-cases rc=$HVC_RC(期望2且含用法) ok=$H2 out1=[$(printf '%s' "$HCM" | head -3 | tr '\n' ' ')] out2=[$(printf '%s' "$HVC" | head -3 | tr '\n' ' ')]"
   fi
 fi
 
