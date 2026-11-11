@@ -1169,26 +1169,42 @@ elif [ -n "$FM_MISSING" ]; then
   bad "AC-028 feature-meta 归属正确、demand_dir 存在" \
       "feature-meta/ 缺少文件：$FM_MISSING —— 四件套（status.md / traceability.md / verification-report.md / manifest.json）缺一即追溯链断裂"
 else
-  # 每份追溯文件必须**自证是本 REQ 的**（第五轮 A47 掏空 / A50 整份换成别的 REQ）
-  # 此前只查"有没有出现**别的** REQ 编号"（黑名单）→ 空白文件与"整份写成 REQ-002A"都能通过
-  FM_SELF=""
-  for F in status.md traceability.md verification-report.md; do
-    if [ ! -f "$FMETA/$F" ]; then continue; fi
-    if ! grep -q "REQ-005" "$FMETA/$F"; then FM_SELF="$FM_SELF $F(不含REQ-005)"; fi
-  done
-  # manifest.json 的 req 字段必须指向本 REQ（第五轮 A48：改成 REQ-004 此前无人查）
-  MREQ=""; MBR=""
-  if [ -f "$FMETA/manifest.json" ]; then
-    MREQ="$(node -e 'const fs=require("fs");let o;try{o=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));}catch(e){process.exit(0);}console.log(o.req||"");' "$FMETA/manifest.json" 2>/dev/null)"
-    MBR="$(node -e 'const fs=require("fs");let o;try{o=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));}catch(e){process.exit(0);}console.log(o.branch||"");' "$FMETA/manifest.json" 2>/dev/null)"
-  fi
-  if [ "$MREQ" != "REQ-005" ]; then FM_SELF="$FM_SELF manifest.json(req=${MREQ:-空})"; fi
-  # 分支名以 manifest.json 的 branch 为准（第五轮 F-5 附带发现：分支名此前从没被查过，
-  # 而追溯矩阵的 AC-028 行却声称查了 —— 契约与护栏分叉；现在要么查，要么别声称）
-  case "$MBR" in
-    *REQ-005*) : ;;
-    *) FM_SELF="$FM_SELF manifest.json(branch=${MBR:-空})" ;;
-  esac
+  # 每份追溯文件必须**自证是本 REQ 的**（第五轮 A47/A50、第六轮 A57~A60）
+  # ⚠️ 第六轮实测：光查"含不含 REQ-005"是**存在性**检查 → 留一处 REQ-005 的 **token 骨架**照样判绿
+  #（A57/A59/A60），整份改讲 REQ-002A 但留一处 REQ-005 也照样判绿（A58）。
+  # 故本条从"存在性"升级为**主体性**：
+  #   ① 每份文件的**首行**必须自证是本 REQ 的
+  #   ② 每份文件里 REQ-005 的出现次数必须**多于**任何其它 REQ 编号（本 REQ 是主体，上游基线只能是配角）
+  #   ③ manifest.json 的 req 必须 == REQ-005；branch 里**有且只有一个** REQ 编号且必须是 REQ-005
+  #      （第六轮 A61：子串匹配 `feature/REQ-002A-REQ-005` 会漏过）
+  FM_SELF="$(node -e '
+  const fs=require("fs");
+  const fmeta=process.argv[1];
+  const files=["status.md","traceability.md","verification-report.md"];
+  let bad=[];
+  for(const F of files){
+    let t=""; try{ t=fs.readFileSync(fmeta+"/"+F,"utf8"); }catch(e){ continue; }
+    const first=(t.split(/\r?\n/).find(l=>l.trim().length>0)||"");
+    if(first.indexOf("REQ-005")<0) bad.push(F+"(首行未自证 REQ-005)");
+    const cnt={};
+    for(const m of t.matchAll(/REQ-[0-9A-Za-z.]+/g)) cnt[m[0]]=(cnt[m[0]]||0)+1;
+    const self=cnt["REQ-005"]||0;
+    let maxOther=0, maxId="(无)";
+    for(const id of Object.keys(cnt)){
+      if(id==="REQ-005") continue;
+      if(cnt[id]>maxOther){ maxOther=cnt[id]; maxId=id; }
+    }
+    if(self<=maxOther) bad.push(F+"(主体性不足: REQ-005 出现 "+self+" 次，未多于 "+maxId+" 的 "+maxOther+" 次)");
+  }
+  let mo=null; try{ mo=JSON.parse(fs.readFileSync(fmeta+"/manifest.json","utf8")); }catch(e){}
+  if(!mo){ bad.push("manifest.json(不可解析)"); }
+  else{
+    if(mo.req!=="REQ-005") bad.push("manifest.json(req="+(mo.req||"空")+")");
+    const bids=[...new Set(String(mo.branch||"").match(/REQ-[0-9A-Za-z.]+/g)||[])];
+    if(bids.length!==1 || bids[0]!=="REQ-005") bad.push("manifest.json(branch="+(mo.branch||"空")+")");
+  }
+  console.log(bad.join("; "));
+  ' "$FMETA" 2>/dev/null)"
   FM_OTHER=""
   for F in status.md traceability.md verification-report.md; do
     if [ -f "$FMETA/$F" ]; then
@@ -1466,7 +1482,7 @@ else
   M34="$(node -e '
   const fs=require("fs");
   const fmeta=process.argv[1], acc=process.argv[2], dec=process.argv[3];
-  const mth=process.argv[4], dim=process.argv[5];
+  const mth=process.argv[4], dim=process.argv[5], tcd=process.argv[6];
   let prob=[];
   let accText=""; try{ accText=fs.readFileSync(acc,"utf8"); }catch(e){}
   const actual=(accText.match(/^### AC-/gm)||[]).length;
@@ -1525,6 +1541,44 @@ else
   const dTok=[...st.matchAll(/(\d+)\s*个维度/g)].map(m=>Number(m[1]));
   if(dTok.length===0) prob.push("status.md: 没有写维度数（「N 个维度」）—— 追溯链没记维度规模");
   else for(const v of dTok){ if(v!==dN) prob.push("status.md: 写 "+v+" 个维度，实际 "+dN+" —— 追溯链与实现脱同步"); }
+  // ---- 第⑥子判据：追溯矩阵必须**逐条覆盖**判据集合（第六轮 A57/A63：掏空成 token 骨架仍判过）
+  const trRows=tr.split(/\r?\n/).filter(l=>/^\|\s*AC-/.test(l));
+  const trIds=trRows.map(l=>(l.match(/^\|\s*(AC-[0-9]+[a-z]*)/)||[])[1]).filter(Boolean);
+  const accIds=[...accText.matchAll(/^### (AC-[0-9]+[a-z]*)/gm)].map(m=>m[1]);
+  const uniq=a=>[...new Set(a)].sort();
+  if(trRows.length===0) prob.push("traceability.md: 一条 AC 追溯行都没有 —— 追溯矩阵被掏空成骨架");
+  else{
+    const A=uniq(accIds), B=uniq(trIds);
+    const miss=A.filter(x=>B.indexOf(x)<0), extra=B.filter(x=>A.indexOf(x)<0);
+    if(miss.length) prob.push("traceability.md: 缺 AC 追溯行 "+miss.join(",")+" —— 矩阵没有逐条覆盖判据");
+    if(extra.length) prob.push("traceability.md: 多出 acceptance.md 里没有的 AC 追溯行 "+extra.join(","));
+    for(const l of trRows){
+      const cells=l.split("|").slice(1,-1).map(s=>s.trim()).filter(s=>s.length>0);
+      if(cells.length<3){ prob.push("traceability.md: 有 AC 行不足 3 个非空单元（空壳行）"); break; }
+    }
+  }
+  // ---- 第⑦子判据：状态文件的实现清单必须非空，且列出的文件**真的存在**（第六轮 A59）
+  const paths=[...st.matchAll(/`((?:references|scripts)\/[A-Za-z0-9._\-\/]+|SKILL\.md)`/g)].map(m=>m[1]);
+  if(paths.length===0) prob.push("status.md: 实现清单为空（一个交付文件路径都没列）—— 状态文件写空了");
+  else for(const p of paths){ if(!fs.existsSync(tcd+"/"+p)) prob.push("status.md: 清单里列的交付文件不存在："+p); }
+  // ---- 第⑧子判据：验证报告必须有**逐层结论**与**能力结论表**（第六轮 A60）
+  const vr=perFile["verification-report.md"]||"";
+  const vrLines=vr.split(/\r?\n/);
+  const layerDefs=[["主验收",/^\|\s*主验收/],["REQ-002A",/^\|\s*上游基线回归（REQ-002A）/],["REQ-002B",/^\|\s*上游基线回归（REQ-002B）/]];
+  for(const pair of layerDefs){
+    const rows=vrLines.filter(l=>pair[1].test(l));
+    if(rows.length!==1) prob.push("verification-report.md: 验收层次「"+pair[0]+"」有 "+rows.length+" 行（应为恰好 1 行）");
+    else if(!/\d+\s*PASS\s*\/\s*0\s*FAIL/.test(rows[0])) prob.push("verification-report.md: 验收层次「"+pair[0]+"」的结论不是「N PASS / 0 FAIL」");
+  }
+  let capRows=0, inCap=false;
+  for(const l of vrLines){
+    if(/^\|\s*能力\s*\|/.test(l)){ inCap=true; continue; }
+    if(!inCap) continue;
+    if(/^\|\s*-{2,}/.test(l)) continue;
+    if(/^\|/.test(l)){ capRows++; continue; }
+    break;
+  }
+  if(capRows<3) prob.push("verification-report.md: 能力结论表只有 "+capRows+" 行（应 ≥3）—— 报告的实质被掏空了");
   // 主验收那一行的 PASS/FAIL 计数：P+F 必须等于判据条数，且 F 必须为 0（交付态必须全绿）
   if(!repLine){ prob.push("verification-report.md: 找不到含「主验收」与「PASS」的结果行"); }
   else{
@@ -1541,7 +1595,7 @@ else
   console.log("prob="+prob.length);
   console.log("actual="+actual+" dmax="+dmax+" nCount="+nCount+" dCount="+dCount);
   console.log("detail="+(prob.slice(0,4).join(" ; ")||"none"));
-  ' "$FMETA" "$SELF_DIR/acceptance.md" "$SELF_DIR/decisions.md" "$TCD/references/methods.json" "$TCD/references/dimensions.json" 2>/dev/null)"
+  ' "$FMETA" "$SELF_DIR/acceptance.md" "$SELF_DIR/decisions.md" "$TCD/references/methods.json" "$TCD/references/dimensions.json" "$TCD" 2>/dev/null)"
   P34="$(printf '%s\n' "$M34" | sed -n 's/^prob=//p')"
   D34="$(printf '%s\n' "$M34" | sed -n 's/^detail=//p')"
   # ---- 钉版自检：追溯链必须记下**当前验收脚本**的 sha256（D25 ⑤）
