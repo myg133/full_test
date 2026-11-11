@@ -449,7 +449,7 @@ fi
 # ---------------------------------------------------------------- AC-020
 # 缺陷 4: SKILL.md 的 Output contract 未同步 schema v2
 SK="$SKILL_DIR/SKILL.md"
-V2MISS=0
+V2MISS=""
 for tok in "schema_version" "open_questions" "coverage_matrix" "method" "status"; do
   grep -q "$tok" "$SK" 2>/dev/null || V2MISS="$V2MISS $tok"
 done
