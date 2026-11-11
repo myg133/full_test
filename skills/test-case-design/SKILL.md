@@ -58,6 +58,27 @@ description: |
 9. **汇报覆盖情况**：给出需求条目总数、可测试条目数、用例总数、维度分布，并明确列出**未被覆盖的需求条目 ID** 与**未决问题**（需求本身的歧义、缺失的前置条件、口径未确认的点）。
    原因：发现需求缺陷是这套流程的主要价值之一；把歧义写成自己的假设会让缺陷永久消失，而假设一旦被下游当成需求，就再也找不回来了。
 
+10. **项目同时携带 `test-assets/` 时**：按 `references/project-layout.md` 摆放测试资产，再跑 `node scripts/verify-layout.mjs <project-root>`；轮次状态用 `node scripts/cycle-state.mjs` 推进（详见下一节）。
+   原因：布局与状态字段有独立的机器契约，靠肉眼看不出"字段齐了但取值非法"这类问题；而状态一旦与 `history` 对不齐，后面的证据链就不可信。
+
+## Test assets and cycle state scripts
+
+本 skill 还带了两条围绕用例集的契约脚本。**项目里有 `test-assets/` 时才需要用**；脚本只读或只写自己的状态文件，不会碰用例集。
+
+| 脚本 | 何时调用 | 命令 |
+|---|---|---|
+| `scripts/verify-layout.mjs` | 摆好测试资产（环境 / 套件 / 轮次目录）之后 | `node scripts/verify-layout.mjs <project-root>` |
+| `scripts/cycle-state.mjs` | 推进轮次状态、记录跳过的 scope、设置阶段状态 | `node scripts/cycle-state.mjs <子命令> <轮次目录> [参数...] [--json]` |
+
+配套文档：
+
+- `references/project-layout.md` —— 目录契约与字段表（环境配置 / 执行配置 / `cycle.json`）。校验器怎么判，依据就是这份文件。
+- `references/state-machine.md` —— 轮次状态转移表、终态、推进器全部子命令与原子性规则。
+
+**硬约束：状态文件只由脚本写。** `cycle.json` 与 `cycles/index.json` **不得直接编辑**，状态推进一律走 `cycle-state.mjs`：它先校验前置状态合法性，再原子写入（临时文件 + rename），并让 `status` 与 `history` 在同一次写入里保持自洽。手改两处必然对不齐，而对不齐的状态会让后续轮次的证据链整条作废。
+
+三个脚本的退出码语义一致：`0` = 成功，`1` = 校验失败或非法转移，`2` = 调用方式错误。**失败时目标文件不会被修改**，按报错里的文件路径与字段路径修完再重跑。
+
 ## Output contract
 
 - **用例集 JSON**（单个文件），结构与字段语义见 `references/case-schema.md`：
@@ -92,6 +113,6 @@ description: |
 
 ## Windows (win32) platform notes
 
-- 两个脚本都是纯 Node.js，直接用 `node scripts/validate-cases.mjs cases.json` 调用，PowerShell 与 cmd 下行为一致。
+- 全部脚本都是纯 Node.js，直接用 `node scripts/validate-cases.mjs cases.json` 调用，PowerShell 与 cmd 下行为一致。
 - 路径交给 Node 解析（脚本内部走 `path.resolve`），不要写死盘符或类 Unix 绝对路径。
 - 临时文件放在当前工作目录下的子目录里（例如 `./tmp-cases/`），不要假定系统存在类 Unix 临时目录。
