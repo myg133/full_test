@@ -1,0 +1,10 @@
+{
+  "req": "REQ-005",
+  "branch": "feature/REQ-005",
+  "agent_id": "dev-005",
+  "session_id": "proc-pending",
+  "owner": "ba-local-ba-20261109161500",
+  "base_branch": "develop",
+  "created_at": "2026-11-11T19:00:00+08:00",
+  "demand_dir": "BA/demands/REQ-002-suite-foundation/REQ-005-method-library"
+}
