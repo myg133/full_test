@@ -364,6 +364,87 @@ else
   bad "AC-020 多步用例全通过" "执行未产出结果"
 fi
 
+# ---------------------------------------------------------------- AC-021 / AC-022
+# D20/D21：显式用例级载体 + step 级请求，是原 P0「半个用例报通过」的**另一个入口**。
+# 场景：用例声明 request=GET /ok，steps 却是两条不同端点的可执行步骤。
+#       实现若丢掉 step 级请求，后续 step 的断言会被拿去判那一次响应 → 报 passed。
+step "AC-021/022 载体冲突判 blocked + 复现信息如实"
+D21="$WORK/ac021"; make_project "$D21"
+# 场景 A：端点不一致 → 必须 blocked（不得 passed）
+cat > "$D21/test-assets/suites/REQ-001-coupon/cases.json" <<'CASE21'
+{ "schema_version": 2, "meta": {"source":"qa-0025b","generated_at":"2026-11-11T18:00:00+08:00","case_count":1},
+  "requirements":[{"id":"R-1","title":"多端点","source_ref":"x","testable":true}], "open_questions": [],
+  "coverage_matrix":[{"requirement":"R-1","methods_applied":["M0.1"],"skipped":[],"dimensions":["functional"]}],
+  "cases":[{"id":"TC-001","title":"载体冲突","requirement_refs":["R-1"],"dimension":"functional","priority":"P0","method":["M0.1"],"status":"active",
+    "request":{"method":"GET","path":"/ok"},
+    "steps":[
+      {"action":"GET /ok","expected":{"path":"$.status","op":"equals","expected":"ok"}},
+      {"action":"GET /notfound","expected":{"path":"$.status","op":"equals","expected":"ok"}}
+    ]}]}
+CASE21
+node -e '
+const fs=require("fs"),f=process.argv[1];const o=JSON.parse(fs.readFileSync(f,"utf8"));
+o.driver="mock";fs.writeFileSync(f,JSON.stringify(o,null,2));
+' "$D21/test-assets/environments/local.json"
+S21="NOPROJ"; EV21=0; RP21=""
+if run_suite "$D21" >/dev/null 2>&1 && [ -n "$RUN_DIR" ]; then
+  S21="$(node -e '
+  const o=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));
+  const a=Array.isArray(o)?o:(o.results||o.cases||[]);
+  console.log(a.length?(a[0].status||"NONE"):"NO_CASES");
+  ' "$RUN_DIR/results.json" 2>/dev/null)"
+  EV21="$(find "$RUN_DIR/evidence" -type f 2>/dev/null | wc -l)"
+  RP21="$(node -e '
+  const o=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));
+  const a=Array.isArray(o)?o:(o.results||o.cases||[]);
+  const r=a[0]||{};const s=r.reproduction&&Array.isArray(r.reproduction.steps)?r.reproduction.steps:[];
+  console.log(s.length);
+  ' "$RUN_DIR/results.json" 2>/dev/null)"
+fi
+if [ "$S21" = "blocked" ]; then
+  ok "AC-021 载体冲突判 blocked（显式用例级载体 + 不同端点的 step，不得判 passed）"
+else
+  bad "AC-021 载体冲突判 blocked" "status=$S21（期望 blocked；若为 passed 说明 step 级请求被静默丢掉 —— 半个用例报通过）"
+fi
+
+# 场景 B：端点一致 → 视为同一次请求，证据条数必须与复现步骤数一致
+D22="$WORK/ac022"; make_project "$D22"
+cat > "$D22/test-assets/suites/REQ-001-coupon/cases.json" <<'CASE22'
+{ "schema_version": 2, "meta": {"source":"qa-0025b","generated_at":"2026-11-11T18:00:00+08:00","case_count":1},
+  "requirements":[{"id":"R-1","title":"同端点","source_ref":"x","testable":true}], "open_questions": [],
+  "coverage_matrix":[{"requirement":"R-1","methods_applied":["M0.1"],"skipped":[],"dimensions":["functional"]}],
+  "cases":[{"id":"TC-001","title":"同端点重复描述","requirement_refs":["R-1"],"dimension":"functional","priority":"P0","method":["M0.1"],"status":"active",
+    "request":{"method":"GET","path":"/ok"},
+    "steps":[
+      {"action":"GET /ok","expected":{"path":"$.status","op":"equals","expected":"ok"}},
+      {"action":"GET /ok","expected":{"path":"$.status","op":"equals","expected":"ok"}}
+    ]}]}
+CASE22
+node -e '
+const fs=require("fs"),f=process.argv[1];const o=JSON.parse(fs.readFileSync(f,"utf8"));
+o.driver="mock";fs.writeFileSync(f,JSON.stringify(o,null,2));
+' "$D22/test-assets/environments/local.json"
+S22="NOPROJ"; EV22=0; RP22=""
+if run_suite "$D22" >/dev/null 2>&1 && [ -n "$RUN_DIR" ]; then
+  S22="$(node -e '
+  const o=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));
+  const a=Array.isArray(o)?o:(o.results||o.cases||[]);
+  console.log(a.length?(a[0].status||"NONE"):"NO_CASES");
+  ' "$RUN_DIR/results.json" 2>/dev/null)"
+  EV22="$(find "$RUN_DIR/evidence" -type f 2>/dev/null | wc -l)"
+  RP22="$(node -e '
+  const o=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));
+  const a=Array.isArray(o)?o:(o.results||o.cases||[]);
+  const r=a[0]||{};const s=r.reproduction&&Array.isArray(r.reproduction.steps)?r.reproduction.steps:[];
+  console.log(s.length);
+  ' "$RUN_DIR/results.json" 2>/dev/null)"
+fi
+if [ "$S22" != "blocked" ] && [ "${EV22:-0}" -ge 1 ] && [ "${EV22:-0}" = "${RP22:-x}" ]; then
+  ok "AC-022 reproduction.steps 如实（证据条数 $EV22 == 复现步骤数 $RP22）"
+else
+  bad "AC-022 reproduction.steps 如实" "status=$S22 证据条数=$EV22 复现步骤数=$RP22（两者必须相等：说跑了几步就得有几份证据）"
+fi
+
 # ---------------------------------------------------------------- AC-007
 step "AC-007 产物中不含凭证明文"
 # 关键：密钥必须在**执行之前**就位，并且用例真的带鉴权走一遍请求。
