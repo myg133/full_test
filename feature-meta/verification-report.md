@@ -4,7 +4,7 @@
 - 分支：`feature/REQ-005`
 - 交付位置：`skills/test-case-design/`
 - 需求文档（只读）：`BA/demands/REQ-002-suite-foundation/REQ-005-method-library/`
-  （`acceptance.md` 31 条判据 / `decisions.md` D1~D22 / `verify-acceptance.sh`）
+  （`acceptance.md` 35 条判据 / `decisions.md` D1~D25 / `verify-acceptance.sh`）
 - 验收脚本与判据文档均为 **BA 的资产**，本 REQ 全程未改动。
 
 ## 一、怎么验的
@@ -13,7 +13,7 @@
 
 | 层 | 命令 | 结果 |
 |---|---|---|
-| 主验收（31 条判据） | `bash BA/demands/REQ-002-suite-foundation/REQ-005-method-library/verify-acceptance.sh feature-REQ-005/skills/test-case-design` | **31 PASS / 0 FAIL** |
+| 主验收（35 条判据） | `bash BA/demands/REQ-002-suite-foundation/REQ-005-method-library/verify-acceptance.sh feature-REQ-005/skills/test-case-design` | **35 PASS / 0 FAIL** |
 | 上游基线回归（REQ-002A） | `bash BA/demands/REQ-002-suite-foundation/REQ-002A-schema-v2/verify-regression-002a.sh feature-REQ-005/skills/test-case-design` | **19 PASS / 0 FAIL** |
 | 上游基线回归（REQ-002B） | `bash BA/demands/REQ-002-suite-foundation/REQ-002B-project-layout/verify-regression-002b.sh feature-REQ-005/skills/test-case-design` | **41 PASS / 0 FAIL** |
 
@@ -29,7 +29,7 @@
 
 ## 二、验出了什么
 
-主验收 31 条判据全部通过，逐类要点：
+主验收 35 条判据全部通过，逐类要点：
 
 | 能力 | 验证结论 |
 |---|---|
@@ -42,14 +42,31 @@
 | 验收护栏自检 | 19 个变异体（含 6 个"护栏漏测"漏洞与 3 个虚报类）**全部被测出**，还原后失败项集合回到基线 |
 | 一致性口径 | 两个脚本 `--help` 都是退出码 2 且给出用法；`feature-meta/` 归属本 REQ、`demand_dir` 指向真实存在的目录；实现注释与实现分支同口径 |
 
-## 三、本轮（第五轮）改了什么
+## 三、历轮改了什么
 
-本轮只修**元数据与一致性**四处，方法库本体未动（本体已通过 BA 侧独立验收，0 缺陷）。
+### 本轮（第七轮）：元数据数字同步到当前 + 追溯矩阵补齐
+
+本轮**只改 `feature-meta/` 里的三份文件**，方法库本体与脚本一行未动。
+
+| # | 问题 | 改法 | 落点 |
+|---|---|---|---|
+| 1 | 三份文件里的判据条数 / 决策号 / 验收数字**全部陈旧**（写的是上一轮的判据条数、上一轮的决策号上限、上一轮的主验收通过数），且**没有任何判据守这个** | 把**每一处**「N 条判据」「D1~D<n>」改成当前实际值：35 条判据 / D1~D25；主验收结果改成 35 PASS / 0 FAIL | `feature-meta/{status,traceability,verification-report}.md` |
+| 2 | 追溯矩阵只覆盖到 AC-030，判据已扩到 AC-034 —— **追溯链断在 AC-031** | 按现有行格式补齐 AC-031~AC-034 四行（AC 编号 \| 交付位置 \| 自验方式 \| 结论） | `feature-meta/traceability.md` |
+
+**为什么要专门做这一轮**：这些数字原先**只靠"写的人记得更新"** —— 没人核过，也就等于没写。
+本轮 BA 侧补了 **AC-034** 把它们纳入机械核验：三份文件里每一处「N 条判据」必须等于
+`acceptance.md` 的实际条数（35）、每一处「D1~D<n>」必须等于 `decisions.md` 的最大决策号（D25）、
+主验收行的 `P + F` 必须等于判据条数且 `F == 0`。
+**以后数字对不对由脚本查，不由人记** —— 这正是本项目一直在消灭的那类"看着像已验、其实没验"。
+
+### 第五轮：元数据与一致性四处
+
+第五轮只修**元数据与一致性**四处，方法库本体未动（本体已通过 BA 侧独立验收，0 缺陷）。
 
 | # | 问题 | 改法 | 落点 |
 |---|---|---|---|
 | 1 | 注释与实现相反（AC-027）："维度名不在枚举内"的注释仍写"只报 WARN"，而实现已是 `fail(...)`（ERROR） | 把 3 处提到"只报 WARN"的注释全部改成与实现一致的描述（ERROR 口径 + 为什么这么定：拼错的跳过声明从来不会生效，报 WARN 会让"校验通过"与"该维度实际没被跳过"同时成立） | `skills/test-case-design/scripts/validate-cases.mjs` |
-| 2 | `feature-meta/` 三个文件是别的 REQ 的内容（AC-028①） | 三个文件全部重写为本 REQ 的真实内容：`status.md`（开发状态）、`traceability.md`（AC-001~AC-030 逐条追溯矩阵）、`verification-report.md`（本文件） | `feature-meta/{status,traceability,verification-report}.md` |
+| 2 | `feature-meta/` 三个文件是别的 REQ 的内容（AC-028①） | 三个文件全部重写为本 REQ 的真实内容：`status.md`（开发状态）、`traceability.md`（AC-001~AC-034 逐条追溯矩阵）、`verification-report.md`（本文件） | `feature-meta/{status,traceability,verification-report}.md` |
 | 3 | `manifest.json` 的 `demand_dir` 指向不存在的目录（AC-028② / D20） | 改为真实路径 `BA/demands/REQ-002-suite-foundation/REQ-005-method-library` | `feature-meta/manifest.json` |
 | 4 | `--help` 退出码口径不一致（AC-030）：`validate-cases.mjs` 把 `--help` 当用例集路径 → rc=1，而脚本头声明"2 = 调用方式错误" | `validate-cases.mjs` 识别 `--help` / `-h` / 未知参数 → 退出码 2 并打印用法说明（与 `check-methods.mjs` 口径一致） | `skills/test-case-design/scripts/validate-cases.mjs` |
 

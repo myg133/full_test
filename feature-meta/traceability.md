@@ -12,12 +12,12 @@
   - `scripts/validate-cases.mjs`（用例集结构校验器）
   - `SKILL.md`（skill 入口）
 - 验收脚本（BA 的资产，本 REQ 未改动）：
-  `BA/demands/REQ-002-suite-foundation/REQ-005-method-library/verify-acceptance.sh` → **31 PASS / 0 FAIL**
+  `BA/demands/REQ-002-suite-foundation/REQ-005-method-library/verify-acceptance.sh` → **35 PASS / 0 FAIL**
 - 回归：`REQ-002A` → **19 PASS / 0 FAIL**；`REQ-002B` → **41 PASS / 0 FAIL**
 - 需求文档（只读）：`BA/demands/REQ-002-suite-foundation/REQ-005-method-library/`
-  （`acceptance.md` 31 条判据 / `decisions.md` D1~D22）
+  （`acceptance.md` 35 条判据 / `decisions.md` D1~D25）
 
-> 编号说明：`AC-0xx` 是 BA 验收脚本的编号（`AC-003b` 是 D6 增补的子判据，同样计入 31 条）。
+> 编号说明：`AC-0xx` 是 BA 验收脚本的编号（`AC-003b` 是 D6 增补的子判据，同样计入 35 条）。
 
 | AC | 交付位置 | 自验方式 | 结论 |
 |---|---|---|---|
@@ -52,11 +52,15 @@
 | AC-028 `feature-meta/` 不得张冠李戴 | `feature-meta/status.md`、`feature-meta/traceability.md`、`feature-meta/verification-report.md`、`feature-meta/manifest.json` | 三份文件的需求编号与分支名均为本 REQ；`demand_dir` 指向的目录真实存在 | PASS |
 | AC-029 ERROR 必须真的标成 ERROR | `scripts/check-methods.mjs`（`SEVERITY_ERROR`、人读输出的"ERROR 明细"/"WARN 明细"两节与"结论:"行） | 人读输出含 `ERROR 明细` 标题 + "N 个 ERROR" + `WARN 明细` 标题，且错误条数 == `--json` 的 `summary.errors` | PASS |
 | AC-030 `--help` 属用法错误 | `scripts/check-methods.mjs`（`parseArgs` 未知参数 → 退出码 2 + 用法说明）、`scripts/validate-cases.mjs`（`--help`/`-h`/未知参数 → 退出码 2 + 用法说明） | 两脚本跑 `--help` 均 rc=2 且输出含"用法" | PASS |
+| AC-031 独立的 `distinct_expected` 谓词种类必须真的被核验 | `scripts/check-methods.mjs`（`evaluateRequiredOutputs` 的 `kind === 'distinct_expected'` 分支）、`references/methods.json`（谓词种类表） | 副本的 `methods.json` 加一个用独立 kind 的方法（`{"kind":"distinct_expected","dimension":"boundary","min":2}`）→ 2 条 `boundary` 用例 `expected` 全相同 → 退出码 ≠ 0 且输出含"区分度"；`expected` 互不相同 → 退出码 0 | PASS |
+| AC-032 `dimension:` 前缀的适用范围（文档必须与实现一致） | `references/case-schema.md`（`dimension:` 只在 `skipped[]` 里的声明）、`scripts/validate-cases.mjs` | 文档含 `dimension:` + `skipped` + "只/仅"限定说明，且无"任何方法字段"式放宽措辞；正反对消：`skipped[].method` 写 `dimension:concurrency` → 接受，`cases[].method` 写 `dimension:concurrency` → 拒绝（退出码 1） | PASS |
+| AC-033 清单必须声明「以 `dimensions.json` 为准」，不一致时以库为准 | `references/coverage-dimensions.md`（唯一来源声明）、`scripts/check-methods.mjs`（维度库 ↔ 清单对照检查 `compareDimensionsDocWithLibrary`） | 文档含 `dimensions.json` + "为准" + "唯一来源"，且无"以本清单为准/需要人工同步"式措辞；副本的 `dimensions.json` 加一个清单里没有的维度 → 对照检查退出码 ≠ 0 且点名该维度 | PASS |
+| AC-034 `feature-meta/` 里的判据条数 / 决策号 / 验收数字必须与实际一致 | `feature-meta/status.md`、`feature-meta/traceability.md`、`feature-meta/verification-report.md` | 三份文件里每一处「N 条判据」的 N == `acceptance.md` 的 `### AC-` 实际条数；每一处「D1~D<n>」的 n == `decisions.md` 里的最大决策号；`verification-report.md` 主验收行的 P+F == 判据条数且 F == 0 | PASS |
 
 ## 补充：自验命令与实测结果
 
 | 命令 | 结果 |
 |---|---|
-| `bash BA/demands/REQ-002-suite-foundation/REQ-005-method-library/verify-acceptance.sh feature-REQ-005/skills/test-case-design` | **31 PASS / 0 FAIL** |
+| `bash BA/demands/REQ-002-suite-foundation/REQ-005-method-library/verify-acceptance.sh feature-REQ-005/skills/test-case-design` | **35 PASS / 0 FAIL** |
 | `bash BA/demands/REQ-002-suite-foundation/REQ-002A-schema-v2/verify-regression-002a.sh feature-REQ-005/skills/test-case-design` | **19 PASS / 0 FAIL** |
 | `bash BA/demands/REQ-002-suite-foundation/REQ-002B-project-layout/verify-regression-002b.sh feature-REQ-005/skills/test-case-design` | **41 PASS / 0 FAIL** |
