@@ -1,51 +1,48 @@
-# REQ-003 追溯性矩阵
+# REQ-004 追溯性矩阵
 
-> 需求：`BA/demands/REQ-002-suite-foundation/REQ-003-tools-bootstrap/demand.md`
-> 验收：`BA/demands/REQ-002-suite-foundation/REQ-003-tools-bootstrap/acceptance.md`
-> 分支：`feature/REQ-003`　实现：`bin/qa`（启动器）+ `bin/qa-impl.mjs`（实现）+ `skills/qa-toolchain/`（说明书 + 契约文档）
+- 需求：REQ-004（执行 skill 与证据链）｜第五轮：缺 path 规则对两类载体一视同仁（D25）+ 多问题并存时消息都点出（D26）
+- 分支：`feature/REQ-004`
+- 验收脚本（BA 的资产）：`BA/demands/REQ-002-suite-foundation/REQ-004-test-execute/verify-acceptance.sh` → **23 PASS / 0 FAIL**
+- REQ-002A 回归：`BA/demands/REQ-002-suite-foundation/REQ-002A-schema-v2/verify-regression-002a.sh` → **19 PASS / 0 FAIL**
+- BA 的 13 场景探针（`/tmp/probe-batch.sh`，改动前后逐行对比）→ **S1~S13 的 status / error.type / 证据份数 / 复现步骤数完全一致**
+- 自验脚本（自用，不进仓库）：`qa-0025b.mjs` → **28 PASS / 0 FAIL**；`qa-round3.mjs` → **8 PASS**；`qa-round4.mjs` → **6 PASS**；`qa-round5.mjs`（D25/D26 探针）→ **9 PASS / 0 FAIL**
 
-| AC | 需求条款 | 实现位置 | 验证方式 | 结论 |
-|---|---|---|---|---|
-| AC-001 | F1b / F3 | `bin/qa`、`bin/qa-impl.mjs:printHelp` | `npm pack --dry-run` 看清单；`node bin/qa --help` 退出码 0 且列出全部子命令 | PASS |
-| AC-002 | F2 / F3 | `bin/qa-impl.mjs:cmdList` | `qa list --project <PROJ>`：两个工具都在输出里，状态 `missing` | PASS |
-| AC-003 | F5 | `bin/qa-impl.mjs:cmdDoctor`、`computeStatus` | `qa doctor`：输出同时出现 `[ok]` / `[missing]` / `[failed]` / `[unavailable]`，退出码 1 | PASS |
-| AC-004 | F2 硬规则 2 | `bin/qa-impl.mjs:parseSpecVersion`、`cmdInstall` | `spec: "bandit>=1.7"` → 拒绝安装，退出码 1，报「版本未锁定」 | PASS |
-| AC-005 | F2 硬规则 1 | `bin/qa-impl.mjs:checkInstallBoundary` | `install: {uv: "pip install --user {spec}"}` → 拒绝安装，退出码 1，报「安装路径越界」，未创建 `.venv` | PASS |
-| AC-006 | F4 | `bin/qa-impl.mjs:ensurePythonVenv`、`performInstall`（python 分支） | `.tools/.venv/` 存在；系统 `python3 -c "import pyflakes"` 失败 | PASS |
-| AC-007 | F4 | `bin/qa-impl.mjs:ensureNodeDir`、`performInstall`（node 分支） | `.tools/node/` 存在；系统 `command -v js-yaml` 无输出 | PASS |
-| AC-008 | F3 | `bin/qa-impl.mjs:cmdWhich`、`resolveExecutable` | `qa which pyflakes` 输出路径在 `<PROJ>/.tools/` 之下，退出码 0 | PASS |
-| AC-009 | F3 约束 1 | `bin/qa-impl.mjs:cmdRun` | `qa run <非清单工具>` → 退出码 2，报「不在清单中」，副作用标记文件未生成 | PASS |
-| AC-010 | F3 约束 2 / F4 | `bin/qa-impl.mjs:isolatedEnv`、`cmdRun` | 系统有 `/usr/bin/semver`(7.8.5)，`.tools/` 装 7.7.2：`qa which` 指向 `.tools/`，`qa run semver -- --help` 输出 `SemVer 7.7.2` | PASS |
-| AC-011 | F5 | `bin/qa-impl.mjs:installBinary`、`performInstall`、`recordFailure` | 来源不可达的 binary 工具 → 安装退出码 1，doctor 状态 `unavailable`（非 `ok`、非跳过），错误说明原因 | PASS |
-| AC-012 | F3 / 非功能 | `bin/qa-impl.mjs:cmdInstall`（幂等分支）、`writeState` | 重复 `qa install` 退出码 0，输出「已安装，跳过」，`state.json` 逐字节未变 | PASS |
-| AC-013 | F6 | `bin/qa-impl.mjs:cmdInstall`（写 state）、`writeState` | `state.json` 条目含 `name` / `version`(3.2.0，与 spec 一致) / `source` / `installed_at` | PASS |
-| AC-014 | F1 | `bin/qa-impl.mjs:cmdInit`（写 `.gitignore` 规则） | `git check-ignore -q .tools/.venv/x` → 忽略；`git check-ignore -q .tools/manifest.json` → 未忽略；`git status -uall` 列出清单。反例：写成 `.tools/` 时清单被忽略 | PASS |
-| AC-015 | 非功能 | `bin/qa`、`bin/qa-impl.mjs`（仅 `node:` 内置模块）；`package.json`（`bin` 注册，dependencies 空） | 源码检索无第三方依赖；退出码 0 / 1 / 2 三态实测 | PASS |
-| AC-016 | 分发链路 | `package.json` 的 `files` 白名单含 `skills/`；契约文档置于 `skills/qa-toolchain/references/tools-chain-contract.md` | `npm pack --dry-run` 逐项核对：`bin/qa`、`bin/qa-impl.mjs`、`skills/qa-toolchain/SKILL.md`、契约文档全部在 tarball 清单里 | PASS |
-| AC-017 | D3 只读体检 | `bin/qa-impl.mjs:cmdDoctor`（只读；环境级结论只打印不落盘） | `qa doctor` 前后 `.tools/` 目录树 md5 相同；未生成 `.venv` / `state.json` | PASS |
-| AC-018 | P1 路径穿越 | `bin/qa-impl.mjs:checkEntryFields`（清单层）、`resolveExecutable`（`isInsideTools` 断言）、`cmdRun` / `cmdWhich`（执行层兜底） | `entry: "../../evil.sh"` → `qa run` 退出码 1、输出无 `PWNED`；`qa which` 不把越界路径当隔离副本报出 | PASS |
+> 编号说明：`AC-0xx` 是 BA 验收脚本的编号；`AC-Qxx` 是我自加的检查项（避免与 BA 编号撞号）。
 
-> **AC-016 备注**：`feature-meta/*.md` 是仓库工作元数据（与其它 REQ 一致，不进 npm 包），
-> 不是交付物；AC-016 点名的三类交付物（入口、实现文件、契约文档）全部在包内。
-> 契约文档**未**放在包根 `references/`——该目录不在 `files` 白名单里，放那里会重演
-> REQ-002B 的"工作区有、用户机器上没有"。
-
-## 非功能要求对照
-
-| 要求 | 实现 | 结论 |
-|---|---|---|
-| 零依赖 | `bin/qa-impl.mjs` 只 import `node:fs` / `node:path` / `node:crypto` / `node:os` / `node:child_process` / `node:url`；`package.json` 的 `dependencies` 为空 | PASS |
-| 可移植 | Linux / macOS（POSIX 路径假设）；Windows 明确不支持（契约文档 §8 已标注） | PASS（Windows 不支持，已标注） |
-| 幂等 | 幂等分支 + `writeState` 内容无变化时不落盘 | PASS |
-| 不污染系统 | 安装路径全部指向 `.tools/`；`checkInstallBoundary` 静态拦截越界命令；`checkInstallCommand` 限定只能跑包管理器 | PASS |
-| 退出码语义 | 0 / 1 / 2，见契约文档 §4 | PASS |
-| 可观测 | 安装输出「装了什么 / 从哪来 / 命令 / 耗时 / 产物大小」；来源只上报包管理器真正会用的地址 | PASS |
-
-## 独立验收发现 → 修复对照（第二轮）
-
-| 编号 | 独立验收发现 | 处理 | 落地位置 |
+| AC | 交付位置 | 自验方式 | 结论 |
 |---|---|---|---|
-| P1-1 | `entry` 路径穿越：`qa run` 可执行 `.tools/` 之外的任意文件（AC-018） | **已修**，四层：清单校验（`entry`/`module`）、`resolveExecutable` 的 `isInsideTools` 断言、`cmdRun` 执行前兜底、`cmdWhich` 不报越界路径 | `bin/qa-impl.mjs` |
-| P2-1 | `state.json` 上报的来源可能不是实际抓取源（`PIP_INDEX_URL` 对 uv 不生效） | **已修**：只采信 uv 真正认的变量，并按 uv 的优先级解析（env > 项目 uv.toml > 用户 uv.toml > 默认），再显式传给子进程 | `resolvePythonIndex` / `resolveNodeRegistry` |
-| P2-2 | `install` 模板允许执行任意可执行文件 | **已修**：模板第一个 token 必须是该 kind 的包管理器（uv/pip、bun/npm；回退路径合法） | `checkInstallCommand` |
-| P2-4 | 环境可复现性：uv 默认走 `pypi.org` 时通时不通 | **已修**：契约 §8 与 SKILL.md 写明索引源变量；`qa doctor` / `qa install` 给出**环境级结论**（`[env]` 行） | `cmdDoctor` / `environmentHint` |
+| AC-001 skill 目录结构完整 | `skills/test-execute/{SKILL.md,scripts,references,executors/index.json}` | 目录与 frontmatter 检查 | PASS |
+| AC-002 注册表声明可配置项与边界 | `executors/index.json`（`configurable[]`（含 `multi_step`）/ `not_supported[]`） | 注册表检查 | PASS |
+| AC-003 执行器不可被 agent 修改 | `SKILL.md` 硬约束第 1 条（「agent 不得修改执行器实现」） | 文案可辨识性检查 | PASS |
+| AC-004 断言完全可配置 | `scripts/lib/verdict.mjs`、`executors/*.mjs`（无期望值字面量） | 源码扫描 + 改断言行为验证 | PASS |
+| AC-004b 断言对象形态可校验可判定 | `test-case-design/scripts/validate-cases.mjs`、`scripts/lib/assertion.mjs` | 校验 + 执行 | PASS |
+| AC-004c 不可判定判 blocked | `verdict.mjs`（`BLOCK_TYPES.NO_ASSERTION`） | 执行 + 理由检查 | PASS |
+| AC-004d 非法断言对象被拦 | `validate-cases.mjs`（`validateAssertionObject`） | 四例逐个校验 | PASS |
+| AC-004e 旧用例集行为不变 | 同上（放宽分支只对对象生效） | 与放宽前脚本对拍 | PASS |
+| AC-005 判定口径由外壳统一 | `scripts/lib/verdict.mjs` 唯一模块 | 源码扫描 | PASS |
+| AC-006 凭证缺失判 blocked | `suite-loader.mjs`（`resolveCredentials`）+ `verdict.mjs`（错误优先于"无响应"） | 执行验证 | PASS |
+| AC-007 产物无凭证明文 | `scripts/lib/redaction.mjs`（凭证字面量通道） | 全产物扫描 | PASS |
+| AC-008 证据链结构完整 | `run-suite.mjs`（meta/results 产出） | 字段清单检查 | PASS |
+| AC-009 指纹与防篡改 | `lib/fingerprint.mjs`、`verify-evidence.mjs` | 篡改 + 删除 | PASS |
+| AC-010 清单指纹发现 results.json 被改 | `lib/fingerprint.mjs`（`resultsFingerprint`） | 改 status | PASS |
+| AC-011 计数不可造假 | `verify-evidence.mjs` §5 | 改 cases_total | PASS |
+| AC-012 轮次状态经脚本写 | `lib/cycle.mjs`（调 `cycle-state.mjs --run`）、`test-case-design/scripts/cycle-state.mjs` | `stages.execute.runs[]` 含 run_id + 执行器无 cycle.json 路径 | PASS |
+| AC-013 脱敏在写入前 + 留痕 | `lib/redaction.mjs`、`run-suite.mjs`（先脱敏再落盘） | 证据内容 + meta.redaction | PASS |
+| AC-014 离线可跑 | `executors/mock.mjs`（内置 `node:http` 桩服务） | 执行 → verify-evidence 全 exit 0 | PASS |
+| AC-015 零依赖 + 可移植 | 全部脚本仅用 `node:` 内置模块 | `package.json` + 源码扫描 | PASS |
+| AC-016 完整性自检 | `verify-integrity.mjs` + `executors/manifest.json` | 改一个字节 | PASS |
+| AC-017 `--json` 与退出码语义 | `lib/cli.mjs` + 各脚本 | 三种情形 | PASS |
+| AC-018 失败用例有复现信息 | `executors/http-core.mjs`（`executePlan` 的 reproduction） | 失败用例检查 | PASS |
+| **AC-019 多步逐步判定** | `lib/suite-loader.mjs`（`resolveExecutionPlan`）、`lib/verdict.mjs`（`bindAssertions`）、`executors/http-core.mjs`（`executePlan`） | 两步用例首步成立次步不成立 → failed，证据 2 份（`step-1-` / `step-2-`） | PASS |
+| **AC-020 多步全通过** | 同上 | 两步都成立 → passed，证据 2 份 | PASS |
+| **AC-021 载体冲突判 blocked** | `lib/suite-loader.mjs`（`resolveExecutionPlan` 的 conflict 判定）、`lib/verdict.mjs`（`BLOCK_TYPES.CONFLICTING_REQUEST_CARRIER`）、`scripts/run-suite.mjs`（冲突时不发请求） | 用例级载体 `GET /ok` + step `GET /notfound` → blocked（非 passed），证据 0 份 | PASS |
+| **AC-022 复现信息如实** | `scripts/run-suite.mjs`（按执行器回报的步骤推导 `reproduction.steps`）、`executors/http-core.mjs`（`describeRequest` 兜底） | 用例级载体 + 同端点 step → 非 blocked，证据份数 == `reproduction.steps` 长度 | PASS |
+| **AC-023 载体缺 path 判 incomplete_request_carrier** | `lib/suite-loader.mjs`（`hasRequestPath` + `resolveExecutionPlan` 的 `incomplete`）、`lib/verdict.mjs`（`BLOCK_TYPES.INCOMPLETE_REQUEST_CARRIER`）、`scripts/run-suite.mjs`（不完整时不发请求） | `request: {query:{a:"1"}}` + step `GET /ok` → blocked 且 `error.type=incomplete_request_carrier`（不是 conflicting） | PASS |
+| **AC-024 step 级载体缺 path 判 incomplete_request_carrier** | `lib/suite-loader.mjs`（`hasRequestPath` 对 step 级载体同样生效 + `incomplete.carriers[]`）、`lib/verdict.mjs`（`incompleteCarriersText` 点名载体层级） | 用例级 `/ok` + step 级 `request:{method:GET}`（缺 path）→ blocked 且 `error.type=incomplete_request_carrier`（不是 conflicting） | PASS |
+| AC-Q01（自加）断言所在 step 不可执行 | `verdict.mjs`（`BLOCK_TYPES.ASSERTION_WITHOUT_RESPONSE`） | 三步用例（第三步无请求载体）→ blocked，非 passed | PASS |
+| AC-Q02（自加）REQ-002B 放开 mock | `test-case-design/scripts/verify-layout.mjs`（枚举 + `driver`）、`references/project-layout.md` | `executor=mock` + 环境 `driver` + `runs[]` 判合法；非法值仍被拦 | PASS |
+| AC-Q03（自加）`set-stage --run` 幂等 | `test-case-design/scripts/cycle-state.mjs` | 重复 run_id → `runs[]` 两项不重复 | PASS |
+| AC-Q04（自加）复现步骤与证据条数一致 | `scripts/run-suite.mjs`（`executedActions` 推导） | 多请求用例：证据 2 份 == 复现步骤 2 步；凭证缺失时回退到声明的步骤 | PASS |
+| AC-Q05（自加）绑定规则的两条既有行为未被破坏 | `lib/verdict.mjs`（`bindAssertions`） | 单请求 + 叙述性 step → passed；多请求 + 叙述性 step → blocked | PASS |
+| AC-Q06（自加）载体缺 method 合法、缺 path 不误诊 | `lib/suite-loader.mjs`（`requestSignature` 默认 GET、`hasRequestPath`） | 载体只有 path → passed（默认 GET）；真冲突仍报 `conflicting_request_carrier` | PASS |
+| AC-Q07（自加）多问题并存时消息都点出 | `lib/verdict.mjs`（`no_mechanical_assertion` 分支补载体信息、`incompleteCarriersText`） | 无断言 + 载体缺 path → type 仍 `no_mechanical_assertion`，message 带出"另外：…缺 path" | PASS |

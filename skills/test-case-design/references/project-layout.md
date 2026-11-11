@@ -118,6 +118,7 @@
     },
     "headers": { "type": "object", "description": "附加请求头" },
     "verify_tls": { "type": "boolean", "description": "是否校验 TLS 证书" },
+    "driver": { "type": "string", "enum": ["api", "mock"], "description": "用哪个执行器驱动跑这个环境（api = 真实 HTTP；mock = 内置离线桩服务）" },
     "data_fixtures": {
       "type": "array",
       "description": "执行前准备的数据集",
@@ -149,6 +150,7 @@
 | `credentials.password_env` | string | 否 | 存放密码的环境变量名 |
 | `headers` | object | 否 | 附加请求头。值可含 `${run_id}` 一类占位符，由执行器在运行时替换 |
 | `verify_tls` | boolean | 否 | 是否校验 TLS 证书。本地自签环境常置 `false` |
+| `driver` | string | 否 | 用哪个执行器驱动跑这个环境。枚举 `api`（真实 HTTP，打 `base_url`）/ `mock`（内置离线桩服务，地址由执行器自己起，不读 `base_url`）。不写则取 `suite.json` 的 `executor` |
 | `data_fixtures` | array | 否 | 执行前准备的数据集。元素必含 `path`（相对项目根），可选 `cleanup` |
 
 **凭证硬规则（不可协商）**
@@ -169,7 +171,7 @@
 | `scope` | string | 是 | 枚举 `functional` / `security` / `load` |
 | `environment` | string | 是 | 环境名。必须在 `test-assets/environments/` 下有同名 `.json`，否则为悬空引用 |
 | `cases_file` | string | 是 | 用例/场景文件路径，相对**本套件目录**。指向的文件必须存在，且不得越出项目根目录 |
-| `executor` | string | 是 | 枚举 `api` / `ui` / `load` / `security` |
+| `executor` | string | 是 | 枚举 `api` / `ui` / `load` / `security` / `mock` |
 | `base_url_from` | string | 否 | 指向环境配置的字段路径（如 `environment.base_url`）。不写则取环境配置的 `base_url` |
 | `tags` | object | 否 | 标签过滤。`include` / `exclude` 均为字符串数组 |
 | `report` | object | 否 | 报告产物配置 |
@@ -215,9 +217,10 @@ planned ──▶ in_progress ──▶ completed
 | `status` | string | 是 | 轮次当前状态。取值 `planned` / `in_progress` / `completed` / `blocked` / `cancelled`；**必须等于 `history` 最后一条的 `to`**（校验器会拦） |
 | `scopes` | array | 否 | 本轮覆盖的范围。元素取值 `functional` / `security` / `load`，写了就必须合法（校验器会拦非法取值） |
 | `scopes_skipped` | array | 否 | 本轮跳过的范围。元素为 `{scope, reason, at, by}`，**四个字段都必须是非空字符串**（校验器会拦）：`scope` 取值同 `scopes`；`reason` 是可被 review 发现的理由；`at` 是 ISO-8601 时间戳（什么时候跳过的）；`by` 是执行者标识（谁跳过的）。由 `scripts/cycle-state.mjs skip-scope` 写入 |
-| `stages` | object | 否 | 阶段状态表。键为阶段名，值为 `{status, artifacts?}`（校验器会拦非法的阶段状态） |
+| `stages` | object | 否 | 阶段状态表。键为阶段名，值为 `{status, artifacts?, runs?}`（校验器会拦非法的阶段状态） |
 | `stages.<name>.status` | string | 是（`stages` 存在时） | 阶段状态。取值 `pending` / `in_progress` / `done` / `blocked` / `skipped` |
 | `stages.<name>.artifacts` | array | 否 | 该阶段的产物路径列表 |
+| `stages.<name>.runs` | array | 否 | 该阶段记录过的**执行批次**（元素是一次执行的 run_id 字符串）。由 `scripts/cycle-state.mjs set-stage --run <run_id>` 写入；同一个 run_id 重复写入不产生重复项（幂等） |
 | `history` | array | 是 | 状态变更留痕，**至少一条**；每条含 `at` / `from` / `to` / `by` 四个非空字符串（校验器会拦缺字段），其中 `from` 与 `to` 取值同 `status` 枚举（校验器会拦非法取值） |
 | `trigger` | object | 否 | 触发来源，如 `{ "type": "requirement", "ref": "REQ-001" }` |
 
@@ -230,7 +233,7 @@ planned ──▶ in_progress ──▶ completed
 | `clarify` | 需求澄清 | 澄清记录（`artifacts`） |
 | `design` | 用例设计 | `test-assets/<scope 目录>/<suite>/cases.json` |
 | `data` | 数据准备 | fixture 路径与清理策略 |
-| `execute` | 执行 | `runs[]` 记录执行批次；产物落 `.test-artifacts/` |
+| `execute` | 执行 | `runs[]` 记录执行批次（由 `set-stage --run` 写入）；产物落 `.test-artifacts/` |
 | `triage` | 失败归因 | 缺陷与归因结论 |
 | `report` | 报告 | 报告产物落 `.test-artifacts/` |
 
@@ -296,7 +299,7 @@ planned ──▶ in_progress ──▶ completed
 | `credentials.password 是明文凭证` | 把凭证值直接写进了配置 | 改成 `password_env: "<环境变量名>"`，真实值放执行机的环境变量里 |
 | `credentials.username_env 的值是非法环境变量名` | 环境变量名不合规（小写、含空格、含特殊字符） | 改成大写字母/下划线形式的名字，如 `STAGING_USER` |
 | `scope 取值非法` | scope 写了 `perf` 之类自造值 | 只能是 `functional` / `security` / `load` |
-| `executor 取值非法` | executor 写了自造值 | 只能是 `api` / `ui` / `load` / `security` |
+| `executor 取值非法` | executor 写了自造值 | 只能是 `api` / `ui` / `load` / `security` / `mock` |
 | `environment "x" 在 ... 中不存在` | 悬空环境引用 | 补 `environments/x.json`，或把 `environment` 改成已存在的环境名 |
 | `cases_file 指向的文件不存在` | 用例/场景文件缺失或路径相对目录搞错 | `cases_file` 相对**套件目录**解析；确认文件已落盘 |
 | `suite "x" 与所在目录名 "y" 不一致` | 套件改名后没同步 | 让两者一致：改目录名或改 `suite` 字段 |

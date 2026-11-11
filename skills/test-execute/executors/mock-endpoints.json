@@ -1,0 +1,14 @@
+{
+  "note": "mock 服务的固定端点集（需求 F9：离线可跑）。这里定义的是**桩服务的行为**，不是任何用例的期望值 —— 断言写在用例的 steps[].expected 里，与本表无关。",
+  "endpoints": {
+    "/ok": { "method": "GET", "status": 200, "body": { "status": "ok" } },
+    "/created": { "method": "GET", "status": 201, "body": { "status": "created" } },
+    "/notfound": { "method": "GET", "status": 404, "body": { "status": "not_found" } },
+    "/error": { "method": "GET", "status": 500, "body": { "status": "error" } },
+    "/token": { "method": "GET", "status": 200, "body": { "token": "secret-value", "id": 1 } },
+    "/echo": { "method": "GET", "status": 200, "dynamic": "echo" },
+    "/slow": { "method": "GET", "status": 200, "dynamic": "delay", "body": { "status": "ok" } }
+  },
+  "default": { "method": "GET", "status": 404, "body": { "status": "not_found" } },
+  "limits": { "max_delay_ms": 60000 }
+}

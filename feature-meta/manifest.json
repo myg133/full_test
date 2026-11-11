@@ -1,10 +1,10 @@
 {
-  "req": "REQ-003",
-  "branch": "feature/REQ-003",
-  "agent_id": "dev-0024",
-  "session_id": "proc-982102",
-  "owner": "dev-0024",
+  "req": "REQ-004",
+  "branch": "feature/REQ-004",
+  "agent_id": "local-ba",
+  "session_id": "ba-local-ba-20261111200237",
+  "owner": "local-ba",
   "base_branch": "develop",
-  "created_at": "2026-11-11T18:16:53+08:00",
-  "demand_dir": "BA/demands/REQ-003"
+  "created_at": "2026-11-11T18:11:53+08:00",
+  "demand_dir": "BA/demands/REQ-002-suite-foundation/REQ-004-test-execute"
 }

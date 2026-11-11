@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "note": "执行器注册表：声明每个驱动支持哪些可配置项、不支持哪些。需求 F4：遇到本表未声明的需求，走“提需求”，不要改执行器源码。",
+  "configurable_items": {
+    "request": "请求构造：method / path / query / headers / body。载体：case.request、case.data.request 或 case.steps[].request；未显式声明时从步骤描述里回退解析“GET /path”形式。",
+    "assertions": "判定规则：写在用例 steps[].expected 的断言对象里（{path, op, expected}）。至少有一条断言对象的用例才算可机械判定。",
+    "extract": "取值：{name, path}，从响应里取值供后续用例用 ${name} 引用。载体：case.extract 或 case.data.extract。",
+    "auth": "鉴权：{type: bearer|basic|header|none, env, header, username_env, password_env}。只引用环境变量名，不含明文。",
+    "timeout_ms": "单请求超时（毫秒）。载体：case.timeout_ms 或 case.data.timeout_ms，缺省取环境配置的 timeout_ms。",
+    "retries": "失败重试次数。载体：case.retries 或 case.data.retries，缺省取环境配置的 retries。",
+    "multi_step": "逐步执行：一个用例的每个可执行 step 各发一次请求（step.request，或 action 能解析成 \"METHOD /path\"）；每条断言绑定到它自己所在 step 的响应。执行计划由执行外壳给出，执行器只负责逐步跑并如实回报。",
+    "request_carrier": "载体优先级与冲突判定：用例级载体（case.request / case.data.request）与 step 级请求（step.request，或 action 能解析成 \"METHOD /path\"）同时存在时，method+path 一致 → 视为同一次请求（只发一次，断言都绑到那一次响应）；method+path 不一致 → 判 blocked（conflicting_request_carrier），不静默丢弃其中任何一边，也不判 passed。比较用 path 模板原文，不做插值。载体完整性对两类载体一视同仁：任何一类载体（用例级或 step 级）缺 path → 判 blocked（incomplete_request_carrier），修法是补 path（method 可省略，默认 GET），与\"冲突\"（修法是二选一）分开报。多个问题并存时，error.type 取更根本的那个，message 会把其它问题一并点出。",
+    "assertion_binding": "断言与响应的绑定规则：断言所在 step 可执行 → 绑到该 step 的响应；用例只解析出一次请求 → 该用例所有 step 上的断言都绑到那一次响应；用例有多次请求且断言所在 step 不可执行 → 判 blocked（assertion_without_response）；用例级载体与 step 级请求冲突 → 判 blocked（conflicting_request_carrier）。书写约定：断言要写在它所描述的那个可执行 step 上。"
+  },
+  "executors": [
+    {
+      "name": "mock",
+      "version": "1.0.0",
+      "module": "mock.mjs",
+      "summary": "离线 mock 驱动：内置 HTTP 桩服务，端点集固定，用完即关。",
+      "offline": true,
+      "starts_builtin_service": true,
+      "base_url_source": "内置桩服务地址（http://127.0.0.1:<随机端口>），环境配置里不用写地址。",
+      "configurable": ["request", "assertions", "extract", "auth", "timeout_ms", "retries", "multi_step", "request_carrier", "assertion_binding"],
+      "not_supported": [
+        "自定义响应体",
+        "自定义响应状态码",
+        "请求延迟之外的时间相关行为",
+        "浏览器自动化",
+        "截图",
+        "压测并发",
+        "安全扫描"
+      ],
+      "notes": "端点集固定在 executors/mock-endpoints.json：/ok、/created、/notfound、/error、/echo、/token、/slow。需要新的响应场景时提需求，不要改执行器源码。"
+    },
+    {
+      "name": "api",
+      "version": "1.0.0",
+      "module": "api.mjs",
+      "summary": "真实 HTTP 驱动：按用例声明的请求打真实接口。",
+      "offline": false,
+      "starts_builtin_service": false,
+      "base_url_source": "环境配置 test-assets/environments/<环境名>.json 的 base_url。",
+      "configurable": ["request", "assertions", "extract", "auth", "timeout_ms", "retries", "multi_step", "request_carrier", "assertion_binding"],
+      "not_supported": [
+        "浏览器自动化",
+        "截图",
+        "多部分表单上传",
+        "压测并发",
+        "安全扫描"
+      ],
+      "notes": "请求构造完全由配置表达：改方法、路径、请求体、请求头都不需要改这里。"
+    }
+  ],
+  "not_implemented": ["ui", "load", "security"],
+  "not_implemented_note": "需求 F2 的 executor 枚举还包含 ui / load / security（分别属后续 REQ）。本 REQ 只交付 api 与 mock；选中未实现的执行器时，执行外壳直接报错并列出本表。"
+}
