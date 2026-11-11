@@ -1,0 +1,10 @@
+{
+  "req": "REQ-002.5a",
+  "branch": "feature/REQ-002.5a",
+  "agent_id": "dev-0025a",
+  "session_id": "proc-pending",
+  "owner": "dev-0025a",
+  "base_branch": "develop",
+  "created_at": "2026-11-11T17:40:00+08:00",
+  "demand_dir": "BA/demands/REQ-002-suite-foundation/REQ-002.5a-state-advance"
+}
