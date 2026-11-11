@@ -3,13 +3,16 @@
 //
 // 用法: node scripts/validate-cases.mjs <cases.json>
 //       node scripts/validate-cases.mjs --init     （输出字段齐备的 v2 骨架到 stdout）
+//       node scripts/validate-cases.mjs --help     （打印本用法说明）
 // 退出码: 0 = 校验通过, 1 = 校验失败, 2 = 调用方式错误
+//   2 = 调用方式错误：没有给文件路径、给了未知参数、或 --init 搭配了文件参数。
+//       --help / -h 属"调用方式错误"，退出码同样是 2（与 check-methods.mjs 口径一致）。
 //
 // 纯 Node.js 实现，只依赖 node: 内置模块。
 // 只读取并解析 JSON 文件：不发起任何网络请求，也不执行需求文本或用例文本中的任何内容。
 //
 // 向后兼容规则：顶层未声明 "schema_version": 2 时按 v1 宽松规则处理——
-//   open_questions / coverage_matrix / cases[].method / cases[].status 缺失只报 WARN；
+//   open_questions / coverage_matrix / cases[].method / cases[].status 缺失时仅记 WARN（不阻断退出码）；
 //   显式声明 "schema_version": 2 时同样情形一律升级为 ERROR（声明了 v2 就要守 v2 的规矩）。
 //   注意：字段“存在但内容非法”在两种模式下都是 ERROR，宽松的只是“缺字段”这一件事。
 
@@ -193,7 +196,7 @@ function warn(message) {
   warnings.push(message);
 }
 
-// 缺失类问题：严格模式升级为 ERROR，宽松模式（v1 兼容）只报 WARN
+// 缺失类问题：严格模式升级为 ERROR，宽松模式（v1 兼容）仅记 WARN（不阻断退出码）
 function failOrWarn(message) {
   if (strict) {
     problems.push(message);
@@ -213,8 +216,10 @@ function isFilledString(value) {
 // skipped[].method 的合法取值有两种形态（D11）：
 //   1) 方法编号（如 "M1.4"）—— 旧写法，行为完全不变
 //   2) 维度跳过标识（如 "dimension:concurrency"）—— 新增，见 references/case-schema.md
-// 维度名不在 8 个覆盖维度枚举内时只报 WARN：写法合法但很可能拼错了，
-// 报 ERROR 会把"名字不认识"和"格式非法"混为一谈，也会误伤合法的新维度扩展。
+// 维度名对不上覆盖维度枚举时报 ERROR（D15）：写法合法但名字很可能拼错了，
+// 而拼错的跳过声明从来不会生效 —— 若只记 WARN，就会让"校验通过"与
+// "那条维度实际并没有被跳过"同时成立，属虚报。
+// 判定依据是可机械判定的事实（名字不在枚举里），故归 ERROR 而非 WARN。
 function skipTargetKind(value) {
   if (!isFilledString(value)) return 'empty';
   const trimmed = value.trim();
@@ -910,8 +915,33 @@ function selfCheckSkeleton(doc) {
   return issues;
 }
 
+// 用法说明（--help / 用法错误时打印）
+const USAGE = [
+  '用法: node scripts/validate-cases.mjs <cases.json>',
+  '      node scripts/validate-cases.mjs --init     （输出字段齐备的 v2 骨架到 stdout）',
+  '      node scripts/validate-cases.mjs --help     （打印本用法说明）',
+].join('\n');
+
 function main() {
   const argv = process.argv.slice(2);
+
+  // --- --help / -h：属"调用方式错误"，退出码 2 ---
+  // 与 check-methods.mjs 口径一致（两个脚本头都声明「2 = 调用方式错误」）：
+  // --help 不是用例集文件路径，是调用方式错误，不是"用例集读不出来"。
+  if (argv.includes('--help') || argv.includes('-h')) {
+    emit(USAGE);
+    process.exit(2);
+  }
+
+  // --- 未知参数：同样属"调用方式错误"，退出码 2 ---
+  // 已知开关只有 --init（以及上面的 --help / -h）；
+  // 其它以 "-" 开头的参数一律判用法错误，不当作用例集文件路径（那会退化成 rc=1 的读文件失败）。
+  const unknown = argv.find((arg) => arg.startsWith('-') && arg !== '--init');
+  if (unknown !== undefined) {
+    emit(`用法错误: 未知参数: ${unknown}`);
+    emit(USAGE);
+    process.exit(2);
+  }
 
   // --- --init：输出字段齐备的 v2 骨架（纯增量，不影响原有校验路径） ---
   if (argv.includes('--init')) {
@@ -938,7 +968,7 @@ function main() {
   const file = argv[0];
 
   if (!file) {
-    emit('用法: node scripts/validate-cases.mjs <cases.json>');
+    emit(USAGE);
     process.exit(2);
   }
 
