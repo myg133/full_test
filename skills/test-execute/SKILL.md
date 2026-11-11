@@ -38,6 +38,17 @@ description: |
    环境配置里只有 `*_env` 变量名，真实值运行时从进程环境变量读。产物、日志、错误信息里不得出现凭证明文。
    读不到环境变量时该用例判 `blocked`（**不是** `failed`）—— 环境缺失和用例失败是两回事。
 
+5. **歧义显式拒，不替需求方裁定。**
+   用例级请求载体（`case.request` / `case.data.request`）与 step 级请求指向**不同端点**时，
+   "这次是一次调用还是多次调用"是**需求方的意图** —— 实现不替需求方猜：
+   该用例判 `blocked`（`conflicting_request_carrier`），**不得判 `passed`**，
+   也不静默丢掉其中一边的请求。两条都要：**要么执行，要么显式拒**。
+
+6. **证据链说的必须与实际做的一致。**
+   `reproduction.steps` 只记**实际执行过**的步骤，一个都不能多、也不能少；
+   一个请求都没执行时（凭证缺失、载体冲突）才回退到用例声明的步骤 ——
+   那表达的是"要复现得跑这些"，不是"这些跑过了"。
+
 ## Inputs to collect
 
 - **执行配置 `suite.json`**：`suite` / `requirement` / `scope` / `environment` / `cases_file` / `executor`
@@ -100,6 +111,22 @@ description: |
 **不得判 `passed`**。步骤之间不做隐式数据串联：`${name}` 只跨用例，不跨 step。
 每步的证据文件名带序号（`step-1-response.json` / `step-2-response.json`）。
 
+**载体冲突显式拒**：用例级载体与 step 级请求**同时**存在时，
+method + path 一致 → 视为同一次请求（只发一次，断言都绑到那一次响应）；
+不一致 → 判 `blocked`（`conflicting_request_carrier`），不静默丢掉其中一边，也不判 `passed`。
+
+**断言与响应的绑定规则**（可预期行为，不是隐藏实现）：
+
+| 情形 | 绑定 |
+|---|---|
+| 断言所在 step **可执行** | 绑到**该 step** 的响应 |
+| 用例只解析出**一次**请求 | 该用例**所有** step 上的断言都绑到那一次响应 |
+| 用例有**多次**请求，且断言所在 step **不可执行** | 判 `blocked`（`assertion_without_response`） |
+| 用例级载体与 step 级请求**冲突**（method+path 不一致） | 判 `blocked`（`conflicting_request_carrier`） |
+
+> **断言要写在它所描述的那个可执行 step 上。**
+> 写在叙述性 step 上的断言，在单请求用例会绑到那一次响应（多半是你想要的），在多请求用例会判 `blocked`。
+
 > **一条用例至少有一条 `steps[].expected` 是断言对象，才算可机械判定。**
 > 全部是普通字符串的用例执行时判 `blocked`（理由：缺少可机械判定的断言），
 > **不得判 `passed`** —— 执行器"跑完了没报错"不等于"通过"，把不可判定算成通过等于把"没测"记成"测过且通过"。
@@ -158,7 +185,9 @@ description: |
 
 - **用例判 `blocked`**：先看 `error.type`。`credential_missing` = 环境变量没设（环境缺失，不是用例失败）；
   `no_mechanical_assertion` = 该用例的 `steps[].expected` 全是字符串，补断言对象；
-  `environment_missing` / `request_spec_missing` = 配置缺项。
+  `environment_missing` / `request_spec_missing` = 配置缺项；
+  `conflicting_request_carrier` = 用例级载体与 step 级请求指向不同端点 —— **一次调用还是多次调用要需求方裁定**，
+  实现不替你选：改用例（去掉用例级载体，或让两边指向同一端点）再跑。
 - **用例判 `failed`**：看 `error.message` 里的断言明细与 `evidence/` 下的原始响应；
   `reproduction.command` 是可复制的复现命令（凭证以环境变量名出现，不含明文）。
 - **驱动起不来 / 未注册**：看 `executors/index.json`。`ui` / `load` / `security` 属后续 REQ，本 skill 只交付 `api` 与 `mock`。

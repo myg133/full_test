@@ -1,11 +1,19 @@
 # REQ-002.5b 验证报告
 
-- 需求：REQ-002.5b 执行 skill 与证据链（第二轮修复）
-- 分支：`feature/REQ-002.5B`｜基线 `881426e`
-- 验收：BA 的 `verify-acceptance.sh` → **19 PASS / 0 FAIL**；REQ-002A 回归 → **19 PASS / 0 FAIL**
-- 自验：`/tmp/qa-0025b/qa-0025b.mjs` → **27 PASS / 0 FAIL**
+- 需求：REQ-002.5b 执行 skill 与证据链（第三轮修复：载体冲突 + 复现信息 + 绑定规则入契约）
+- 分支：`feature/REQ-002.5B`｜基线 `51bd8af`
+- 验收：BA 的 `verify-acceptance.sh` → **21 PASS / 0 FAIL**；REQ-002A 回归 → **19 PASS / 0 FAIL**
+- 自验：`/tmp/qa-0025b/qa-0025b.mjs` → **28 PASS / 0 FAIL**；`/tmp/qa-0025b/qa-round3.mjs` → **8 PASS / 0 FAIL**
 
-## 本轮改了什么
+## 第三轮改了什么（D20 / D21 / D22）
+
+| 任务 | 落点 |
+|---|---|
+| D20 载体冲突判 blocked | `scripts/lib/suite-loader.mjs`（`requestSignature` / `describeRequest`；`resolveExecutionPlan` 检测用例级载体与 step 级请求的 method+path 是否一致，不一致即产出 `conflict`）、`scripts/lib/verdict.mjs`（`BLOCK_TYPES.CONFLICTING_REQUEST_CARRIER` + 冲突分支，判 blocked 不判 passed）、`scripts/run-suite.mjs`（冲突时**一个请求都不发**） |
+| D21 复现信息只记实际执行过的步骤 | `scripts/run-suite.mjs`（按执行器回报的 `steps[]` 反查计划里的动作，取代"回退到用例声明"的旧兜底）、`executors/http-core.mjs`（`describeRequest` 兜底：用例级载体那一次请求也要记进复现步骤） |
+| D22 绑定规则写进契约（只改文档） | `references/executor-spec.md`（新增 §2.2 断言与响应的绑定规则、§2.3 载体优先级与冲突判定、§2.4 复现信息；§2.1 表格补冲突行；§3 / §6 交叉引用；修正已过期的 mock 契约说明）、`SKILL.md`（硬约束第 5、6 条 + 可配置项里的绑定规则表与书写约定）、`executors/index.json`（`request_carrier` / `assertion_binding` 两个可配置项） |
+
+## 第二轮改了什么
 
 | 任务 | 落点 |
 |---|---|
@@ -22,6 +30,11 @@
 | 多步：首步成立、次步不成立 | `failed`，证据 2 份（`step-1-response.json` / `step-2-response.json`） |
 | 多步：两步都成立 | `passed`，证据 2 份 |
 | 断言所在 step 不可执行 | `blocked`（`assertion_without_response`），不是 passed |
+| **用例级载体 + 不同端点的 step** | `blocked`（`conflicting_request_carrier`），证据 0 份 —— 不判 passed，不静默丢请求 |
+| **用例级载体 + 同端点的 step** | 视为同一次请求 → `passed`，证据 1 份 == 复现步骤 1 步 |
+| **复现信息与证据条数一致** | 多请求用例：证据 2 份 == 复现步骤 2 步；凭证缺失时回退到用例声明的步骤 |
+| 单请求 + 叙述性 step 带断言 | `passed`（规则 4 保留：叙述性 step 的断言绑到那一次响应） |
+| 多请求 + 叙述性 step 带断言 | `blocked`（`assertion_without_response`） |
 | 轮次集成 | `stages.execute.runs[]` 含 run_id；重复 run_id 幂等（两项不重复） |
 | 契约放开 | `executor=mock`、环境 `driver=mock`、`stages.execute.runs[]` 判合法；非法取值仍被拦 |
 | 完整性自检 | 改执行器一个字节 → exit 1；改回 → exit 0（清单已随源码重新生成） |
@@ -29,18 +42,16 @@
 
 ## 本轮修掉的实现缺陷
 
-1. **多步只跑第一步**（P0）：断言被拿第一个响应当判据 → 首步成立次步不成立会报 passed。
-   现在逐步执行、断言绑定到所在 step 的响应。
-2. **执行错误被"无响应"掩盖**：凭证缺失时错误类型被报成 `assertion_without_response`。
-   现在判定顺序为「执行错误 → 计划层不可绑定 → 运行时无响应 → 逐条判定」。
-3. **轮次追溯无处安放**：run_id 塞在 `artifacts` 里不可查 → 改为 `stages.execute.runs[]`（经 `cycle-state.mjs --run`）。
+1. **载体冲突静默丢 step 级请求**（P0，D20）：用例级载体存在时，step 级请求被整体忽略，
+   后一条断言被拿去判前一次响应 → 半个用例报 passed。现在判 `blocked`（`conflicting_request_carrier`），一个请求都不发。
+2. **`reproduction.steps` 谎称执行过没跑的步骤**（P0，D21）：执行器没给复现步骤时回退到用例声明的步骤，
+   而"用例想跑什么"不等于"实际跑了什么"。现在按执行器回报的步骤推导；一个请求都没执行时才回退到声明。
+3. **用例级载体那一次请求在复现信息里丢失**（D21）：`action` 为空被过滤掉。现在用 `METHOD /path` 兜底描述。
 
 ## 已知限制与待上游处理
 
-1. **规则 4 与规则 5 的重叠处**（需求 D12/D13 的措辞冲突）：用例只解析出**一次**请求时，
-   所有断言都针对这同一次响应（规则 4）；此时若某条断言所在 step 不可执行，
-   实现按规则 4 判（拿这唯一响应去判，通常 `failed` 而非 `blocked`）。
-   多请求时规则 5 生效（`blocked`）。实现选择已在 `executor-spec.md` §2.1 写明。
+1. **载体冲突的裁定权在需求方**（D20）：冲突时实现只判 `blocked` 并说清两边指向哪里，
+   不替需求方选"一次调用"还是"多次调用"—— 这是刻意的：猜错会让报告与用例意图不符。
 2. **`ui` / `load` / `security` 三个执行器未实现**（属后续 REQ；注册表已用 `not_implemented` 声明）。
 3. **`verify-integrity.mjs --update` 是维护者路径**，不是定制路径（已在 SKILL.md 与 executor-spec §8 警示）。
 4. **复现命令不含鉴权头，只含环境变量名**（需求 D19 的已知限制）：带鉴权的用例不能照抄命令跑通。

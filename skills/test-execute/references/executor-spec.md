@@ -75,7 +75,8 @@ F8 的"脱敏在写入前"；两者以本接口调和。
 - `evidence[]`：证据条目。`path` 是相对该用例证据目录的文件名（如 `response.json`），
   `content` 是**内容本体**（字符串或 JSON 对象）。
   **执行器不落盘** —— 落盘由执行外壳做，因为脱敏必须发生在写入之前（见 `references/evidence-chain.md` §5）。
-- `reproduction`：复现信息。失败与阻塞的用例必须有 `steps`（照抄用例步骤即可）；
+- `reproduction`：复现信息。失败与阻塞的用例必须有 `steps`；
+  `steps` 只写**实际执行过**的步骤（见 §2.4），不照抄用例里没跑的步骤。
   能给出复现命令的驱动还应给 `command`（凭证以**环境变量名**出现，不含明文）。
 - `error`：出错时的错误描述 `{type, message}`。`type` 决定判定结果（见 §6）。
 
@@ -88,7 +89,8 @@ F8 的"脱敏在写入前"；两者以本接口调和。
 
 | 情形 | 跑几次请求 | 断言怎么绑 |
 |---|---|---|
-| 用例级载体 `case.request` / `case.data.request` | 1 次 | **所有** step 的断言都针对这同一次响应（合法的"一次响应多条断言"） |
+| 用例级载体 `case.request` / `case.data.request`，且与所有 step 级请求**一致** | 1 次 | **所有** step 的断言都针对这同一次响应（合法的"一次响应多条断言"） |
+| 用例级载体与 step 级请求**冲突**（method+path 不一致） | 0 次 | 没有可判的响应 → 判 `blocked`（`conflicting_request_carrier`，见 §2.3） |
 | 无用例级载体，多个可执行 step | 每个可执行 step 各 1 次 | 每条断言绑定到**它自己所在 step** 的响应 |
 | 无用例级载体，只有一个可执行 step | 1 次 | 所有断言都针对这同一次响应 |
 | 无任何可执行 step | 0 次 | 没有可判的响应 → 判 `blocked`（`assertion_without_response`） |
@@ -100,7 +102,72 @@ F8 的"脱敏在写入前"；两者以本接口调和。
 - 步骤之间**不做隐式数据串联**：`${name}` 仍只跨**用例**（前一个用例 `extract` 的值供后一个用例用），
   不跨 step。跨 step 串联意味着 step 2 依赖 step 1 的响应，判定就不再是"一次请求一组断言"。
 - 证据逐步留痕：每步至少一份证据，文件名带步骤序号（`step-1-response.json` / `step-2-response.json`）。
-- `reproduction.steps` 只写**实际执行过**的步骤，不照抄用例里没跑的步骤。
+- `reproduction.steps` 只写**实际执行过**的步骤，不照抄用例里没跑的步骤（见 §2.4）。
+
+---
+
+## 2.2 断言与响应的绑定规则
+
+一条断言要能判，就得有**一个确定的响应**可判。绑定规则按下表定：
+
+| 情形 | 绑定 |
+|---|---|
+| 断言所在 step **可执行** | 绑到**该 step** 的响应 |
+| 用例只解析出**一次**请求 | 该用例**所有** step 上的断言都绑到那一次响应 |
+| 用例有**多次**请求，且断言所在 step **不可执行** | 判 `blocked`（`assertion_without_response`） |
+| 用例级载体与 step 级请求**冲突**（method+path 不一致） | 判 `blocked`（`conflicting_request_carrier`，见 §2.3） |
+
+**第 2 行的适用范围**：它只在"这个用例确实只解析出一次请求"时成立 ——
+即用例级载体与所有 step 级请求一致，或全用例只有一个可执行 step。
+它**不是**"拿第一个响应当所有断言的判据"的通用许可：
+多请求用例里，某条断言所在 step 不可执行时，它绑不到任何确定的响应 → 判 `blocked`，不猜。
+
+**书写约定**（给调用方的指引，不是校验规则）：
+
+> **断言要写在它所描述的那个可执行 step 上。**
+> 写在叙述性 step 上的断言，在单请求用例会绑到那一次响应（多半是你想要的），
+> 在多请求用例会判 `blocked`。
+
+---
+
+## 2.3 请求载体的优先级与冲突判定
+
+一个用例的请求可能写在两个地方：
+
+- **用例级载体**：`case.request` 或 `case.data.request` —— 描述"这个用例要打哪个接口"
+- **step 级请求**：`step.request`，或 `step.action` 能解析成 `METHOD /path` —— 描述"这一步打哪个接口"
+
+两者**同时**存在时：
+
+| 比较结果 | 处理 |
+|---|---|
+| method + path **一致** | 视为**同一次请求**（step 只是把同一次调用又描述了一遍）。只发一次请求，所有断言绑到那一次响应 |
+| method + path **不一致** | 判 `blocked`（`error.type = conflicting_request_carrier`），**一个请求都不发** |
+
+**比较口径**：method + path，path 用**模板原文**（不插值）——
+`{id}` 插值后可能变成不同值，模板更稳定，也才是"用例作者写了什么"的忠实反映。
+method 缺省 `GET`，path 缺省 `/`。
+
+**为什么不替需求方裁定**：这次调用到底是一次还是多次，是**需求方的意图**。
+静默丢掉一边会让"半个用例"报通过（虚报），替需求方猜一边则会让报告与用例意图不符。
+所以两条都不走：**要么执行，要么显式拒** —— 冲突时显式拒（判 `blocked`），
+并在错误信息里说清"用例级载体指向 X、step 指向 Y，是一次调用还是多次调用需要需求方裁定"。
+
+> 判 `blocked` 的前提是"不许静默丢弃"：**绝不判 `passed`**。
+
+---
+
+## 2.4 复现信息：只记实际执行过的步骤
+
+`results.json` 的 `reproduction.steps` 是**复现信息**，不是**用例声明**。
+两者不一致，证据链说的就与实际做的不一致，整条链不可信。
+
+| 情形 | `reproduction.steps` |
+|---|---|
+| 执行过请求 | **实际执行过**的步骤：一个都不能多、也不能少（与证据份数一一对应） |
+| 一个请求都没执行（判 `blocked`：凭证缺失、载体冲突……） | 回退到用例声明的 steps —— 表达的是"要复现得跑这些"，不是"这些跑过了" |
+
+用例级载体那条路径下，那一次请求同样要记进复现步骤（动作描述用 `METHOD /path`）。
 
 ## 2. 断言载体：`steps[].expected` 的两种形态
 
@@ -142,6 +209,9 @@ F8 的"脱敏在写入前"；两者以本接口调和。
 **载体优先级**：`case.request` → `case.data.request` → `case.steps[].request`。
 都没有时，从步骤描述里回退解析 `METHOD /path` 形式（例如 `action` 写成 `"GET /ok"` 就能直接驱动执行）。
 显式配置优先于回退解析。
+
+> 用例级载体与 step 级请求**同时**存在时的优先级与冲突处理，见 **§2.3** ——
+> method+path 一致视为同一次请求，不一致判 `blocked`，不静默丢弃任何一边。
 
 `${变量}` 占位符来自前序用例的 `extract`：
 
@@ -197,6 +267,8 @@ F8 的"脱敏在写入前"；两者以本接口调和。
 | `environment_missing` | `blocked` | 环境缺失 |
 | `request_spec_missing` | `blocked` | 用例没有声明请求，不知道该打哪 |
 | `no_mechanical_assertion` | `blocked` | 该用例没有可机械判定的断言 |
+| `assertion_without_response` | `blocked` | 断言所在 step 不可执行，没有可判的响应（见 §2.2） |
+| `conflicting_request_carrier` | `blocked` | 用例级载体与 step 级请求冲突，一次还是多次需需求方裁定（见 §2.3） |
 | `timeout` | `failed` | 请求超时 |
 | `network_error` | `failed` | 网络错误 |
 | `assertion_failed` | `failed` | 有断言不成立 |
@@ -242,14 +314,12 @@ F8 的"脱敏在写入前"；两者以本接口调和。
 
 | 方式 | 例子 | 说明 |
 |---|---|---|
-| 环境配置声明 `driver` | `test-assets/environments/mock.json` 里写 `"driver": "mock"` | 优先级最高 |
-| `suite.json` 的 `executor` 字段 | `"executor": "mock"` | REQ-002B 的目录契约里 `executor` 枚举目前是 `api` / `ui` / `load` / `security` |
+| 环境配置声明 `driver` | `test-assets/environments/local.json` 里写 `"driver": "mock"` | 优先级最高 |
+| `suite.json` 的 `executor` 字段 | `"executor": "mock"` | REQ-002B 的目录契约已放开 `mock` 取值 |
 
-> **待对齐项**：两种写法都能选中 mock，但 `suite.json.executor = "mock"` 与
-> 环境配置里的 `driver` 字段都超出 REQ-002B 现行的目录契约，
-> `verify-layout.mjs` 会把它们判成违规取值。契约侧的放开由 REQ-002B 的维护方处理
-> （`suite.json` 的 `executor` 枚举与环境配置的字段基线两处）。
-> 在契约放开之前，本 skill 两种写法都接受，`verify-layout.mjs` 的报错可预期。
+> 两种写法都被 `verify-layout.mjs` 接受：`suite.json.executor` 的枚举含 `mock`，
+> 环境配置的字段基线含 `driver`（取值限 `api` / `mock`）。
+> 项目自带的 `_schema.json` 若还没声明 `driver`，该键按"容忍键"放行（取值仍然受限于 `api` / `mock`）。
 
 `ui` / `load` / `security` 属后续 REQ，本 skill 不交付：选中时执行外壳直接报错并列出已注册的驱动。
 

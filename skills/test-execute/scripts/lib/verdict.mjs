@@ -42,6 +42,7 @@ export const BLOCK_TYPES = Object.freeze({
   ENVIRONMENT_MISSING: 'environment_missing',
   REQUEST_SPEC_MISSING: 'request_spec_missing',
   ASSERTION_WITHOUT_RESPONSE: 'assertion_without_response',
+  CONFLICTING_REQUEST_CARRIER: 'conflicting_request_carrier',
   EXECUTOR_ERROR: 'executor_error',
 });
 
@@ -152,6 +153,37 @@ export function decide(spec) {
     };
   }
 
+  // 载体冲突（计划层就发现的歧义）：用例级载体与 step 级请求指向不同的端点。
+  // 是"一次调用"还是"多次调用"是需求方的意图 —— 实现不替需求方裁定，
+  // 所以既不静默丢掉哪一边，也不判 passed，直接判 blocked。
+  const conflict = isObject(plan.conflict) ? plan.conflict : null;
+  if (conflict) {
+    const caseLabel =
+      isObject(conflict.case_request) && typeof conflict.case_request.label === 'string'
+        ? conflict.case_request.label
+        : '（未知）';
+    const where = (Array.isArray(conflict.steps) ? conflict.steps : [])
+      .map((item) => {
+        const label =
+          isObject(item) && typeof item.label === 'string' && item.label !== '' ? item.label : '（未知）';
+        return `steps[${isObject(item) ? item.step_index : '?'}]（${label}）`;
+      })
+      .join('、');
+    return {
+      ...empty,
+      status: STATUS.BLOCKED,
+      error: {
+        type: BLOCK_TYPES.CONFLICTING_REQUEST_CARRIER,
+        message:
+          `用例级请求载体与 step 级请求冲突：用例级载体指向 ${caseLabel}，` +
+          `${where} 指向不同的端点。是同一次调用还是多次调用，需要需求方裁定 —— ` +
+          '实现不替需求方猜，所以该用例判 blocked（不得判 passed），' +
+          '也不会静默丢掉其中一边的请求',
+      },
+      reason: '用例级载体与 step 级请求冲突',
+    };
+  }
+
   // 计划层就不可绑定的断言（所在 step 不可执行）→ 没有响应就判不了，判不了就 blocked。
   // 放在执行错误之后：环境/凭证问题要先报出来，它比用例写法问题更根本。
   const planUnbound = Array.isArray(plan.unbound) ? plan.unbound : [];
@@ -194,9 +226,11 @@ export function decide(spec) {
     .map((item) => {
       const where = `steps[${item.step_index}]`;
       const note =
-        item.bound_to_step !== undefined && item.bound_to_step !== item.step_index
-          ? `（该用例只解析出一次请求，本次断言针对的是 steps[${item.bound_to_step}] 的响应）`
-          : '';
+        item.bound_to_step === null
+          ? '（该用例只解析出一次请求，本次断言针对的是这同一次响应）'
+          : item.bound_to_step !== undefined && item.bound_to_step !== item.step_index
+            ? `（该用例只解析出一次请求，本次断言针对的是 steps[${item.bound_to_step}] 的响应）`
+            : '';
       return `${where} ${item.path} ${item.op} ${JSON.stringify(item.expected)} 不成立${note}`;
     })
     .join('; ');

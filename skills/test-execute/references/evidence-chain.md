@@ -91,7 +91,7 @@
 | `started_at` / `finished_at` | string | 是 | ISO-8601 时间戳 |
 | `duration_ms` | number | 是 | 该用例耗时（毫秒） |
 | `evidence` | object[] | 是 | `{path, sha256, bytes, media_type}`；`path` 相对产物目录 |
-| `reproduction` | object | 是 | `{steps: [], command, expected}` —— 失败/阻塞时必填。`steps` 只写**实际执行过**的步骤 |
+| `reproduction` | object | 是 | `{steps: [], command, expected}` —— 失败/阻塞时必填。`steps` 只写**实际执行过**的步骤（与证据份数一一对应）；一个请求都没执行时（判 `blocked`）才回退到用例声明的步骤 |
 | `error` | object\|null | 是 | `{type, message}` —— 失败/阻塞时必填 |
 
 `status` 的四种取值：
@@ -100,7 +100,7 @@
 |---|---|
 | `passed` | 全部断言成立 |
 | `failed` | 有断言不成立 / 执行报错 / 超时 |
-| `blocked` | 无法判定：缺少可机械判定的断言、凭证或环境缺失、驱动无法启动 |
+| `blocked` | 无法判定：缺少可机械判定的断言、凭证或环境缺失、驱动无法启动、请求载体冲突 |
 | `skipped` | 不执行：用例已废弃（`status: deprecated`）或用例自身被标记为 `blocked` |
 
 > **不可判定判 `blocked`，绝不判 `passed`。** 执行器"跑完了没报错"不等于"通过"；

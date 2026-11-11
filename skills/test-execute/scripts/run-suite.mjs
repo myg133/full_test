@@ -309,7 +309,12 @@ async function executeSuite(options) {
 
     let execution = { observed: null, evidence: [], reproduction: null, error: null };
 
-    if (credentials.missing.length > 0) {
+    if (plan.conflict) {
+      // 载体冲突：显式拒，一个请求都不发。
+      // 发哪一次、用例级载体和 step 级请求谁是准的，是需求方的意图 —— 不替需求方裁定。
+      // 判定由 verdict.mjs 给出（blocked / conflicting_request_carrier），这里只负责"不执行"。
+      execution = { observed: null, evidence: [], reproduction: null, error: null };
+    } else if (credentials.missing.length > 0) {
       execution = {
         error: {
           type: 'credential_missing',
@@ -400,18 +405,32 @@ async function executeSuite(options) {
       }
     }
 
-    // 复现信息只写**实际执行过**的步骤（不是照抄用例里没跑的步骤）
-    const executedActions = plan.requests.map((item) => item.action).filter((item) => item !== '');
-    const steps = executedActions.length > 0
-      ? executedActions
-      : (Array.isArray(caseObj.steps) ? caseObj.steps : [])
-          .map((step) => (step && typeof step.action === 'string' ? step.action : ''))
-          .filter((item) => item !== '');
+    // 复现信息只写**实际执行过**的步骤（需求 D21）。
+    // 判据是"执行器回报了哪些步骤"，不是"用例声明了哪些步骤"——
+    // 拿声明当执行，就是让证据链说的与实际做的不一致。
+    // 一个请求都没执行时（凭证缺失、载体冲突）才回退到用例声明的步骤，
+    // 那表达的是"要复现得跑这些"，不是"这些跑过了"。
+    const declaredSteps = (Array.isArray(caseObj.steps) ? caseObj.steps : [])
+      .map((step) => (step && typeof step.action === 'string' ? step.action : ''))
+      .filter((item) => item !== '');
+    const executedIndexes = new Set(
+      stepResults
+        .filter((item) => item && typeof item === 'object')
+        .map((item) => (item.step_index === undefined ? null : item.step_index)),
+    );
+    const executedActions = plan.requests
+      .filter((item) => executedIndexes.has(item.step_index))
+      .map((item) => item.action)
+      .filter((item) => item !== '');
+    const reportedActions =
+      execution.reproduction && Array.isArray(execution.reproduction.steps)
+        ? execution.reproduction.steps.filter((item) => typeof item === 'string' && item !== '')
+        : [];
+    const actualActions = executedActions.length > 0 ? executedActions : reportedActions;
+    const steps = actualActions.length > 0 ? actualActions : declaredSteps;
     const reproduction = execution.reproduction && typeof execution.reproduction === 'object'
       ? {
-          steps: Array.isArray(execution.reproduction.steps) && execution.reproduction.steps.length > 0
-            ? execution.reproduction.steps
-            : steps,
+          steps,
           command: typeof execution.reproduction.command === 'string' ? execution.reproduction.command : null,
           expected:
             typeof execution.reproduction.expected === 'string' && execution.reproduction.expected !== ''

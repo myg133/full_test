@@ -10,13 +10,13 @@
     },
     {
       "path": "http-core.mjs",
-      "sha256": "a2eca4a338bceced64b003a404409fe4afb1060b6e20e881283a7b909e9b6efe",
-      "bytes": 13494
+      "sha256": "dc71a22d564a76a5a4833acd6e71831258c796f96b9ee502017e45dc3c3e1612",
+      "bytes": 14258
     },
     {
       "path": "index.json",
-      "sha256": "5105200a227233fa2f23da8337cf2f036f6d31fc9ee80cb3bf31b1806aba98e1",
-      "bytes": 3416
+      "sha256": "1edda76da8d834a3ef93f80b773a9cc9af3275ef1cc90f09bd16a2ec8818a4d0",
+      "bytes": 4461
     },
     {
       "path": "mock-endpoints.json",

@@ -258,6 +258,24 @@ export function buildAuthCommand(auth) {
 }
 
 /**
+ * 把一个请求描述成 "METHOD /path"。
+ *
+ * 执行计划里大多数 step 自带动作描述，但用例级载体那条路径下没有 ——
+ * 那里这次请求就是"整个用例的那一次调用"。用请求本身描述它，
+ * 保证"发出去的请求"不会因为没有描述而在复现信息里消失（需求 D21）。
+ *
+ * @param {object} request 请求配置
+ * @returns {string}
+ */
+export function describeRequest(request) {
+  const method = String((request && request.method) || 'GET')
+    .trim()
+    .toUpperCase() || 'GET';
+  const rawPath = request && typeof request.path === 'string' ? request.path.trim() : '';
+  return `${method} ${rawPath !== '' ? rawPath : '/'}`;
+}
+
+/**
  * 生成 curl 形式的复现命令。
  *
  * 凭证以环境变量名出现（`${TOKEN_ENV}`），**不写真实值**。
@@ -350,6 +368,7 @@ export async function executePlan(caseObj, context) {
       }),
     );
     if (typeof item.action === 'string' && item.action !== '') executedActions.push(item.action);
+    else executedActions.push(describeRequest(request));
   }
 
   const last = steps.length > 0 ? steps[steps.length - 1] : null;

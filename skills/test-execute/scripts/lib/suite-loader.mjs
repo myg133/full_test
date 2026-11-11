@@ -294,37 +294,110 @@ export function stepRequest(step) {
 }
 
 /**
+ * 取一个请求的"身份"：方法 + 路径。
+ *
+ * 路径用**模板原文**，不做插值 —— 插值后 `{id}` 可能变成不同值，
+ * 模板更稳定，也才是"用例作者写了什么"的忠实反映。
+ *
+ * @param {object} request 请求配置
+ * @returns {{method: string, path: string}}
+ */
+export function requestSignature(request) {
+  if (!isObject(request)) return { method: 'GET', path: '/' };
+  const method =
+    typeof request.method === 'string' && request.method.trim() !== ''
+      ? request.method.trim().toUpperCase()
+      : 'GET';
+  const path =
+    typeof request.path === 'string' && request.path.trim() !== '' ? request.path.trim() : '/';
+  return { method, path };
+}
+
+/**
+ * 把一个请求描述成 "METHOD /path"。
+ *
+ * 用于复现步骤与冲突信息：既然请求本身没有人类可读的动作描述，
+ * 就用请求本身来描述它 —— 宁可朴素，也不要"没有描述"。
+ *
+ * @param {object} request 请求配置
+ * @returns {string}
+ */
+export function describeRequest(request) {
+  const signature = requestSignature(request);
+  return `${signature.method} ${signature.path}`;
+}
+
+/**
  * 解析一个用例的执行计划：跑哪些请求、每条断言绑到哪次响应。
  *
- * 规则（需求 F3 的多步语义）：
- *   1. 用例级载体（case.request / case.data.request）存在 → 整个用例只跑这一次请求，
+ * 规则（需求 F3 的多步语义 + D20 的载体冲突处理）：
+ *   1. 用例级载体（case.request / case.data.request）与 step 级请求**不一致**时
+ *      → 显式拒（conflict 非空）：到底是"一次调用"还是"多次调用"是需求方的意图，
+ *      实现不替需求方裁定，也不静默丢掉其中一边的请求。
+ *   2. 用例级载体存在且与所有 step 级请求一致（method+path 相同）→ 整个用例只跑这一次请求，
  *      所有 step 上的断言都针对这同一次响应（合法的"一次响应多条断言"）。
- *   2. 否则 → 每个可执行 step 各跑一次请求，按 steps 顺序。
- *   3. 断言归属它自己所在的 step；该 step 不可执行且用例不止一次请求时，
+ *   3. 无用例级载体 → 每个可执行 step 各跑一次请求，按 steps 顺序。
+ *   4. 断言归属它自己所在的 step；该 step 不可执行且用例不止一次请求时，
  *      这条断言没有可判的响应 → 判 blocked（assertion_without_response），不得判 passed。
  *
  * @param {object} caseObj 用例
  * @returns {{requests: {step_index: number|null, request: object, action: string}[],
  *            assertions: {assertion: object, stepIndex: number, action: string}[],
- *            unbound: {assertion: object, stepIndex: number, action: string}[]}}
+ *            unbound: {assertion: object, stepIndex: number, action: string}[],
+ *            conflict: object|null}}
  */
 export function resolveExecutionPlan(caseObj) {
   const assertions = collectAssertions(caseObj);
   const steps = isObject(caseObj) && Array.isArray(caseObj.steps) ? caseObj.steps : [];
   const caseLevel = caseRequest(caseObj);
-  const requests = [];
-  if (caseLevel) {
-    requests.push({ step_index: null, request: caseLevel, action: '' });
-  } else {
-    steps.forEach((step, index) => {
-      const request = stepRequest(step);
-      if (!request) return;
-      requests.push({
-        step_index: index,
-        request,
-        action: isObject(step) && typeof step.action === 'string' ? step.action : '',
-      });
+
+  // step 级请求：只有可执行 step 才有（step.request，或 action 能解析成 "METHOD /path"）
+  const stepRequests = [];
+  steps.forEach((step, index) => {
+    const request = stepRequest(step);
+    if (!request) return;
+    const declared =
+      isObject(step) && typeof step.action === 'string' && step.action.trim() !== ''
+        ? step.action
+        : '';
+    stepRequests.push({
+      step_index: index,
+      request,
+      // 没有人类可读的动作描述时，用请求本身描述它（"GET /ok"）
+      action: declared !== '' ? declared : describeRequest(request),
     });
+  });
+
+  const requests = [];
+  let conflict = null;
+
+  if (caseLevel) {
+    const caseSignature = requestSignature(caseLevel);
+    const mismatched = stepRequests.filter((item) => {
+      const signature = requestSignature(item.request);
+      return signature.method !== caseSignature.method || signature.path !== caseSignature.path;
+    });
+    if (mismatched.length > 0) {
+      // 载体冲突：一边是"整个用例跑这一次"，一边是"这一步跑那一次"。
+      // 不静默丢任何一边 —— 显式交给判定层（判 blocked）。
+      conflict = {
+        case_request: { ...caseSignature, label: describeRequest(caseLevel) },
+        steps: mismatched.map((item) => ({
+          step_index: item.step_index,
+          action: item.action,
+          ...requestSignature(item.request),
+          label: describeRequest(item.request),
+        })),
+      };
+    } else {
+      requests.push({
+        step_index: null,
+        request: caseLevel,
+        action: describeRequest(caseLevel),
+      });
+    }
+  } else {
+    requests.push(...stepRequests);
   }
 
   let unbound = [];
@@ -338,7 +411,7 @@ export function resolveExecutionPlan(caseObj) {
     const executable = new Set(requests.map((item) => item.step_index));
     unbound = assertions.filter((item) => !executable.has(item.stepIndex));
   }
-  return { requests, assertions, unbound };
+  return { requests, assertions, unbound, conflict };
 }
 
 /**
