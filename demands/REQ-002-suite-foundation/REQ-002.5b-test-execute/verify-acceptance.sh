@@ -478,6 +478,38 @@ else
   bad "AC-023 用例级载体缺 path 判 incomplete_request_carrier" "status=$S23 error.type=$T23（缺 path 是「补齐」，不是「二选一」—— 不该与 conflicting 混同）"
 fi
 
+# ---------------------------------------------------------------- AC-024
+# D25：step 级载体缺 path，与用例级载体缺 path 是同一类问题（补齐，不是二选一）。
+step "AC-024 step 级载体缺 path 判 incomplete_request_carrier"
+D24="$WORK/ac024"; make_project "$D24"
+cat > "$D24/test-assets/suites/REQ-001-coupon/cases.json" <<'CASE24'
+{ "schema_version": 2, "meta": {"source":"qa-0025b","generated_at":"2026-11-11T18:00:00+08:00","case_count":1},
+  "requirements":[{"id":"R-1","title":"step 载体缺 path","source_ref":"x","testable":true}], "open_questions": [],
+  "coverage_matrix":[{"requirement":"R-1","methods_applied":["M0.1"],"skipped":[],"dimensions":["functional"]}],
+  "cases":[{"id":"TC-001","title":"step 载体只有 method","requirement_refs":["R-1"],"dimension":"functional","priority":"P0","method":["M0.1"],"status":"active",
+    "request":{"method":"GET","path":"/ok"},
+    "steps":[{"action":"第一步","request":{"method":"GET"},"expected":{"path":"$.status","op":"equals","expected":"ok"}}]}]}
+CASE24
+node -e '
+const fs=require("fs"),f=process.argv[1];const o=JSON.parse(fs.readFileSync(f,"utf8"));
+o.driver="mock";fs.writeFileSync(f,JSON.stringify(o,null,2));
+' "$D24/test-assets/environments/local.json"
+S24="NOPROJ"; T24="NONE"
+if run_suite "$D24" >/dev/null 2>&1 && [ -n "$RUN_DIR" ]; then
+  T24="$(node -e '
+  const o=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));
+  const a=Array.isArray(o)?o:(o.results||o.cases||[]);
+  const r=a[0]||{};
+  console.log((r.status||"NONE")+"|"+(r.error&&r.error.type?r.error.type:"NONE"));
+  ' "$RUN_DIR/results.json" 2>/dev/null)"
+  S24="${T24%%|*}"; T24="${T24##*|}"
+fi
+if [ "$S24" = "blocked" ] && [ "$T24" = "incomplete_request_carrier" ]; then
+  ok "AC-024 step 级载体缺 path 判 incomplete_request_carrier"
+else
+  bad "AC-024 step 级载体缺 path 判 incomplete_request_carrier" "status=$S24 error.type=$T24（缺 path 是「补齐」，不是「二选一」—— 规则对两类载体一视同仁）"
+fi
+
 # ---------------------------------------------------------------- AC-007
 step "AC-007 产物中不含凭证明文"
 # 关键：密钥必须在**执行之前**就位，并且用例真的带鉴权走一遍请求。

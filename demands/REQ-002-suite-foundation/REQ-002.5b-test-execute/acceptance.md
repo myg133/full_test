@@ -174,3 +174,10 @@
 - **预期结果**: 判 `blocked`；`error.type` 为 `incomplete_request_carrier`（**不是** `conflicting_request_carrier` —— 缺路径与载体冲突是两种不同的修法：补齐 vs 二选一）
 - **理由**（D23）: 错误信息要指向**真正**的问题。误诊会让调用方去找一个不存在的冲突
 - **类型**: 功能
+
+### AC-024: step 级载体缺 `path` 同样判 `incomplete_request_carrier`
+- **前置条件**: 一条用例带 `request: {method: GET, path: /ok}`，`steps[]` 里有 `request: {method: GET}`（**缺 path**）
+- **测试步骤**: 执行后检查该用例的 `status` 与 `error.type`
+- **预期结果**: 判 `blocked`；`error.type` 为 `incomplete_request_carrier`（**不是** `conflicting_request_carrier` —— 缺 path 的 step 载体与用例级载体并不"冲突"，是它自己没写全）
+- **理由**（D25）: "缺 path 是补齐，不是二选一"这条规则与载体在哪一层无关；只对用例级载体生效等于规则只写了一半
+- **类型**: 功能
