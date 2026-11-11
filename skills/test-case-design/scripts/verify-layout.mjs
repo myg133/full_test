@@ -14,6 +14,15 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import process from 'node:process';
 
+// 状态机规则的**单一来源**：本文件不得自带第二份转移表 / 终态判定 /
+// status↔history 一致性判定，一律 import 复用（见 scripts/lib/state-machine.mjs）。
+import {
+  CYCLE_STATUSES,
+  ROUNDS,
+  checkCycleConsistency,
+  indexEntryMismatches,
+} from './lib/state-machine.mjs';
+
 // ---------------------------------------------------------------- 常量
 
 const ASSETS_DIR = 'test-assets';
@@ -42,13 +51,23 @@ const ENV_ALLOWED_FIELDS = Object.keys(ENV_FIELD_TYPES);
 const SUITE_REQUIRED = ['suite', 'requirement', 'scope', 'environment', 'cases_file', 'executor'];
 const SUITE_SCOPES = ['functional', 'security', 'load'];
 const SUITE_EXECUTORS = ['api', 'ui', 'load', 'security'];
+// suite.json 的顶层字段集是封闭的：出现表外字段（含 load_scenario / threat_model
+// 这类 scope 专属字段）一律判 FAIL。语义与 environments 的顶层封闭集合一致。
+const SUITE_ALLOWED_FIELDS = [
+  'suite',
+  'requirement',
+  'scope',
+  'environment',
+  'cases_file',
+  'executor',
+  'base_url_from',
+  'tags',
+  'report',
+];
 
 // cycle.json 的契约基线
-const ROUNDS = ['R1', 'R2', 'R3'];
-const ROUND_TYPES = ['new-requirement', 'regression', 'defect-verify'];
-const SCOPES = ['functional', 'security', 'load'];
-const CYCLE_STATUSES = ['planned', 'in_progress', 'completed', 'blocked', 'cancelled'];
-const STAGE_STATUSES = ['pending', 'in_progress', 'done', 'blocked', 'skipped'];
+// 注意：轮次状态枚举、阶段状态枚举、scope 枚举、轮次编号/类型枚举与状态机规则
+// 统一来自 scripts/lib/state-machine.mjs（单一来源），此处不再另立一份。
 
 // 环境变量名形态：大写字母 / 下划线开头
 const ENV_VAR_NAME_PATTERN = /^[A-Z_][A-Z0-9_]*$/;
@@ -347,6 +366,16 @@ function checkEnvironments(root, envDir, schema) {
     }
 
     validateEnvBaseline(data, rel);
+
+    // --- 检查 3：环境标识必须与文件名一致（契约 §3.2） ---
+    const expectedName = basename(file, '.json');
+    if (isFilledString(data.name) && data.name !== expectedName) {
+      problem(
+        `${rel}: name "${data.name}" 与环境文件名 "${expectedName}" 不一致：` +
+          '环境标识必须与文件名（不含 .json）完全一致',
+      );
+    }
+
     if (schema) {
       for (const issue of validateAgainstSchema(data, schema, '')) {
         addIssue(rel, issue.kind, issue.path, issue.text);
@@ -427,6 +456,18 @@ function checkSuite(file, root, envNames) {
     }
   }
 
+  // --- 顶层字段集是封闭的：scope 专属字段也不允许出现在 suite.json 里 ---
+  for (const key of Object.keys(data)) {
+    if (!SUITE_ALLOWED_FIELDS.includes(key)) {
+      addIssue(
+        rel,
+        'extra',
+        key,
+        `${key} 是多余的字段（suite.json 的顶层字段集是封闭的：${SUITE_ALLOWED_FIELDS.join(' / ')}）`,
+      );
+    }
+  }
+
   // --- tags ---
   if (data.tags !== undefined) {
     if (!isObject(data.tags)) {
@@ -492,115 +533,27 @@ function checkCycle(file, root) {
 
   if (!isFilledString(data.cycle_id)) {
     addIssue(rel, 'missing', 'cycle_id', 'cycle_id 缺少必填字段（或不是非空字符串）');
+  } else {
+    // §1 命名规则：轮次目录名 = 该目录 cycle.json 的 cycle_id 字段值
+    const expectedId = basename(dirname(file));
+    if (data.cycle_id !== expectedId) {
+      problem(
+        `${rel}: cycle_id "${data.cycle_id}" 与轮次目录名 "${expectedId}" 不一致：` +
+          '轮次目录名必须与 cycle_id 一致',
+      );
+    }
   }
   if (!isFilledString(data.requirement)) {
     addIssue(rel, 'missing', 'requirement', 'requirement 缺少必填字段（或不是非空字符串）');
   }
 
-  // --- 检查 9：枚举取值 ---
-  if (typeof data.round === 'string' && !ROUNDS.includes(data.round)) {
-    addIssue(rel, 'enum', 'round', `round 取值非法："${data.round}"（允许值: ${ROUNDS.join(' / ')}）`);
-  }
-  if (typeof data.round_type === 'string' && !ROUND_TYPES.includes(data.round_type)) {
-    addIssue(
-      rel,
-      'enum',
-      'round_type',
-      `round_type 取值非法："${data.round_type}"（允许值: ${ROUND_TYPES.join(' / ')}）`,
-    );
-  }
-  if (typeof data.status === 'string' && !CYCLE_STATUSES.includes(data.status)) {
-    addIssue(
-      rel,
-      'enum',
-      'status',
-      `status 取值非法："${data.status}"（允许值: ${CYCLE_STATUSES.join(' / ')}）`,
-    );
-  }
-  if (Array.isArray(data.scopes)) {
-    data.scopes.forEach((scope, index) => {
-      if (typeof scope === 'string' && !SCOPES.includes(scope)) {
-        addIssue(
-          rel,
-          'enum',
-          `scopes[${index}]`,
-          `scopes[${index}] 取值非法："${scope}"（允许值: ${SCOPES.join(' / ')}）`,
-        );
-      }
-    });
-  }
-
-  // --- 检查 10：跳过范围必须写明理由 ---
-  if (Array.isArray(data.scopes_skipped)) {
-    data.scopes_skipped.forEach((item, index) => {
-      const at = `scopes_skipped[${index}]`;
-      if (!isObject(item)) {
-        addIssue(rel, 'type', at, `${at} 类型错误：期望 object，实际 ${describeType(item)}`);
-        return;
-      }
-      if (typeof item.scope === 'string' && !SCOPES.includes(item.scope)) {
-        addIssue(
-          rel,
-          'enum',
-          `${at}.scope`,
-          `${at}.scope 取值非法："${item.scope}"（允许值: ${SCOPES.join(' / ')}）`,
-        );
-      }
-      if (!isFilledString(item.reason)) {
-        problem(`${rel}: ${at}.reason 为空：跳过必须写明可被 review 发现的理由`);
-      }
-    });
-  }
-
-  // --- stages 的阶段状态 ---
-  if (data.stages !== undefined) {
-    if (!isObject(data.stages)) {
-      addIssue(rel, 'type', 'stages', `stages 类型错误：期望 object，实际 ${describeType(data.stages)}`);
-    } else {
-      for (const [stage, body] of Object.entries(data.stages)) {
-        const at = `stages.${stage}`;
-        if (!isObject(body)) {
-          addIssue(rel, 'type', at, `${at} 类型错误：期望 object，实际 ${describeType(body)}`);
-          continue;
-        }
-        if (typeof body.status === 'string' && !STAGE_STATUSES.includes(body.status)) {
-          addIssue(
-            rel,
-            'enum',
-            `${at}.status`,
-            `${at}.status 取值非法："${body.status}"（允许值: ${STAGE_STATUSES.join(' / ')}）`,
-          );
-        }
-      }
-    }
-  }
-
-  // --- 检查 11：status 必须等于 history 最后一条的 to ---
-  if (!Array.isArray(data.history)) {
-    addIssue(rel, 'missing', 'history', 'history 缺少必填字段（或不是数组）：状态变更必须留痕');
-  } else if (data.history.length === 0) {
-    problem(`${rel}: history 为空：至少需要一条状态变更记录，才能校验 status 与 history 的一致性`);
-  } else {
-    const last = data.history[data.history.length - 1];
-    if (!isObject(last)) {
-      addIssue(rel, 'type', 'history[-1]', `history 最后一条类型错误：期望 object，实际 ${describeType(last)}`);
-    } else {
-      for (const key of ['from', 'to']) {
-        if (typeof last[key] === 'string' && !CYCLE_STATUSES.includes(last[key])) {
-          addIssue(
-            rel,
-            'enum',
-            `history[-1].${key}`,
-            `history[-1].${key} 取值非法："${last[key]}"（允许值: ${CYCLE_STATUSES.join(' / ')}）`,
-          );
-        }
-      }
-      if (typeof data.status === 'string' && typeof last.to === 'string' && data.status !== last.to) {
-        problem(
-          `${rel}: status "${data.status}" 与 history 最后一条的 to "${last.to}" 不一致：改状态时必须同时追加 history 记录`,
-        );
-      }
-    }
+  // --- 检查 9 / 10 / 11：轮次字段的类型、必填、枚举与一致性 ---
+  // 判定规则只有一份实现（scripts/lib/state-machine.mjs）：
+  // 转移表、终态、status↔history 一致性、scopes_skipped 记录的必填字段。
+  // 推进器 scripts/cycle-state.mjs 做准入判断时调用的是同一个入口
+  // （checkCycleConsistency），两边报出的是同一类问题。
+  for (const issue of checkCycleConsistency(data)) {
+    addIssue(rel, issue.kind, issue.path, issue.text);
   }
 }
 
@@ -648,6 +601,22 @@ function checkCycleIndex(file, root, cyclesDir) {
         `${at}.status`,
         `${at}.status 取值非法："${entry.status}"（允许值: ${CYCLE_STATUSES.join(' / ')}）`,
       );
+    }
+
+    // --- index 是 cycle 的派生视图：条目与 cycle.json 的 status / round 必须一致 ---
+    const cycleFile = join(cyclesDir, entry.id, 'cycle.json');
+    if (isFile(cycleFile)) {
+      const cycleRel = toSlash(relative(root, cycleFile));
+      const cycle = readJson(cycleFile, cycleRel);
+      if (cycle !== null && isObject(cycle)) {
+        const mismatches = indexEntryMismatches(entry, cycle);
+        for (const mismatch of mismatches) {
+          problem(
+            `${rel}: ${at} 与 ${cycleRel} 不一致（${mismatch}）：` +
+              'index 是 cycle 的派生视图，必须与轮次状态保持一致',
+          );
+        }
+      }
     }
   });
 }

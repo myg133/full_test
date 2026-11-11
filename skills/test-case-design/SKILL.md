@@ -40,14 +40,20 @@ description: |
 5. **按覆盖维度清单补齐**：功能 / 边界 / 异常 / 权限 / 数据 / 并发 / 性能 / 兼容，清单与维度取值见 `references/coverage-dimensions.md`。
    原因：维度清单是查漏网用的统一视角，每个维度都问一遍"这一条适用吗"，比凭经验想更容易发现被忽略的维度。维度不适用的，在报告里写明理由，不要静默跳过。
 
-6. **按 `references/case-schema.md` 产出用例 JSON**：编号 `TC-001` 递增，每条用例写清 `action` 与 `expected`，`requirement_refs` 指向它验证的条目。
-   原因：`expected` 写不出可判定结果的用例，等于没有验证点，后续执行时也无法判断通过与否。
+6. **先拿骨架，再填内容**：
+   ```
+   node scripts/validate-cases.mjs --init > cases.json
+   ```
+   `--init` 输出的是**字段齐备的 schema v2 骨架**（`schema_version` / `meta` / `requirements[]` / `open_questions[]` / `coverage_matrix[]` / `cases[]` 全部到位），骨架里的 `<...>` 是占位符，逐个替换成真实内容再往下填。
+   原因：只把字段清单写进文档，仍然是在靠模型的自觉填全字段——而 REQ-001 的实测已经证死了这个失败模式（模型会自信地少写一半，然后宣称"覆盖完整"）。从骨架往里填，"字段齐备"才是结构保证而不是叮嘱。字段语义见 `references/case-schema.md`：编号 `TC-001` 递增，每条用例写清 `action` 与 `expected`，`requirement_refs` 指向它验证的条目。
+   原因（续）：`expected` 写不出可判定结果的用例，等于没有验证点，后续执行时也无法判断通过与否。
 
 7. **运行校验脚本**，不通过就修复后重跑：
    ```
    node scripts/validate-cases.mjs cases.json
    ```
    原因：JSON 里的错漏（ID 重复、悬空引用、枚举取值写错）靠肉眼看几乎必然漏掉；脚本的退出码是"能不能交付"的客观门槛。
+   **注意**：`cases.json` 顶层必须写 `"schema_version": 2`。不写这一行，校验器按 v1 宽松规则处理，缺 `open_questions` / `coverage_matrix` / `cases[].method` / `cases[].status` **只报 WARN、退出码仍是 0**——强制就等于没有。声明了 `2`，同样情形一律升级为 ERROR（退出码 1）。
 
 8. **渲染报告与追溯矩阵**：
    ```
@@ -58,13 +64,73 @@ description: |
 9. **汇报覆盖情况**：给出需求条目总数、可测试条目数、用例总数、维度分布，并明确列出**未被覆盖的需求条目 ID** 与**未决问题**（需求本身的歧义、缺失的前置条件、口径未确认的点）。
    原因：发现需求缺陷是这套流程的主要价值之一；把歧义写成自己的假设会让缺陷永久消失，而假设一旦被下游当成需求，就再也找不回来了。
 
+10. **项目同时携带 `test-assets/` 时**：按 `references/project-layout.md` 摆放测试资产，再跑 `node scripts/verify-layout.mjs <project-root>`；轮次状态用 `node scripts/cycle-state.mjs` 推进（详见下一节）。
+   原因：布局与状态字段有独立的机器契约，靠肉眼看不出"字段齐了但取值非法"这类问题；而状态一旦与 `history` 对不齐，后面的证据链就不可信。
+
+## Test assets and cycle state scripts
+
+本 skill 还带了两条围绕用例集的契约脚本。**项目里有 `test-assets/` 时才需要用**；脚本只读或只写自己的状态文件，不会碰用例集。
+
+| 脚本 | 何时调用 | 命令 |
+|---|---|---|
+| `scripts/validate-cases.mjs` | 产出用例集时（先拿骨架） / 交付前校验 | `node scripts/validate-cases.mjs --init > cases.json`；`node scripts/validate-cases.mjs cases.json` |
+| `scripts/verify-layout.mjs` | 摆好测试资产（环境 / 套件 / 轮次目录）之后 | `node scripts/verify-layout.mjs <project-root>` |
+| `scripts/cycle-state.mjs` | 推进轮次状态、记录跳过的 scope、设置阶段状态 | `node scripts/cycle-state.mjs <子命令> <轮次目录> [参数...] [--json]` |
+
+`cycle-state.mjs` 的**五个子命令**（参数与状态转移表见 `references/state-machine.md`）：
+
+| 子命令 | 作用 | 关键参数 |
+|---|---|---|
+| `init` | 创建新轮次骨架 | `--cycle-id` `--round` `--round-type` `--requirement` `--scope`（可重复） `--by` |
+| `show` | 读当前状态：status / history / stages / **允许的下一步** | 轮次目录 |
+| `advance` | 推进轮次状态 | `--to <状态>` `--by <agent>` `[--reason <文本>]` |
+| `skip-scope` | 记录本轮跳过的 scope | `--scope <scope>` `--reason <文本>` `--by <agent>` |
+| `set-stage` | 设置阶段状态 | `--stage <名称>` `--status <状态>` `[--artifacts a,b]` |
+
+**可直接复制的完整调用序列**：
+
+```console
+# 1) 开一轮
+node scripts/cycle-state.mjs init test-assets/cycles/R1-REQ-001 \
+  --cycle-id R1-REQ-001 --round R1 --round-type new-requirement \
+  --requirement REQ-001 --scope functional --by dev-agent-1
+
+# 2) 开工
+node scripts/cycle-state.mjs advance test-assets/cycles/R1-REQ-001 --to in_progress --by dev-agent-1
+
+# 3) 推进阶段
+node scripts/cycle-state.mjs set-stage test-assets/cycles/R1-REQ-001 --stage design --status done
+
+# 4) 记录不跑的范围（必须给理由与执行者）
+node scripts/cycle-state.mjs skip-scope test-assets/cycles/R1-REQ-001 \
+  --scope load --reason "需求未给性能指标，无阈值可依" --by dev-agent-1
+
+# 5) 收工
+node scripts/cycle-state.mjs advance test-assets/cycles/R1-REQ-001 --to completed --by dev-agent-1 --reason "R1 全部用例执行完毕"
+
+# 6) 随时查当前状态与下一步
+node scripts/cycle-state.mjs show test-assets/cycles/R1-REQ-001 --json
+```
+
+配套文档：
+
+- `references/project-layout.md` —— 目录契约与字段表（环境配置 / 执行配置 / `cycle.json`）。校验器怎么判，依据就是这份文件。
+- `references/state-machine.md` —— 轮次状态转移表、终态、推进器全部子命令与原子性规则。
+
+**硬约束：状态文件只由脚本写。** `cycle.json` 与 `cycles/index.json` **不得直接编辑**，状态推进一律走 `cycle-state.mjs`：它先校验前置状态合法性，再原子写入（临时文件 + rename），并让 `status` 与 `history` 在同一次写入里保持自洽；索引写失败时会回滚 `cycle.json`，不留"轮次已推进、索引没跟上"的脱同步。手改两处必然对不齐，而对不齐的状态会让后续轮次的证据链整条作废。
+
+三个脚本的退出码语义一致：`0` = 成功，`1` = 校验失败或非法转移，`2` = 调用方式错误。**失败时目标文件不会被修改**，按报错里的文件路径与字段路径修完再重跑。`--json` 模式下 stdout 只有 JSON（agent 可直接 `JSON.parse`），包括用法错误这种场景。
+
 ## Output contract
 
-- **用例集 JSON**（单个文件），结构与字段语义见 `references/case-schema.md`：
+- **用例集 JSON**（单个文件），**必须声明 `"schema_version": 2`**，结构与字段语义见 `references/case-schema.md`：
+  - `schema_version`：`2`。**必须写这一行**——不写就按 v1 宽松规则校验，缺 `open_questions` / `coverage_matrix` / `cases[].method` / `cases[].status` 只报 WARN、退出码仍是 0，四项强制等于没生效；写上 `2`，同样情形一律升级为 ERROR（退出码 1）。
   - `meta`：`source`（需求来源标识）、`generated_at`（ISO-8601）、`case_count`（用例总数）
   - `requirements[]`：`id`、`title`、`source_ref`、`testable`
-  - `cases[]`：`id`、`title`、`requirement_refs`、`dimension`、`priority`、`preconditions`、`steps[{action, expected}]`、`data`、`tags`
-- **Markdown 报告**（`render-report.mjs` 的 stdout）：用例总览表、追溯矩阵（需求条目 → 覆盖用例 ID → 覆盖状态）、未覆盖需求条目清单。
+  - `open_questions[]`（v2）：`id`（`Q1` 起）、`question`、`requirement_refs[]`、`interpretations[{reading, impact}]`（**至少 2 条**——只列一种解读等于替需求方做了裁定）、`affected_cases[]`、`severity`（`blocking` / `non-blocking`）、`coverage`（`cases` / `deferred`，`deferred` 时须给 `defer_reason`）
+  - `coverage_matrix[]`（v2）：`requirement`、`methods_applied[]`、`skipped[{method, reason}]`（**跳过必须写原因**，空理由即 FAIL）、`dimensions[]`
+  - `cases[]`：`id`、`title`、`requirement_refs[]`、`dimension`、`priority`、`method[]`（v2）、`status`（v2：`active` / `deprecated` / `modified` / `blocked`）、`revision`（`status` 非 `active` 时必填）、`preconditions[]`、`steps[{action, expected}]`、`data`、`tags[]`
+- **Markdown 报告**（`render-report.mjs` 的 stdout）：用例总览表、追溯矩阵（需求条目 → 覆盖用例 ID → 覆盖状态）、未覆盖需求条目清单、未决问题、覆盖矩阵。
 - **覆盖汇报**：未覆盖需求条目 ID 列表 + 未决问题列表，两项都不能省略。
 
 ## Failure handling
@@ -92,6 +158,6 @@ description: |
 
 ## Windows (win32) platform notes
 
-- 两个脚本都是纯 Node.js，直接用 `node scripts/validate-cases.mjs cases.json` 调用，PowerShell 与 cmd 下行为一致。
+- 全部脚本都是纯 Node.js，直接用 `node scripts/validate-cases.mjs cases.json` 调用，PowerShell 与 cmd 下行为一致。
 - 路径交给 Node 解析（脚本内部走 `path.resolve`），不要写死盘符或类 Unix 绝对路径。
 - 临时文件放在当前工作目录下的子目录里（例如 `./tmp-cases/`），不要假定系统存在类 Unix 临时目录。
