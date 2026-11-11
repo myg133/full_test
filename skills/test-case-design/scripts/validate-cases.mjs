@@ -43,6 +43,87 @@ const QUESTION_SEVERITIES = ['blocking', 'non-blocking'];
 // 未决问题的覆盖方式
 const QUESTION_COVERAGES = ['cases', 'deferred'];
 
+// --- 结构化断言对象（REQ-002.5b 的断言载体）---
+//
+// steps[].expected 有两种形态：
+//   1) 普通字符串（人读的预期结果）—— REQ-002A 原有形态，行为完全不变
+//   2) 断言对象（机械可判定的规则）—— { path, op, expected }
+//
+// 断言对象里的 path / op / expected 必须合法；不合法即 ERROR。
+const ASSERT_OPS = [
+  'equals',
+  'not_equals',
+  'contains',
+  'not_contains',
+  'matches',
+  'exists',
+  'not_exists',
+  'type',
+  'gt',
+  'gte',
+  'lt',
+  'lte',
+];
+const ASSERT_TYPES = ['string', 'number', 'boolean', 'object', 'array', 'null'];
+const ASSERT_FIELDS = ['path', 'op', 'expected'];
+// 不需要 expected 的操作
+const ASSERT_OPS_WITHOUT_EXPECTED = ['exists', 'not_exists'];
+
+/**
+ * 校验一个断言对象。
+ *
+ * @param {object} value 待校验的断言对象
+ * @returns {string[]} 问题清单；空数组表示合法
+ */
+function validateAssertionObject(value) {
+  const issues = [];
+
+  for (const key of Object.keys(value)) {
+    if (!ASSERT_FIELDS.includes(key)) {
+      issues.push(`出现未知字段 "${key}"（允许字段: ${ASSERT_FIELDS.join(' / ')}）`);
+    }
+  }
+
+  if (!isFilledString(value.path)) {
+    issues.push('缺少必填字段 path（被检路径，如 "$.data.orderId" / "$status" / "$header.X-Trace-Id"）');
+  } else if (!value.path.startsWith('$')) {
+    issues.push(
+      `path 取值非法: "${value.path}"，必须以 "$" 开头` +
+        '（"$.a.b" 取响应体字段，"$status" 取 HTTP 状态码，"$header.X-Key" 取响应头）',
+    );
+  }
+
+  if (!isFilledString(value.op)) {
+    issues.push(`缺少必填字段 op（允许值: ${ASSERT_OPS.join(' / ')}）`);
+  } else if (!ASSERT_OPS.includes(value.op)) {
+    issues.push(`op 取值非法: "${value.op}"，允许值: ${ASSERT_OPS.join(' / ')}`);
+  } else if (ASSERT_OPS_WITHOUT_EXPECTED.includes(value.op)) {
+    if (value.expected !== undefined) {
+      issues.push(`op "${value.op}" 不接受 expected 字段（该操作只判断存在性）`);
+    }
+  } else if (value.expected === undefined) {
+    issues.push(`op "${value.op}" 缺少必填字段 expected（比较值）`);
+  } else if (value.op === 'type') {
+    if (!ASSERT_TYPES.includes(value.expected)) {
+      issues.push(
+        `expected 取值非法: "${value.expected}"（op 为 type 时只接受类型名: ${ASSERT_TYPES.join(' / ')}）`,
+      );
+    }
+  } else if (value.op === 'matches') {
+    if (!isFilledString(value.expected)) {
+      issues.push('expected 必须是非空字符串（op 为 matches 时是正则）');
+    } else {
+      try {
+        new RegExp(value.expected);
+      } catch (err) {
+        issues.push(`expected 不是合法正则: ${err.message}`);
+      }
+    }
+  }
+
+  return issues;
+}
+
 const problems = [];
 const warnings = [];
 
@@ -210,7 +291,13 @@ function validateCases(cases, requirementIds) {
         if (!isFilledString(step.action)) {
           fail(`${stepAt} 缺少必填字段 action（操作不能为空）`);
         }
-        if (!isFilledString(step.expected)) {
+        if (isObject(step.expected)) {
+          // 结构化断言对象（REQ-002.5b）：字段缺失或 op 非法都要点名报错
+          for (const issue of validateAssertionObject(step.expected)) {
+            fail(`${stepAt}.expected: ${issue}`);
+          }
+        } else if (!isFilledString(step.expected)) {
+          // 与放宽前完全一致的报错（纯字符串 expected 的旧用例集行为不变）
           fail(`${stepAt} 缺少必填字段 expected（预期结果不能为空）`);
         }
       });

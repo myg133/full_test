@@ -1,0 +1,226 @@
+// mock.mjs — 离线 mock 驱动（node 内置 http）
+//
+// 硬约束：本文件是 skill 的组成部分，agent 不得修改。
+//         需要新的响应场景时走"提需求"，不要改这里 —— 见 executors/index.json 的 not_supported。
+//
+// 本驱动只报告"观察到什么"（observed），不做任何通过/失败判定。
+// 判定规则是数据（用例 steps[].expected 里的断言对象），由执行外壳统一执行。
+//
+// 端点集固定，定义在 executors/mock-endpoints.json（数据，不在代码里）：
+//   /ok        → 正常
+//   /created   → 已创建
+//   /notfound  → 未找到
+//   /error     → 服务端错误
+//   /echo      → 回显 {method, path, query, body}（不回显敏感请求头）
+//   /token     → 含敏感字段的令牌响应（专门用来测脱敏）
+//   /slow?ms=N → 延迟 N 毫秒后返回（用来测 timeout）
+//   其他路径    → 未找到
+//
+// 注意：桩服务的响应**与断言无关**。把断言从期望"未找到"改成期望"正常"，
+// 桩仍然按端点表返回 —— 这样"判定随断言变化"才验得出来；
+// 若桩跟着断言变，判定永远成立，机制反而验不了。
+//
+// 纯 Node.js，只依赖 node: 内置模块。
+
+import { createServer } from 'node:http';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import {
+  buildAuthHeaders,
+  buildCurlCommand,
+  buildUrl,
+  interpolateDeep,
+  performRequest,
+} from './http-core.mjs';
+
+const here = dirname(fileURLToPath(import.meta.url));
+const endpointTable = JSON.parse(readFileSync(join(here, 'mock-endpoints.json'), 'utf8'));
+
+/** 驱动名 */
+export const name = 'mock';
+
+/** 驱动版本 */
+export const version = '1.0.0';
+
+let server = null;
+let serverUrl = null;
+
+/**
+ * 读取请求体。
+ * @param {object} req 请求对象
+ * @returns {Promise<string>}
+ */
+async function readRequestBody(req) {
+  const chunks = [];
+  for await (const chunk of req) chunks.push(chunk);
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+/**
+ * 写 JSON 响应。
+ * @param {object} res 响应对象
+ * @param {number} status 状态码
+ * @param {any} body 响应体
+ * @param {object} headers 附加响应头
+ */
+function writeJson(res, status, body, headers = {}) {
+  const payload = JSON.stringify(body);
+  res.writeHead(status, { 'content-type': 'application/json', ...headers });
+  res.end(payload);
+}
+
+/**
+ * 处理 mock 请求。
+ * @param {object} req 请求对象
+ * @param {object} res 响应对象
+ */
+async function handle(req, res) {
+  const url = new URL(req.url, 'http://127.0.0.1');
+  const path = url.pathname;
+  const endpoint = endpointTable.endpoints[path] || endpointTable.default;
+
+  if (endpoint.dynamic === 'echo') {
+    const raw = await readRequestBody(req);
+    let body = raw;
+    const contentType = String(req.headers['content-type'] || '');
+    if (contentType.includes('json') && raw !== '') {
+      try {
+        body = JSON.parse(raw);
+      } catch {
+        body = raw;
+      }
+    }
+    const query = {};
+    url.searchParams.forEach((value, key) => {
+      query[key] = value;
+    });
+    // 只回显 method / path / query / body：请求头里可能有凭证，不回显
+    writeJson(res, endpoint.status, { method: req.method, path, query, body });
+    return;
+  }
+
+  if (endpoint.dynamic === 'delay') {
+    const raw = url.searchParams.get('ms');
+    const asked = Number(raw);
+    const limit = Number(endpointTable.limits && endpointTable.limits.max_delay_ms) || 60000;
+    const delayMs = Number.isFinite(asked) && asked > 0 ? Math.min(asked, limit) : 0;
+    await new Promise((resolve) => {
+      setTimeout(resolve, delayMs);
+    });
+    writeJson(res, endpoint.status, endpoint.body || {});
+    return;
+  }
+
+  writeJson(res, endpoint.status, endpoint.body || {});
+}
+
+/**
+ * 启动内置 mock 服务（执行外壳在选中本驱动时调用）。
+ *
+ * @returns {Promise<{base_url: string}>}
+ */
+export async function start() {
+  if (server) return { base_url: serverUrl };
+  server = createServer((req, res) => {
+    handle(req, res).catch(() => {
+      try {
+        // 兜底响应取自端点表，不在代码里写死状态码
+        writeJson(res, endpointTable.default.status, endpointTable.default.body);
+      } catch {
+        res.end();
+      }
+    });
+  });
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const address = server.address();
+  const port = address && typeof address === 'object' ? address.port : 0;
+  serverUrl = `http://127.0.0.1:${port}`;
+  return { base_url: serverUrl };
+}
+
+/**
+ * 关闭内置 mock 服务（执行结束时调用）。
+ */
+export async function stop() {
+  if (!server) return;
+  await new Promise((resolve) => {
+    server.close(() => resolve());
+  });
+  server = null;
+  serverUrl = null;
+}
+
+/**
+ * 执行一条用例：向内置 mock 服务发一次真实 HTTP 请求，如实报告观察结果。
+ *
+ * @param {object} caseObj 用例
+ * @param {object} context 执行上下文
+ * @returns {Promise<object>}
+ */
+export async function run(caseObj, context) {
+  const request = context.request || {};
+  const variables = context.variables || {};
+  const method = String(request.method || 'GET').toUpperCase();
+  const path = interpolateDeep(request.path === undefined ? '/' : request.path, variables);
+  const headers = interpolateDeep(request.headers || {}, variables);
+  const body = request.body === undefined ? undefined : interpolateDeep(request.body, variables);
+
+  const auth = buildAuthHeaders(context.auth, context.resolved_credentials);
+  const missing = auth.missing;
+  if (missing.length > 0) {
+    return {
+      error: {
+        type: 'credential_missing',
+        message: `环境变量未设置: ${missing.join(' / ')}（读不到凭证 → 该用例算阻塞，不是失败）`,
+      },
+    };
+  }
+  const allHeaders = { ...headers, ...auth.headers };
+
+  const url = buildUrl(context.base_url, path, interpolateDeep(request.query || {}, variables));
+  const outcome = await performRequest({
+    url,
+    method,
+    headers: allHeaders,
+    body,
+    timeoutMs: context.timeout_ms,
+    retries: context.retries,
+  });
+  if (!outcome.ok) return { error: outcome.error };
+
+  const observed = outcome.observed;
+  const evidenceContent = `${JSON.stringify(
+    {
+      driver: name,
+      request: { method, path, url, auth_mode: auth.description },
+      response: { status_code: observed.status_code, headers: observed.headers, body: observed.body },
+    },
+    null,
+    2,
+  )}\n`;
+
+  return {
+    observed,
+    evidence: [{ path: 'response.json', media_type: 'application/json', content: evidenceContent }],
+    reproduction: {
+      steps: (Array.isArray(caseObj.steps) ? caseObj.steps : [])
+        .map((step) => (step && typeof step.action === 'string' ? step.action : ''))
+        .filter((item) => item !== ''),
+      command: buildCurlCommand({
+        method,
+        url,
+        headers: request.headers || {},
+        body,
+      }),
+      expected: (Array.isArray(caseObj.steps) ? caseObj.steps : [])
+        .map((step) => (step && typeof step.expected === 'string' ? step.expected : ''))
+        .filter((item) => item !== '')
+        .join('; '),
+    },
+  };
+}

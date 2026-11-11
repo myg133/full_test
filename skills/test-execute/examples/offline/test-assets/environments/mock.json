@@ -1,0 +1,7 @@
+{
+  "name": "mock",
+  "base_url": "http://127.0.0.1:0",
+  "timeout_ms": 5000,
+  "retries": 0,
+  "driver": "mock"
+}

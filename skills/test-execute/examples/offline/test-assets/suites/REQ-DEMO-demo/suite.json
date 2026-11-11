@@ -1,0 +1,8 @@
+{
+  "suite": "REQ-DEMO-demo",
+  "requirement": "REQ-DEMO",
+  "scope": "functional",
+  "environment": "mock",
+  "cases_file": "cases.json",
+  "executor": "api"
+}

@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "algorithm": "sha256",
+  "note": "执行器实现的完整性清单。scripts/verify-integrity.mjs 按它比对；改动执行器实现会让校验失败。",
+  "files": [
+    {
+      "path": "api.mjs",
+      "sha256": "0953657c94c9ebf7a83bba682d932050d463c105476f7da1a91b13809fb5ec7a",
+      "bytes": 3615
+    },
+    {
+      "path": "http-core.mjs",
+      "sha256": "02f4961cf50f624cbf89bf4252b154ac3cca02af9af48d5377f340b9b01f71a4",
+      "bytes": 8893
+    },
+    {
+      "path": "index.json",
+      "sha256": "fbda34802ef5d3b52df58caff438f59b09fb516224fa9651b4e864d8adcceea7",
+      "bytes": 3098
+    },
+    {
+      "path": "mock-endpoints.json",
+      "sha256": "24676d428ed26cdb26ed2bf64105a845e0f8a84b22e6975d6e857eccfb2d824f",
+      "bytes": 957
+    },
+    {
+      "path": "mock.mjs",
+      "sha256": "6221018badb1a9065c78e7fe95bf041ef8d84d43df6d1b5950861ab3ec5c05d3",
+      "bytes": 7340
+    }
+  ]
+}

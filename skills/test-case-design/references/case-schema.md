@@ -5,6 +5,9 @@
 当前版本：**schema v2**。v2 在 v1 基础上新增未决问题、覆盖矩阵与用例生命周期三组字段；
 未声明 `"schema_version": 2` 的旧用例集（v1 结构）仍可校验通过，详见「向后兼容规则」。
 
+`steps[].expected` 支持两种形态（REQ-002.5b 的向后兼容扩展）：普通字符串（人读）或结构化断言对象（机械可判定），
+不新增顶层或用例级字段，纯字符串 `expected` 的旧用例集行为完全不变。详见「`steps[]`」一节。
+
 ## 顶层结构
 
 ```json
@@ -198,7 +201,7 @@
 | `status` | string | 是² | `active` / `deprecated` / `modified` / `blocked` | 用例生命周期状态（v2 新增） |
 | `revision` | object | 条件 | `status` 非 `active` 时必填，且 `change` 非空 | 修订记录（v2 新增） |
 | `preconditions` | string[] | 否 | 数组 | 前置条件（环境、账号、数据状态） |
-| `steps` | object[] | 是 | 至少 1 条，每条含非空 `action` 与 `expected` | 执行步骤 |
+| `steps` | object[] | 是 | 至少 1 条，每条含非空 `action` 与 `expected`（`expected` 为非空字符串**或**结构化断言对象） | 执行步骤 |
 | `data` | object | 否 | 对象 | 用例数据（入参、期望值、样本集） |
 | `tags` | string[] | 否 | 数组 | 自由标签，便于按标签筛选 |
 
@@ -212,6 +215,44 @@
 
 - `action`：可执行的动作描述。写清输入什么、点哪里、调用什么接口。
 - `expected`：**可判定**的结果。避免"显示正常""功能可用"这类无法判断通过与否的表述；写清看到什么、返回什么值、什么状态。
+
+#### `expected` 的两种形态（REQ-002.5b 扩展，向后兼容）
+
+`expected` 有两种形态，**同一字段，不新增任何字段**：
+
+| 形态 | 示例 | 语义 |
+|---|---|---|
+| 普通字符串 | `"页面跳转到工作台并显示 alice"` | **人读**的预期结果。无法机械判定 |
+| 断言对象 | `{ "path": "$.status", "op": "equals", "expected": "ok" }` | **机械可判定**的规则 |
+
+```jsonc
+{ "action": "提交订单", "expected": { "path": "$.status", "op": "equals", "expected": "ok" } }
+{ "action": "查询订单", "expected": "订单状态为已支付" }
+```
+
+断言对象的字段：
+
+| 字段 | 必填 | 语义 |
+|---|---|---|
+| `path` | 是 | 被检路径。`$` 开头 = JSONPath 风格响应体路径（如 `$.data.orderId`）；`$status` = HTTP 状态码；`$header.X-Trace-Id` = 响应头 |
+| `op` | 是 | 判定操作。枚举：`equals` / `not_equals` / `contains` / `not_contains` / `matches`(正则) / `exists` / `not_exists` / `type` / `gt` / `gte` / `lt` / `lte` |
+| `expected` | 条件 | 比较值。`op` 为 `exists` / `not_exists` 时不需要；`matches` 时为正则字符串；`type` 时为类型名（`string`/`number`/`boolean`/`object`/`array`/`null`） |
+
+**为什么要有第二种形态**：执行器无法机械判定一个自然语言字符串 —— 那"判定"就只剩执行器自己说了算。
+判定规则必须是**数据**，才能被 review、被 diff、被需求方调整。
+
+**判定规则**（由 `test-execute` skill 的执行外壳统一执行）：
+
+- 一条用例**至少有一条 step 的 `expected` 是断言对象** → 该用例**可机械判定**
+- 所有 step 的 `expected` 都是字符串 → 该用例**不可机械判定**，执行时判 `blocked`（理由："缺少可机械判定的断言"），**不得判 passed**
+
+> **为什么"不可判定"必须判 blocked 而不是 passed**：执行器"跑完了没报错"不等于"通过"。
+> 把不可判定的用例算作通过，等于把"没测"记成"测过且通过"。宁可漏报通过，不可虚报通过。
+
+**校验行为**：校验器对断言对象逐字段校验（`path` 必填且以 `$` 开头、`op` 必须在枚举内、
+`equals` 一类必须有 `expected`、`matches` 的 `expected` 必须是合法正则、`type` 的 `expected` 必须是类型名），
+任一不合法即 ERROR（退出码 1）并点名具体字段。
+**纯字符串 `expected` 的旧用例集行为完全不变**（退出码与报错文案与放宽前一致）。
 
 ### `status`（生命周期，v2 新增）
 
@@ -255,6 +296,20 @@
 - `cases[].status` 缺失按 `active` 处理，因此不影响覆盖统计。
 - `schema_version` 写成 2 以外的数字（除 1 外）：报一条 WARN，按 v1 宽松规则校验。
 - `schema_version: 1` 表示显式声明 v1，按宽松规则校验，不报 WARN。
+
+### `steps[].expected` 的放宽（REQ-002.5b）
+
+`expected` 从「必须是非空字符串」放宽为「非空字符串**或**合法的断言对象」：
+
+| `expected` 的形态 | 校验结果 |
+|---|---|
+| 非空字符串 | 通过（与放宽前完全一致） |
+| 合法断言对象 | 通过 |
+| 断言对象但 `path` / `op` / `expected` 不合法 | **ERROR**（退出码 1，点名具体字段） |
+| 其他（缺字段 / 数字 / 数组 / 空字符串） | **ERROR**，报错文案与放宽前完全一致 |
+
+这条放宽**不引入新字段、不升版本号**：`schema_version` 仍只识别 1 与 2，
+纯字符串 `expected` 的旧用例集退出码与报错文案与放宽前逐字一致。
 
 ## 编号约定
 

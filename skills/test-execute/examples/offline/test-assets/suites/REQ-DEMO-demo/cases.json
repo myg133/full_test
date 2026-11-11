@@ -1,0 +1,98 @@
+{
+  "schema_version": 2,
+  "meta": {
+    "source": "test-execute skill 的离线示例（自造需求条目，不对应真实需求）",
+    "generated_at": "2026-11-11T18:00:00+08:00",
+    "case_count": 5
+  },
+  "requirements": [
+    { "id": "R-1", "title": "内置桩服务按约定端点响应", "source_ref": "examples/offline/README.md", "testable": true }
+  ],
+  "open_questions": [],
+  "coverage_matrix": [
+    {
+      "requirement": "R-1",
+      "methods_applied": ["M0.1"],
+      "skipped": [],
+      "dimensions": ["functional"]
+    }
+  ],
+  "cases": [
+    {
+      "id": "TC-001",
+      "title": "/ok 返回 status=ok",
+      "requirement_refs": ["R-1"],
+      "dimension": "functional",
+      "priority": "P0",
+      "method": ["M0.1"],
+      "status": "active",
+      "preconditions": [],
+      "steps": [
+        { "action": "GET /ok", "expected": { "path": "$.status", "op": "equals", "expected": "ok" } },
+        { "action": "检查 HTTP 状态码", "expected": { "path": "$status", "op": "equals", "expected": 200 } }
+      ],
+      "data": {},
+      "tags": ["smoke"]
+    },
+    {
+      "id": "TC-002",
+      "title": "/created 返回 201",
+      "requirement_refs": ["R-1"],
+      "dimension": "functional",
+      "priority": "P1",
+      "method": ["M0.1"],
+      "status": "active",
+      "preconditions": [],
+      "steps": [
+        { "action": "GET /created", "expected": { "path": "$status", "op": "equals", "expected": 201 } }
+      ],
+      "data": {},
+      "tags": ["smoke"]
+    },
+    {
+      "id": "TC-003",
+      "title": "故意失败的用例：/notfound 期望 200（实际 404）",
+      "requirement_refs": ["R-1"],
+      "dimension": "functional",
+      "priority": "P2",
+      "method": ["M0.1"],
+      "status": "active",
+      "preconditions": [],
+      "steps": [
+        { "action": "GET /notfound", "expected": { "path": "$status", "op": "equals", "expected": 200 } }
+      ],
+      "data": {},
+      "tags": ["demo", "expected-failure"]
+    },
+    {
+      "id": "TC-004",
+      "title": "不可机械判定：expected 是普通字符串 → 判 blocked",
+      "requirement_refs": ["R-1"],
+      "dimension": "functional",
+      "priority": "P2",
+      "method": ["M0.1"],
+      "status": "active",
+      "preconditions": [],
+      "steps": [
+        { "action": "GET /ok", "expected": "页面显示正常" }
+      ],
+      "data": {},
+      "tags": ["demo", "expected-blocked"]
+    },
+    {
+      "id": "TC-005",
+      "title": "脱敏验证：/token 的 token 字段在产物里不可见明文",
+      "requirement_refs": ["R-1"],
+      "dimension": "functional",
+      "priority": "P0",
+      "method": ["M0.1"],
+      "status": "active",
+      "preconditions": [],
+      "steps": [
+        { "action": "GET /token", "expected": { "path": "$.id", "op": "equals", "expected": 1 } }
+      ],
+      "data": {},
+      "tags": ["demo", "redaction"]
+    }
+  ]
+}
