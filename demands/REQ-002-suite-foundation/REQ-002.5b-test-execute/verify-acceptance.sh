@@ -955,27 +955,34 @@ console.log("fail_ok="+String(c.ok));
 console.log("fail_recorded="+String(c.runs_recorded));
 console.log("fail_stage="+String(c.stage_status));
 console.log("fail_rc="+String(bad?bad.exit_code:"__PARSE_ERR__"));
+console.log("fail_top_ok="+String(bad?bad.ok:"__PARSE_ERR__"));
 console.log("ok_ok="+String(d.ok));
 console.log("ok_recorded="+String(d.runs_recorded));
 console.log("ok_stage="+String(d.stage_status));
 console.log("ok_rc="+String(ok?ok.exit_code:"__PARSE_ERR__"));
+console.log("ok_top_ok="+String(ok?ok.ok:"__PARSE_ERR__"));
 ' "$WORK/cyc-fail.json" "$WORK/cyc-ok.json")"
 F_OK="$(printf '%s\n' "$V28" | sed -n 's/^fail_ok=//p')"
 F_REC="$(printf '%s\n' "$V28" | sed -n 's/^fail_recorded=//p')"
 F_STG="$(printf '%s\n' "$V28" | sed -n 's/^fail_stage=//p')"
 F_RC="$(printf '%s\n' "$V28" | sed -n 's/^fail_rc=//p')"
+F_TOP="$(printf '%s\n' "$V28" | sed -n 's/^fail_top_ok=//p')"
 O_OK="$(printf '%s\n' "$V28" | sed -n 's/^ok_ok=//p')"
 O_REC="$(printf '%s\n' "$V28" | sed -n 's/^ok_recorded=//p')"
 O_STG="$(printf '%s\n' "$V28" | sed -n 's/^ok_stage=//p')"
 O_RC="$(printf '%s\n' "$V28" | sed -n 's/^ok_rc=//p')"
+O_TOP="$(printf '%s\n' "$V28" | sed -n 's/^ok_top_ok=//p')"
 # ⚠️ 失败场景的 stage_status 必须**锁死为 null**（状态未知）——
 #    旧版只查"不等于 in_progress"，那 "pending" 这类同样误导人的值也能判绿。
+# 顶层 ok 也必须跟着推进结果走（"执行流程成功"含轮次推进成功）
 if [ "$F_OK" = "false" ] && [ "$F_REC" = "false" ] && [ "$F_STG" = "null" ] && [ "$F_RC" = "1" ] \
-   && [ "$O_OK" = "true" ] && [ "$O_REC" = "true" ] && [ "$O_STG" = "in_progress" ] && [ "$O_RC" = "0" ]; then
+   && [ "$F_TOP" = "false" ] \
+   && [ "$O_OK" = "true" ] && [ "$O_REC" = "true" ] && [ "$O_STG" = "in_progress" ] && [ "$O_RC" = "0" ] \
+   && [ "$O_TOP" = "true" ]; then
   ok "AC-028 meta.cycle 段不得谎报推进结果"
 else
   bad "AC-028 meta.cycle 段不得谎报推进结果" \
-      "失败场景: ok=$F_OK(期望false) runs_recorded=$F_REC(期望false) stage_status=$F_STG(期望null) 退出码=$F_RC(期望1) || 成功场景: ok=$O_OK(期望true) runs_recorded=$O_REC(期望true) stage_status=$O_STG(期望in_progress) 退出码=$O_RC(期望0)"
+      "失败场景: ok=$F_OK(期望false) runs_recorded=$F_REC(期望false) stage_status=$F_STG(期望null) 退出码=$F_RC(期望1) 顶层ok=$F_TOP(期望false) || 成功场景: ok=$O_OK(期望true) runs_recorded=$O_REC(期望true) stage_status=$O_STG(期望in_progress) 退出码=$O_RC(期望0) 顶层ok=$O_TOP(期望true)"
 fi
 
 # ---------------------------------------------------------------- 汇总

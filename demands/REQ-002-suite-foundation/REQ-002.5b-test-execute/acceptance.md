@@ -217,8 +217,8 @@
 - **前置条件**: 两个子场景。①`--cycle` 指向**不存在的轮次目录**（推进必然失败）②`--cycle` 指向**存在的轮次目录**（推进应当成功）
 - **测试步骤**: 两次都跑 `--json`，检查 `cycle` 段与退出码
 - **预期结果**:
-  - ① `cycle.ok == false`；`cycle.runs_recorded == false`；`cycle.stage_status == null`（**状态未知**）；**退出码 == 1**
+  - ① `cycle.ok == false`；`cycle.runs_recorded == false`；`cycle.stage_status == null`（**状态未知**）；**退出码 == 1**；**顶层 `ok == false`**（"执行流程成功"含轮次推进成功）
     - ⚠️ `stage_status` 必须**锁死为 `null`**，不能只判"不等于 `in_progress`" —— `"pending"` 这类同样误导人的值也必须被挡住
-  - ② `cycle.ok == true`；`cycle.runs_recorded == true`；`cycle.stage_status == "in_progress"`；**退出码 == 0**
+  - ② `cycle.ok == true`；`cycle.runs_recorded == true`；`cycle.stage_status == "in_progress"`；**退出码 == 0**；顶层 `ok == true`
 - **理由**（D31）: `meta.cycle` 段当前把 `stage_status` 与 `runs_recorded` **硬编码**成 `in_progress` / `true`，与同一段里的 `ok: false` 自相矛盾 —— 推进失败也照写"已记录"。轮次推进失败属于执行流程失败（用户要求把这次执行记进轮次，没记上就是没做完），按 D18 退出码应取 1；用例本身全通过不改变这一点。②是配对的**成功场景**，防止为了满足①而把字段一律写成 `false`
 - **类型**: 功能
