@@ -2,6 +2,7 @@
 // validate-cases.mjs — 测试用例集结构校验器（schema v2）
 //
 // 用法: node scripts/validate-cases.mjs <cases.json>
+//       node scripts/validate-cases.mjs --init     （输出字段齐备的 v2 骨架到 stdout）
 // 退出码: 0 = 校验通过, 1 = 校验失败, 2 = 调用方式错误
 //
 // 纯 Node.js 实现，只依赖 node: 内置模块。
@@ -605,8 +606,122 @@ function printWarnings() {
   }
 }
 
+// ---------------------------------------------------------------- v2 骨架生成
+
+/**
+ * 生成字段齐备的 schema v2 骨架。
+ *
+ * 为什么要骨架：只把字段清单写进文档，仍然是在靠模型的自觉填全字段——
+ * 而这正是 REQ-001 eval 已经证死的失败模式（模型会自信地少写一半，然后宣称覆盖完整）。
+ * 让 agent 从骨架往里填，"字段齐备"才从叮嘱变成结构保证。
+ *
+ * 骨架里的 `<...>` 是**占位符**，必须替换成真实内容。
+ *
+ * @returns {object} v2 骨架对象
+ */
+function buildSkeleton() {
+  return {
+    schema_version: 2,
+    meta: {
+      source: '<需求来源标识：文档名 / 链接 / 需求单号>',
+      generated_at: '<ISO-8601 生成时间，如 2026-11-11T18:00:00+08:00>',
+      case_count: 1,
+    },
+    requirements: [
+      {
+        id: 'R-1',
+        title: '<需求条目标题>',
+        source_ref: '<原文摘录或位置：章节号 / 页码 / 引用句>',
+        testable: true,
+      },
+    ],
+    open_questions: [
+      {
+        id: 'Q1',
+        question: '<把需求本身的歧义说清楚：哪种理解会改变行为>',
+        requirement_refs: ['R-1'],
+        interpretations: [
+          { reading: '<第一种合理解读>', impact: '<按这种解读，行为或期望结果会有什么不同>' },
+          { reading: '<第二种合理解读>', impact: '<按这种解读，行为或期望结果会有什么不同>' },
+        ],
+        affected_cases: ['TC-001'],
+        severity: 'non-blocking',
+        coverage: 'cases',
+      },
+    ],
+    coverage_matrix: [
+      {
+        requirement: 'R-1',
+        methods_applied: ['M0.1'],
+        skipped: [],
+        dimensions: ['functional'],
+      },
+    ],
+    cases: [
+      {
+        id: 'TC-001',
+        title: '<一句话说清这条用例验证什么>',
+        requirement_refs: ['R-1'],
+        dimension: 'functional',
+        priority: 'P0',
+        method: ['M0.1'],
+        status: 'active',
+        preconditions: [],
+        steps: [{ action: '<可执行的动作>', expected: '<可判定的预期结果>' }],
+        data: {},
+        tags: [],
+      },
+    ],
+  };
+}
+
+/**
+ * 骨架自检：用**同一套**校验规则检查刚生成的骨架。
+ * 骨架若自检不通过，说明校验器与骨架不同步——这是脚本自己的 bug，必须当场暴露。
+ *
+ * @param {object} doc 骨架对象
+ * @returns {string[]} 问题列表（空 = 自检通过）
+ */
+function selfCheckSkeleton(doc) {
+  const savedProblems = problems.splice(0, problems.length);
+  const savedWarnings = warnings.splice(0, warnings.length);
+  const savedStrict = strict;
+  strict = true;
+  const requirementIds = validateRequirements(doc.requirements);
+  const caseIds = validateCases(doc.cases, requirementIds);
+  validateOpenQuestions(doc.open_questions, requirementIds, caseIds);
+  validateCoverageMatrix(doc.coverage_matrix, requirementIds);
+  const issues = problems.slice();
+  problems.splice(0, problems.length, ...savedProblems);
+  warnings.splice(0, warnings.length, ...savedWarnings);
+  strict = savedStrict;
+  return issues;
+}
+
 function main() {
-  const file = process.argv[2];
+  const argv = process.argv.slice(2);
+
+  // --- --init：输出字段齐备的 v2 骨架（纯增量，不影响原有校验路径） ---
+  if (argv.includes('--init')) {
+    const files = argv.filter((item) => item !== '--init');
+    if (files.length > 0) {
+      emit('用法: node scripts/validate-cases.mjs --init（--init 不接受文件参数）');
+      process.exit(2);
+    }
+    const skeleton = buildSkeleton();
+    const issues = selfCheckSkeleton(skeleton);
+    if (issues.length > 0) {
+      emit(`骨架自检失败（校验器与骨架不同步，属脚本缺陷）: 共 ${issues.length} 个问题`);
+      for (const issue of issues) {
+        emit(`  - ${issue}`);
+      }
+      process.exit(1);
+    }
+    process.stdout.write(`${JSON.stringify(skeleton, null, 2)}\n`);
+    process.exit(0);
+  }
+
+  const file = argv[0];
 
   if (!file) {
     emit('用法: node scripts/validate-cases.mjs <cases.json>');

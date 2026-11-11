@@ -74,7 +74,7 @@
 2. **共用环境定义**：三种 scope 都从 `test-assets/environments/` 取环境，`suite.json` 的 `environment` 指向环境名。
 3. **共用轮次状态**：三种 scope 属于同一个轮次时，写在同一个 `cycle.json` 的 `scopes` 数组里；本轮不跑的 scope 写进 `scopes_skipped` 并给出理由。
 4. **共用证据与产物落点**：所有执行产物落在 `.test-artifacts/` 下。
-5. **`suite.json` 里不允许出现 scope 专属字段**。需要 scope 专属信息（压测场景、威胁矩阵路径）时，写在同目录的专属文件里，由 `cases_file` 指向或由执行器按 scope 约定推导。
+5. **`suite.json` 的顶层字段集是封闭的**：只允许 §3.3 字段表里的九个字段（`suite` / `requirement` / `scope` / `environment` / `cases_file` / `executor` / `base_url_from` / `tags` / `report`）。出现表外字段一律 FAIL，**包括 `load_scenario`、`threat_model` 这类 scope 专属字段**——scope 专属信息写在同目录的专属文件里，由 `cases_file` 指向或由执行器按 scope 约定推导。
 
 ### 差异
 
@@ -178,6 +178,8 @@
 
 `report` 整体可选；一旦出现 `report.output_dir`，就必须落在 `.test-artifacts/` 下。
 
+**顶层字段集是封闭的**：上表九个字段构成 `suite.json` 的全部合法顶层字段。出现表外字段（尤其是 `load_scenario` / `threat_model` 这类 scope 专属字段）一律 FAIL（校验器会拦），见 §2.5 第 5 条。
+
 ---
 
 ## 4. 轮次状态机与阶段
@@ -258,6 +260,8 @@ planned ──▶ in_progress ──▶ completed
 - `index.json` 里每个 `id` **必须**在 `test-assets/cycles/` 下有同名目录，否则判为悬空引用。
 - 反向不强制：`cycles/` 下有目录但 `index.json` 里没有对应条目，校验器不拦；但这属于漏维护，应补上。
 - `index.json` 的 `round` / `status` 同样受枚举约束。
+- **`index.json` 是 `cycle.json` 的派生视图**：条目里的 `id` / `round` / `status` 必须与对应轮次目录里的 `cycle.json` **一致**，不一致即 FAIL（校验器会拦）。理由：索引与轮次状态是两个视图，只写其一就会**静默脱同步**——轮次已经推进到 `in_progress`，索引还停在 `planned`，而校验器原本不查这种脱同步，于是谁也不会发现。
+  - 索引由 `scripts/cycle-state.mjs` 在 `init` / `advance` 时自动同步；索引写失败时脚本会**回滚** `cycle.json`，保证"要么都写成功，要么都不变"。
 
 ---
 
@@ -304,6 +308,10 @@ planned ──▶ in_progress ──▶ completed
 | `status "x" 与 history 最后一条的 to "y" 不一致` | 只改了状态没追加 history | 追加一条 `history` 记录，其 `to` 等于新的 `status`；或直接用 `scripts/cycle-state.mjs advance` 走一次合法转移 |
 | `history[0].by 缺少必填字段` | 状态变更留痕不完整 | 每条 history 都要有 `at` / `from` / `to` / `by`；用 `advance` 生成的记录天然齐备 |
 | `cycle_id "x" 与轮次目录名 "y" 不一致` | 轮次目录改名后没同步 | 改目录名或改 `cycle_id`，两者必须一致 |
+| `stages.design.status 缺少必填字段` | 阶段没写状态 | 补上阶段状态（`pending` / `in_progress` / `done` / `blocked` / `skipped`） |
+| `stages.design.status 类型错误` | 阶段状态写成了数字等 | 改成字符串 |
+| `cycles[0] 与 .../cycle.json 不一致` | 轮次索引与轮次状态脱同步 | 用 `scripts/cycle-state.mjs advance` 推进一次（脚本会自动同步索引） |
+| `load_scenario 是多余的字段` | 把 scope 专属字段写进了 `suite.json` | 删掉该字段；scope 专属信息写在同目录的专属文件里，由 `cases_file` 指向 |
 | `name "x" 与环境文件名 "y" 不一致` | 环境标识与文件名不一致 | 让 `name` 等于文件名（不含 `.json`） |
 | `悬空的 cycle id` | `index.json` 指向了不存在的轮次目录 | 建目录并写 `cycle.json`，或删掉这条索引 |
 | `.gitignore 未忽略 .test-artifacts/` | 执行产物会进 Git | 在项目根 `.gitignore` 加一行 `.test-artifacts/` |
@@ -316,7 +324,7 @@ planned ──▶ in_progress ──▶ completed
 3. 结尾 `结论: N FAIL / M OK`；`N > 0` 表示退出码 1，必须修到 `N = 0` 才算交付。
 4. 重复运行结果必须一致——校验器只读不写，不会改动你的文件。
 
-### 6.3 校验器实际强制的 14 项
+### 6.3 校验器实际强制的 22 项
 
 | # | 检查项 | 判定 |
 |---|---|---|
@@ -336,7 +344,15 @@ planned ──▶ in_progress ──▶ completed
 | 14 | `suite.json` 的 `report.output_dir` 以 `.test-artifacts/` 开头 | 否 → FAIL |
 | 15 | 环境的 `name` 与环境文件名（不含 `.json`）一致 | 不一致 → FAIL |
 | 16 | `cycle.json` 的 `cycle_id` 与轮次目录名一致 | 不一致 → FAIL |
+| 17 | `cycle.json` 的字段类型正确（`round` / `round_type` / `scopes` / `scopes_skipped` / `stages` / `stages.*.status` / `stages.*.artifacts` / `trigger`） | 类型错 → FAIL |
+| 18 | `cycle.json` 的 `stages.<name>.status` 存在且是合法阶段状态 | 缺失 / 类型错 / 非法枚举 → FAIL |
+| 19 | `cycles/index.json` 条目与对应 `cycle.json` 的 `status` / `round` 一致（index 是派生视图） | 脱同步 → FAIL |
+| 20 | `suite.json` 的顶层字段集封闭（无 `load_scenario` / `threat_model` 等 scope 专属字段） | 多余字段 → FAIL |
+| 21 | `suite.json` 的 `scope` / `executor` 枚举合法 | 非法取值 → FAIL |
+| 22 | `suite.json` 的 `tags` / `report` 子字段类型正确 | 类型错 → FAIL |
 
-> 第 15 / 16 项是 REQ-002.5a 追加的检查（补齐原先"文档写了必须、校验器没拦"的缺口）。
+> 第 15~22 项是 REQ-002.5a 追加的检查（补齐原先"文档写了必须、校验器没拦"的缺口）。
+> 第 9~11、17~18 项的判定规则来自 `scripts/lib/state-machine.mjs`（状态机单一来源），
+> 推进器 `scripts/cycle-state.mjs` 做准入判断时调用的是同一套规则——两边报出的是同一类问题。
 
 校验器**不**检查：`cases.json` 的用例内容（属 REQ-002A）、`contracts/` 的内容、`.tools/` 的内容、威胁模型与覆盖矩阵的结构、fixture 文件是否存在、`data_fixtures[].path` 是否可解析。这些项要么归别的 REQ，要么不属于本契约。

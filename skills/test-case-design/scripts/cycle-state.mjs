@@ -36,7 +36,7 @@ import {
   STAGE_STATUSES,
   allowedNext,
   canTransition,
-  checkCycleState,
+  checkCycleConsistency,
   checkSkipRecord,
   isCycleStatus,
   isObject,
@@ -198,7 +198,16 @@ function requireFlag(flags, name) {
  * @param {any} data 要写入的数据
  */
 function writeJsonAtomic(file, data) {
-  const text = `${JSON.stringify(data, null, 2)}\n`;
+  writeTextAtomic(file, `${JSON.stringify(data, null, 2)}\n`);
+}
+
+/**
+ * 原子写：写临时文件 + rename 替换。
+ * 中途失败不留半写文件，也不留临时文件残留。
+ * @param {string} file 目标文件绝对路径
+ * @param {string} text 完整文本内容
+ */
+function writeTextAtomic(file, text) {
   const dir = dirname(file);
   const tmp = join(dir, `.${basename(file)}.tmp-${process.pid}-${Date.now()}`);
   let fd = null;
@@ -316,6 +325,44 @@ function syncIndex(cyclesDir, entry) {
   writeJsonAtomic(file, data);
 }
 
+/**
+ * 同步轮次索引；失败时按需回滚 cycle.json。
+ *
+ * `cycle.json` 与 `cycles/index.json` 是同一件事的两个视图：只写其一就会脱同步，
+ * 而脱同步是**静默**的（校验器不查的话没人会发现），所以这里必须保证
+ * "要么都写成功，要么都不变"。
+ *
+ * @param {string} cyclesDir 索引目录
+ * @param {{id: string, round: any, status: string}} entry 本轮次摘要
+ * @param {string} cycleFile cycle.json 路径
+ * @param {{mode: string, raw?: string}|null} rollback 回滚动作：
+ *        `{mode:'restore', raw}` 恢复原文；`{mode:'delete'}` 删除刚创建的文件；null = 不回滚
+ */
+function syncIndexOrFail(cyclesDir, entry, cycleFile, rollback) {
+  try {
+    syncIndex(cyclesDir, entry);
+  } catch (err) {
+    let rollbackText = '（cycle.json 未被修改）';
+    if (rollback && rollback.mode === 'restore') {
+      try {
+        writeTextAtomic(cycleFile, rollback.raw);
+        rollbackText = '；已回滚 cycle.json，文件内容与写前完全一致';
+      } catch (rollbackErr) {
+        rollbackText =
+          `；回滚也失败：${rollbackErr.message}（cycle.json 处于已修改状态，需人工核对）`;
+      }
+    } else if (rollback && rollback.mode === 'delete') {
+      try {
+        unlinkSync(cycleFile);
+        rollbackText = '；已删除刚创建的 cycle.json，状态与操作前一致';
+      } catch (rollbackErr) {
+        rollbackText = `；回滚也失败：${rollbackErr.message}（cycle.json 处于已创建状态，需人工核对）`;
+      }
+    }
+    failValidation(`${cycleFile}: 轮次索引写入失败：${err.message}${rollbackText}`, 'index.json');
+  }
+}
+
 // ---------------------------------------------------------------- 公共检查
 
 /**
@@ -325,7 +372,7 @@ function syncIndex(cyclesDir, entry) {
  * @returns {{kind: string, path: string, text: string}[]}
  */
 function stateIssues(data, file) {
-  return checkCycleState(data).map((issue) => ({
+  return checkCycleConsistency(data).map((issue) => ({
     ...issue,
     text: `${file}: ${issue.path}: ${issue.text}`,
   }));
@@ -429,8 +476,22 @@ function cmdInit(target, flags) {
       },
     ],
   };
+  // 自检：写入前用与校验器同一套规则检查一次，
+  // 保证 init 产出的文件一定是校验器判得了的文件
+  const initIssues = checkCycleConsistency(data);
+  if (initIssues.length > 0) {
+    failValidation(
+      initIssues.map((issue) => `${target.file}: ${issue.path}: ${issue.text}`).join('\n'),
+      'status',
+      initIssues.map((issue) => ({ field: issue.path, message: issue.text })),
+    );
+  }
   writeJsonAtomic(target.file, data);
-  if (cyclesDir) syncIndex(cyclesDir, { id: cycleId, round, status: 'planned' });
+  if (cyclesDir) {
+    syncIndexOrFail(cyclesDir, { id: cycleId, round, status: 'planned' }, target.file, {
+      mode: 'delete',
+    });
+  }
 
   writeResult({
     command: 'init',
@@ -447,7 +508,7 @@ function cmdInit(target, flags) {
  */
 function cmdShow(target) {
   const data = loadCycle(target.file);
-  const issues = checkCycleState(data);
+  const issues = checkCycleConsistency(data);
   const payload = {
     ok: issues.length === 0,
     command: 'show',
@@ -493,13 +554,25 @@ function cmdAdvance(target, flags) {
       'status',
     );
   }
+
+  const cyclesDir = cyclesDirFor(target.dir);
+  const cycleId = typeof data.cycle_id === 'string' && data.cycle_id !== '' ? data.cycle_id : null;
+  const indexEntry = cycleId ? { id: cycleId, round: data.round, status: to } : null;
+  if (cyclesDir) readIndex(cyclesDir); // 预检索引，避免动过 cycle.json 才发现索引写不了
+
   if (to === from) {
-    writeResult({
+    // 幂等分支同样要保证 index 与 cycle 一致：
+    // 否则"索引写失败 → 重试修复"这条路是断的（重试会在这里直接返回）。
+    if (cyclesDir && indexEntry) {
+      syncIndexOrFail(cyclesDir, indexEntry, target.file, null);
+    }    writeResult({
       command: 'advance',
       target,
       status: from,
       changed: false,
-      message: `轮次已处于 "${from}"：未做任何修改（幂等，不追加 history）`,
+      message:
+        `轮次已处于 "${from}"：cycle.json 未做任何修改（幂等，不追加 history）` +
+        '；轮次索引已按当前状态同步',
       extra: { history: data.history },
     });
     return;
@@ -508,8 +581,9 @@ function cmdAdvance(target, flags) {
     failValidation(`${target.file}: status: ${transitionError(from, to)}`, 'status');
   }
 
-  const cyclesDir = cyclesDirFor(target.dir);
-  if (cyclesDir) readIndex(cyclesDir); // 预检索引，避免动过 cycle.json 才发现索引写不了
+  // 写前留存原内容：索引写失败时要把 cycle.json 恢复原状，
+  // 让"退出码 1 ⇒ 目标文件未被修改"在跨文件场景下也成立。
+  const originalRaw = readFileSync(target.file, 'utf8');
 
   data.status = to;
   const entry = { at: new Date().toISOString(), from, to, by };
@@ -517,8 +591,8 @@ function cmdAdvance(target, flags) {
   if (reason !== '') entry.reason = reason;
   data.history.push(entry);
   writeJsonAtomic(target.file, data);
-  if (cyclesDir && typeof data.cycle_id === 'string' && data.cycle_id !== '') {
-    syncIndex(cyclesDir, { id: data.cycle_id, round: data.round, status: to });
+  if (cyclesDir && indexEntry) {
+    syncIndexOrFail(cyclesDir, indexEntry, target.file, { mode: 'restore', raw: originalRaw });
   }
 
   writeResult({
@@ -570,6 +644,7 @@ function cmdSkipScope(target, flags) {
   }
 
   const data = loadCycle(target.file);
+  refuseOnStateIssues(data, target.file); // 坏文件不许继续写下去
   if (!Array.isArray(data.scopes_skipped)) data.scopes_skipped = [];
   const index = data.scopes_skipped.findIndex(
     (item) => isObject(item) && item.scope === scope,
@@ -629,6 +704,7 @@ function cmdSetStage(target, flags) {
   }
 
   const data = loadCycle(target.file);
+  refuseOnStateIssues(data, target.file); // 坏文件不许继续写下去
   if (!isObject(data.stages)) data.stages = {};
   const current = data.stages[stage];
   const currentStatus = isObject(current) ? current.status : undefined;
@@ -739,9 +815,12 @@ function writeResult(spec) {
 function dispatch(argv) {
   const command = argv[0];
   context.command = command;
+  // --json 必须先于参数解析识别：否则 usage 错误（如未知参数）会在 context.json
+  // 置位之前抛出，stdout 变成人读文本而不是合法 JSON。
+  context.json = argv.includes('--json');
   const spec = COMMAND_SPECS[command];
   const { flags, positionals } = parseArgs(argv.slice(1), spec);
-  context.json = flags.get('json') === true;
+  context.json = flags.get('json') === true || context.json;
 
   if (positionals.length === 0) {
     failUsage(`子命令 ${command} 缺少轮次目录参数\n${USAGE}`);
@@ -760,8 +839,14 @@ function dispatch(argv) {
 
 function main() {
   const argv = process.argv.slice(2);
+  // --json 提前识别：usage 错误时 stdout 也必须是合法 JSON
+  context.json = argv.includes('--json');
   if (argv.length === 0) {
-    process.stderr.write(`${USAGE}\n`);
+    if (context.json) {
+      writeJson({ ok: false, command: null, error: '缺少子命令', exit_code: 2 });
+    } else {
+      process.stderr.write(`${USAGE}\n`);
+    }
     process.exitCode = 2;
     return;
   }
@@ -771,7 +856,16 @@ function main() {
   }
   const command = argv[0];
   if (!Object.prototype.hasOwnProperty.call(COMMAND_SPECS, command)) {
-    process.stderr.write(`未知子命令 "${command}"\n${USAGE}\n`);
+    if (context.json) {
+      writeJson({
+        ok: false,
+        command: null,
+        error: `未知子命令 "${command}"`,
+        exit_code: 2,
+      });
+    } else {
+      process.stderr.write(`未知子命令 "${command}"\n${USAGE}\n`);
+    }
     process.exitCode = 2;
     return;
   }

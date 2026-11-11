@@ -251,6 +251,83 @@ export function checkCycleState(data) {
     }
   }
 
+  // --- round / round_type ---
+  if (data.round !== undefined) {
+    if (typeof data.round !== 'string') {
+      issues.push({
+        kind: 'type',
+        path: 'round',
+        text: `round 类型错误：期望 string，实际 ${describeType(data.round)}`,
+      });
+    } else if (!ROUNDS.includes(data.round)) {
+      issues.push({
+        kind: 'enum',
+        path: 'round',
+        text: `round 取值非法："${data.round}"（允许值: ${ROUNDS.join(' / ')}）`,
+      });
+    }
+  }
+  if (data.round_type !== undefined) {
+    if (typeof data.round_type !== 'string') {
+      issues.push({
+        kind: 'type',
+        path: 'round_type',
+        text: `round_type 类型错误：期望 string，实际 ${describeType(data.round_type)}`,
+      });
+    } else if (!ROUND_TYPES.includes(data.round_type)) {
+      issues.push({
+        kind: 'enum',
+        path: 'round_type',
+        text: `round_type 取值非法："${data.round_type}"（允许值: ${ROUND_TYPES.join(' / ')}）`,
+      });
+    }
+  }
+
+  // --- scopes ---
+  if (data.scopes !== undefined) {
+    if (!Array.isArray(data.scopes)) {
+      issues.push({
+        kind: 'type',
+        path: 'scopes',
+        text: `scopes 类型错误：期望 array，实际 ${describeType(data.scopes)}`,
+      });
+    } else {
+      data.scopes.forEach((scope, index) => {
+        if (typeof scope !== 'string') {
+          issues.push({
+            kind: 'type',
+            path: `scopes[${index}]`,
+            text: `scopes[${index}] 类型错误：期望 string，实际 ${describeType(scope)}`,
+          });
+        } else if (!CYCLE_SCOPES.includes(scope)) {
+          issues.push({
+            kind: 'enum',
+            path: `scopes[${index}]`,
+            text: `scopes[${index}] 取值非法："${scope}"（允许值: ${CYCLE_SCOPES.join(' / ')}）`,
+          });
+        }
+      });
+    }
+  }
+
+  // --- scopes_skipped 的类型（元素级检查见 checkScopesSkipped） ---
+  if (data.scopes_skipped !== undefined && !Array.isArray(data.scopes_skipped)) {
+    issues.push({
+      kind: 'type',
+      path: 'scopes_skipped',
+      text: `scopes_skipped 类型错误：期望 array，实际 ${describeType(data.scopes_skipped)}`,
+    });
+  }
+
+  // --- trigger ---
+  if (data.trigger !== undefined && !isObject(data.trigger)) {
+    issues.push({
+      kind: 'type',
+      path: 'trigger',
+      text: `trigger 类型错误：期望 object，实际 ${describeType(data.trigger)}`,
+    });
+  }
+
   // --- stages ---
   if (data.stages !== undefined) {
     if (!isObject(data.stages)) {
@@ -270,13 +347,32 @@ export function checkCycleState(data) {
           });
           continue;
         }
-        if (typeof body.status === 'string' && !isStageStatus(body.status)) {
+        // status: 必填 + 类型 + 枚举（缺字段与类型错都要报错，不能因为"不是字符串"就跳过）
+        if (body.status === undefined) {
+          issues.push({
+            kind: 'missing',
+            path: `${at}.status`,
+            text: `${at}.status 缺少必填字段（阶段必须有状态）`,
+          });
+        } else if (typeof body.status !== 'string') {
+          issues.push({
+            kind: 'type',
+            path: `${at}.status`,
+            text: `${at}.status 类型错误：期望 string，实际 ${describeType(body.status)}`,
+          });
+        } else if (!isStageStatus(body.status)) {
           issues.push({
             kind: 'enum',
             path: `${at}.status`,
-            text:
-              `${at}.status 取值非法："${body.status}"` +
-              `（允许值: ${STAGE_STATUSES.join(' / ')}）`,
+            text: `${at}.status 取值非法："${body.status}"（允许值: ${STAGE_STATUSES.join(' / ')}）`,
+          });
+        }
+        // artifacts: 可选，但必须是数组
+        if (body.artifacts !== undefined && !Array.isArray(body.artifacts)) {
+          issues.push({
+            kind: 'type',
+            path: `${at}.artifacts`,
+            text: `${at}.artifacts 类型错误：期望 array，实际 ${describeType(body.artifacts)}`,
           });
         }
       }
@@ -355,6 +451,42 @@ export function checkScopesSkipped(data) {
     issues.push(...checkSkipRecord(entry, `scopes_skipped[${index}]`));
   });
   return issues;
+}
+
+// ---------------------------------------------------------------- 统一准入检查
+
+/**
+ * 轮次文件（cycle.json）的**统一准入检查**。
+ *
+ * 校验器与推进器做准入判断时都必须调用这一个入口：
+ * 规则写在一处还不够——"用哪套规则做准入判断"也必须一致，
+ * 否则会出现推进器说"没问题"、校验器判 FAIL 的分叉（推进器会把坏文件继续写下去）。
+ *
+ * @param {any} data cycle.json 解析结果
+ * @returns {{kind: string, path: string, text: string}[]} 问题列表
+ */
+export function checkCycleConsistency(data) {
+  return [...checkCycleState(data), ...checkScopesSkipped(data)];
+}
+
+/**
+ * 比较轮次索引条目与其 `cycle.json` 的一致性。
+ * index 是 cycle 的派生视图：`status` / `round` 必须一致，否则视为脱同步。
+ *
+ * @param {any} entry index.json 里的条目
+ * @param {any} cycle 对应目录的 cycle.json 解析结果
+ * @returns {string[]} 不一致项描述；一致时返回空数组
+ */
+export function indexEntryMismatches(entry, cycle) {
+  const mismatches = [];
+  if (!isObject(entry) || !isObject(cycle)) return mismatches;
+  if (isFilledString(entry.status) && isFilledString(cycle.status) && entry.status !== cycle.status) {
+    mismatches.push(`status "${entry.status}" ≠ cycle.json 的 "${cycle.status}"`);
+  }
+  if (isFilledString(entry.round) && isFilledString(cycle.round) && entry.round !== cycle.round) {
+    mismatches.push(`round "${entry.round}" ≠ cycle.json 的 "${cycle.round}"`);
+  }
+  return mismatches;
 }
 
 // ---------------------------------------------------------------- 小工具

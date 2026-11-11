@@ -17,12 +17,10 @@ import process from 'node:process';
 // 状态机规则的**单一来源**：本文件不得自带第二份转移表 / 终态判定 /
 // status↔history 一致性判定，一律 import 复用（见 scripts/lib/state-machine.mjs）。
 import {
-  CYCLE_SCOPES,
   CYCLE_STATUSES,
-  ROUND_TYPES,
   ROUNDS,
-  checkCycleState,
-  checkScopesSkipped,
+  checkCycleConsistency,
+  indexEntryMismatches,
 } from './lib/state-machine.mjs';
 
 // ---------------------------------------------------------------- 常量
@@ -53,6 +51,19 @@ const ENV_ALLOWED_FIELDS = Object.keys(ENV_FIELD_TYPES);
 const SUITE_REQUIRED = ['suite', 'requirement', 'scope', 'environment', 'cases_file', 'executor'];
 const SUITE_SCOPES = ['functional', 'security', 'load'];
 const SUITE_EXECUTORS = ['api', 'ui', 'load', 'security'];
+// suite.json 的顶层字段集是封闭的：出现表外字段（含 load_scenario / threat_model
+// 这类 scope 专属字段）一律判 FAIL。语义与 environments 的顶层封闭集合一致。
+const SUITE_ALLOWED_FIELDS = [
+  'suite',
+  'requirement',
+  'scope',
+  'environment',
+  'cases_file',
+  'executor',
+  'base_url_from',
+  'tags',
+  'report',
+];
 
 // cycle.json 的契约基线
 // 注意：轮次状态枚举、阶段状态枚举、scope 枚举、轮次编号/类型枚举与状态机规则
@@ -445,6 +456,18 @@ function checkSuite(file, root, envNames) {
     }
   }
 
+  // --- 顶层字段集是封闭的：scope 专属字段也不允许出现在 suite.json 里 ---
+  for (const key of Object.keys(data)) {
+    if (!SUITE_ALLOWED_FIELDS.includes(key)) {
+      addIssue(
+        rel,
+        'extra',
+        key,
+        `${key} 是多余的字段（suite.json 的顶层字段集是封闭的：${SUITE_ALLOWED_FIELDS.join(' / ')}）`,
+      );
+    }
+  }
+
   // --- tags ---
   if (data.tags !== undefined) {
     if (!isObject(data.tags)) {
@@ -524,42 +547,12 @@ function checkCycle(file, root) {
     addIssue(rel, 'missing', 'requirement', 'requirement 缺少必填字段（或不是非空字符串）');
   }
 
-  // --- 检查 9：枚举取值（status 由共享状态机模块判定，见下方 checkCycleState） ---
-  if (typeof data.round === 'string' && !ROUNDS.includes(data.round)) {
-    addIssue(rel, 'enum', 'round', `round 取值非法："${data.round}"（允许值: ${ROUNDS.join(' / ')}）`);
-  }
-  if (typeof data.round_type === 'string' && !ROUND_TYPES.includes(data.round_type)) {
-    addIssue(
-      rel,
-      'enum',
-      'round_type',
-      `round_type 取值非法："${data.round_type}"（允许值: ${ROUND_TYPES.join(' / ')}）`,
-    );
-  }
-  if (Array.isArray(data.scopes)) {
-    data.scopes.forEach((scope, index) => {
-      if (typeof scope === 'string' && !CYCLE_SCOPES.includes(scope)) {
-        addIssue(
-          rel,
-          'enum',
-          `scopes[${index}]`,
-          `scopes[${index}] 取值非法："${scope}"（允许值: ${CYCLE_SCOPES.join(' / ')}）`,
-        );
-      }
-    });
-  }
-
-  // --- 检查 10：跳过范围必须写明理由与审计信息 ---
-  // 判定规则来自共享状态机模块（scopes_skipped 记录的必填字段集合只有一份），
-  // 推进器 scripts/cycle-state.mjs 写入时用的是同一套规则。
-  for (const issue of checkScopesSkipped(data)) {
-    addIssue(rel, issue.kind, issue.path, issue.text);
-  }
-
-  // --- 检查 9 / 10 / 11：status、history、stages —— 复用共享状态机模块 ---
-  // 判定规则（转移表、终态、status↔history 一致性）只有一份实现，
-  // 推进器 scripts/cycle-state.mjs 报出的是同一类问题。
-  for (const issue of checkCycleState(data)) {
+  // --- 检查 9 / 10 / 11：轮次字段的类型、必填、枚举与一致性 ---
+  // 判定规则只有一份实现（scripts/lib/state-machine.mjs）：
+  // 转移表、终态、status↔history 一致性、scopes_skipped 记录的必填字段。
+  // 推进器 scripts/cycle-state.mjs 做准入判断时调用的是同一个入口
+  // （checkCycleConsistency），两边报出的是同一类问题。
+  for (const issue of checkCycleConsistency(data)) {
     addIssue(rel, issue.kind, issue.path, issue.text);
   }
 }
@@ -608,6 +601,22 @@ function checkCycleIndex(file, root, cyclesDir) {
         `${at}.status`,
         `${at}.status 取值非法："${entry.status}"（允许值: ${CYCLE_STATUSES.join(' / ')}）`,
       );
+    }
+
+    // --- index 是 cycle 的派生视图：条目与 cycle.json 的 status / round 必须一致 ---
+    const cycleFile = join(cyclesDir, entry.id, 'cycle.json');
+    if (isFile(cycleFile)) {
+      const cycleRel = toSlash(relative(root, cycleFile));
+      const cycle = readJson(cycleFile, cycleRel);
+      if (cycle !== null && isObject(cycle)) {
+        const mismatches = indexEntryMismatches(entry, cycle);
+        for (const mismatch of mismatches) {
+          problem(
+            `${rel}: ${at} 与 ${cycleRel} 不一致（${mismatch}）：` +
+              'index 是 cycle 的派生视图，必须与轮次状态保持一致',
+          );
+        }
+      }
     }
   });
 }

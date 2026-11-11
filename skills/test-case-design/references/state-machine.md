@@ -175,6 +175,11 @@ node scripts/cycle-state.mjs set-stage test-assets/cycles/R1-REQ-001 --stage des
    - `skip-scope` 同 scope 同 reason 同 `by` → 报"已记录"，不重复写入。
    - `set-stage` 同阶段同状态 → 报"已是该状态"，不重复写入。
 7. **索引同步**：`init` 与 `advance` 成功后，脚本会同步 `test-assets/cycles/index.json` 里本轮次的 `id` / `round` / `status` 摘要（索引结构非法时先失败，不留半成品）。
+8. **跨文件要么都成、要么都不变**：`cycle.json` 与 `cycles/index.json` 是同一件事的两个视图。索引写失败（如 `cycles/` 目录只读、磁盘满）时，脚本会**回滚** `cycle.json` 到写前内容（逐字节一致），退出码 1——绝不留下"轮次已推进、索引还停在旧状态"的静默脱同步。`init` 失败时回滚方式是删除刚创建的 `cycle.json`。
+9. **幂等分支也同步索引**：`advance --to <当前状态>` 虽然不改 `cycle.json`，仍会按当前状态同步索引——否则"索引写失败后重试修复"这条路是断的。
+10. **准入判断与校验器同一套规则**：推进器的**所有**写入路径（`init` / `advance` / `skip-scope` / `set-stage`）在动手前都会用与校验器**完全相同**的规则检查目标文件（`checkCycleConsistency`：字段类型 / 必填 / 枚举 / `status`↔`history` 一致性 / `scopes_skipped` 记录的四个必填字段）。文件本身有问题 → 拒绝并报出与校验器**同类**的问题，文件不被修改。`show` 只读，遇到同样的问题时报出同一类问题并以退出码 1 结束。
+
+> 第 10 条是"单一来源"的完整含义：规则写在一处还不够，**用哪套规则做准入判断**也必须一致。否则会出现推进器说"没问题"、校验器判 FAIL 的分叉——推进器会把坏文件继续写下去。
 
 ---
 
@@ -210,6 +215,8 @@ scripts/lib/state-machine.mjs
 | `缺少必填参数 --to` / `未知参数 --xxx` | 调用方式写错 | 看 `--help`；退出码 2 表示命令本身没写对，状态文件未受影响 |
 | `轮次已存在` | `init` 指向了已有 `cycle.json` 的目录 | 换目录名，或改用 `advance` / `set-stage` |
 | `cycle_id "x" 与轮次目录名 "y" 不一致` | 目录名与 `cycle_id` 不符 | 目录契约要求二者一致：改目录名或改 `--cycle-id` |
+| `轮次索引写入失败` | 索引写不进去（如 `cycles/` 目录只读、磁盘满） | 脚本已回滚 `cycle.json`（内容与写前一致）。修好写权限后**重试同一条命令**即可——幂等分支也会同步索引 |
+| `scopes_skipped[0].at` / `.by` 缺少必填字段 | 文件里的跳过记录不合规（多半是手写的） | 推进器会拒绝继续写这个文件。先按 §3.4 用 `skip-scope --by <agent>` 重新声明该 scope，或手工补齐 `at` / `by` |
 | `非法阶段状态` | `set-stage --status` 写错 | 阶段状态只能用 `pending` / `in_progress` / `done` / `blocked` / `skipped` |
 
 ---
