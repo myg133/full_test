@@ -283,14 +283,14 @@ REQ-001 只管"设计"不管"执行"。真实使用时，用例集需要和**环
 ├── <asset-root>/                   # 测试资产根目录（名称待定，见 §5 Q3）
 │   ├── README.md                 # 目录契约说明（人读）
 │   ├── environments/             # 环境定义
-│   │   ├── local.yaml
-│   │   ├── staging.yaml
-│   │   └── _schema.yaml           # 环境配置 schema
+│   │   ├── local.json
+│   │   ├── staging.json
+│   │   └── _schema.json           # 环境配置 schema
 │   ├── suites/                   # 用例集（每个需求一个）
 │   │   └── REQ-001-coupon/
 │   │       ├── cases.json         # test-case-design 产出
 │   │       ├── open-questions.md  # 未决问题（人读 + 可选）
-│   │       └── suite.yaml         # 执行配置
+│   │       └── suite.json         # 执行配置
 │   ├── contracts/                # 接口契约 / mock 定义
 │   └── tools/                    # 执行脚本
 │       └── run-suite.mjs
@@ -302,46 +302,57 @@ REQ-001 只管"设计"不管"执行"。真实使用时，用例集需要和**环
     └── cache/
 ```
 
+**目录名与产物策略（已定）**：
+
+- 资产根目录 = **`test-assets/`**（用户决策）——与代码自带的 `tests/`（单元测试代码）语义区分清楚，且明确这是"资产"而非可执行测试；
+- 执行产物 = **`.test-artifacts/`，不进 Git**，由 `.gitignore` 排除（用户决策）。产物靠 CI 归档或本地留存。
+
 ### 2.3 环境配置 schema
 
-`environments/_schema.yaml` 定义结构，`environments/*.yaml` 填值：
+配置格式统一为 **JSON**（用户决策）。理由：校验器零依赖只需 `JSON.parse`，不需要手写 YAML 解析器；且用例集本身也是 JSON，两端同构。
 
-```yaml
-name: staging
-base_url: https://staging.example.com
-timeout_ms: 5000
-retries: 0
-credentials:
-  # 引用方式，不落明文
-  username_env: STAGING_USER
-  password_env: STAGING_PASS
-headers:
-  X-Test-Run: "${run_id}"
-verify_tls: false
-data_fixtures:
-  - path: testcase/fixtures/users.json
-    cleanup: true
+`environments/_schema.json` 定义结构，`environments/*.json` 填值：
+
+```json
+{
+  "name": "staging",
+  "base_url": "https://staging.example.com",
+  "timeout_ms": 5000,
+  "retries": 0,
+  "credentials": {
+    "username_env": "STAGING_USER",
+    "password_env": "STAGING_PASS"
+  },
+  "headers": { "X-Test-Run": "${run_id}" },
+  "verify_tls": false,
+  "data_fixtures": [
+    { "path": "test-assets/fixtures/users.json", "cleanup": true }
+  ]
+}
 ```
 
 **关键设计点：凭证只走环境变量引用**，配置文件里不存明文。这让配置文件可以安全进 Git。
 
+**JSON 无注释的补偿**：`_schema.json` 承担"文档"职责（字段说明写在 schema 的 `description` 里），配置文件本身保持纯 JSON。
+
 ### 2.4 用例集与执行的接口
 
-`suite.yaml` 声明"这组用例怎么跑"：
+`suite.json` 声明"这组用例怎么跑"：
 
-```yaml
-suite: REQ-001-coupon
-requirement: REQ-001
-environment: staging
-cases_file: cases.json
-executor: api
-base_url_from: environment.base_url
-tags:
-  include: ["P0", "P1"]
-  exclude: []
-report:
-  format: ["html", "json"]
-  output_dir: .test-artifacts/REQ-001-coupon
+```json
+{
+  "suite": "REQ-001-coupon",
+  "requirement": "REQ-001",
+  "environment": "staging",
+  "cases_file": "cases.json",
+  "executor": "api",
+  "base_url_from": "environment.base_url",
+  "tags": { "include": ["P0", "P1"], "exclude": [] },
+  "report": {
+    "format": ["html", "json"],
+    "output_dir": ".test-artifacts/REQ-001-coupon"
+  }
+}
 ```
 
 ### 2.5 目录契约的强制手段
@@ -353,10 +364,10 @@ scripts/verify-layout.mjs
 ```
 
 职责：
-1. 检查 `testcase/` 下必需目录存在；
-2. 检查每个 `suite.yaml` 的字段完整、引用路径存在；
-3. 检查 `environments/*.yaml` 符合 `_schema.yaml`（零依赖手写校验）；
-4. 检查环境配置里**没有明文凭证**（扫描 `password`/`secret`/`token` 字段的值是否形似明文）；
+1. 检查 `test-assets/` 下必需目录存在；
+2. 检查每个 `suite.json` 的字段完整、引用路径存在；
+3. 检查 `environments/*.json` 符合 `_schema.json`（`JSON.parse` + 字段校验，零依赖）；
+4. 检查环境配置里**没有明文凭证**（扫描 `password`/`secret`/`token` 字段的值是否形似明文——注意与 `*_env` 引用式字段区分）；
 5. 检查 `.test-artifacts/` 在 `.gitignore` 中。
 
 退出码 0/1，与现有 `validate-cases.mjs` 同一套约定。
@@ -365,7 +376,7 @@ scripts/verify-layout.mjs
 
 | Skill | 职责 | 产物落点 |
 |---|---|---|
-| `test-case-design` | 需求 → 用例集 | `testcase/suites/<REQ>/cases.json` |
+| `test-case-design` | 需求 → 用例集 | `test-assets/suites/<REQ>/cases.json` |
 | `api-test-execute`（后续） | 用例集 → 执行结果 | `.test-artifacts/<REQ>/` |
 | `test-report`（后续） | 结果 → 报告/缺陷单 | `.test-artifacts/<REQ>/report.html` |
 
@@ -484,25 +495,33 @@ test-report           结果 → 报告 / 缺陷单
 
 ---
 
-## 5. 待你对齐的决策点（已按你的反馈更新）
+## 5. 决策点（已全部对齐）
 
-| # | 问题 | 状态 / 我的建议 |
-|---|------|-----------------|
-| Q1 | 方法库放哪 | ✅ **已澄清**：不是打包位置问题，而是**skill 定义运行时工作区契约**（§1.1.1）。方法库随 skill 分发，运行时拷入 `run-root/methods/` 作快照，项目可覆盖 |
-| Q2 | Layer 0 几条 | ✅ **已定：6 条**（正常/边界/异常/非法迁移/**幂等**/**服务端校验**）。后两条来自实测——baseline 三轮都自发补了，with-skill 恰恰欠密 |
-| Q3 | 项目资产目录名 | ⏳ **待你从提案中选**（见下方选项） |
-| Q4 | 执行产物是否进 Git | 建议不进，`.test-artifacts/` 走 `.gitignore` |
-| Q5 | 环境配置格式 | 建议 YAML（人写友好），校验器手写零依赖解析 |
-| Q6 | 落地顺序 | ✅ **已定：两项并行**（§4 已给出文件所有权划分与合并顺序） |
-| Q7 | LICENSE 协议 | 仍待确认（REQ-001 遗留，阻塞 npm 发布） |
+| # | 问题 | 决策 |
+|---|------|------|
+| Q1 | 方法库放哪 | ✅ **不是打包位置问题，而是 skill 定义的运行时工作区契约**（§1.1.1）。方法库随 skill 分发，运行时拷入 `run-root/methods/` 作快照，项目可覆盖裁剪 |
+| Q2 | Layer 0 几条 | ✅ **6 条**：正常/边界/异常/非法迁移/**幂等**/**服务端校验**。后两条来自实测——baseline 三轮都自发补了，with-skill 恰恰欠密 |
+| Q3 | 项目资产目录名 | ✅ **`test-assets/`** |
+| Q4 | 执行产物是否进 Git | ✅ **不进 Git**，`.test-artifacts/` 由 `.gitignore` 排除 |
+| Q5 | 环境与执行配置格式 | ✅ **JSON**（校验器只需 `JSON.parse`，与用例集同构） |
+| Q6 | 落地顺序 | ✅ **两项并行**（§4 已给出文件所有权划分与合并顺序） |
+| Q7 | LICENSE 协议 | ⏸ **暂不决定，先不发布**（npm 包保持未发布状态） |
 
-### Q3 目录名提案
+### 5.1 决策带来的连带影响
 
-| 提案 | 优点 | 顾虑 |
-|---|---|---|
-| `qa/` | 最短最通用，覆盖用例/环境/工具全栈；社区认知度高 | 过于宽泛，可能与"质量保证"泛用概念冲突 |
-| `testkit/` | 明确是"测试工具包"，与 `tests/`（单元测试代码）语义区分干净 | 稍长 |
-| `test-assets/` | 直白说明这是**资产**（用例/环境/契约），不是可执行测试代码 | 名字偏长偏描述性 |
-| `.qa/` | 隐藏目录，不干扰代码浏览 | 违反"进 Git 的用可见名"规则；若被 git 跟踪则与 agent-workspace 约定冲突 |
+| 决策 | 连带影响 |
+|---|---|
+| 配置用 JSON | 校验器零依赖成立（无 YAML 解析器）；代价是配置文件无注释，字段说明需放在 `_schema.json` 的 `description` 里 |
+| 资产目录 `test-assets/` | skill 产出的 `cases.json` 建议落点为 `test-assets/suites/<REQ-slug>/cases.json`；运行时工作区（§1.1.1）与项目资产目录是**两级**，晋升由调用方决定 |
+| 产物不进 Git | `verify-layout.mjs` 需检查 `.gitignore` 含 `.test-artifacts/`；CI 需负责归档产物 |
+| Layer 0 = 6 条 | 用例量预计上升（REQ-001 with-skill 每条目 2.6 条 → 目标 ≥6 条）；**必须配套"带 reason 的跳过"机制**，否则纯只读需求会被迫造无用例 |
+| 不发布 | npm 包保持本地 tarball 状态；后续改动不影响已装 skill（`~/.agents/skills/` 里的副本需手动同步） |
 
-我的倾向是 **`qa/`**：短、通用、与 `tests/` 无歧义，且这个目录里装的不只是用例（还有环境配置、接口契约、执行工具），叫 `qa/` 语义覆盖最准。
+### 5.2 Q7 遗留的处理方式
+
+用户选择"暂不决定，先不发布"。因此：
+
+- `package.json` 维持现状（`license: "MIT"` 字段存在但不发布）；
+- **不执行** `npm publish`；
+- 后续 skill 改造完成后，用 `npm pack` 产 tarball 供本地安装验证；
+- `~/.agents/skills/` 里的已装副本在 skill 改造后需要**手动重新安装**（`node bin/test-agent-skills.mjs install`），这属于安装器的正常行为，不是 bug。
