@@ -1,0 +1,5 @@
+{
+  "meta": { "source": "SKILL.md 形状", "generated_at": "2026-11-11T18:00:00+08:00", "case_count": 1 },
+  "requirements": [ { "id": "R-1", "title": "标题", "source_ref": "原文", "testable": true } ],
+  "cases": [ { "id": "TC-001", "title": "用例", "requirement_refs": ["R-1"], "dimension": "functional", "priority": "P0", "preconditions": [], "steps": [{ "action": "a", "expected": "b" }], "data": {}, "tags": [] } ]
+}

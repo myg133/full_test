@@ -1,0 +1,5 @@
+{
+  "schema_version": 2,
+  "requirements": [ { "id": "R-1", "title": "缺矩阵", "source_ref": "x", "testable": true } ],
+  "cases": [ { "id": "TC-001", "title": "用例", "requirement_refs": ["R-1"], "dimension": "functional", "priority": "P0", "method": ["M0.1"], "status": "active", "steps": [{ "action": "a", "expected": "b" }] } ]
+}

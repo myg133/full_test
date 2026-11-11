@@ -15,6 +15,14 @@
       "role": "dev",
       "host": "archlinux",
       "updated_at": "2026-11-11T16:49:01+08:00"
+    },
+    {
+      "id": "dev-0024",
+      "registered_at": "2026-11-11T18:16:53+08:00",
+      "status": "active",
+      "role": "dev",
+      "host": "archlinux",
+      "updated_at": "2026-11-11T18:16:53+08:00"
     }
   ]
 }

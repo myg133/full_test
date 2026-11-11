@@ -1,0 +1,5 @@
+{
+  "meta": { "source": "legacy" },
+  "requirements": [ { "id": "R-1", "title": "旧结构", "source_ref": "x", "testable": true } ],
+  "cases": [ { "id": "TC-001", "title": "旧用例", "requirement_refs": ["R-1"], "dimension": "functional", "priority": "P0", "steps": [{ "action": "a", "expected": "b" }] } ]
+}
