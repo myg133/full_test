@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# REQ-002.4 验收脚本 —— .tools 工具链自举机制
+# REQ-003 验收脚本 —— .tools 工具链自举机制
 #
 # 用法: verify-acceptance.sh <包根目录>
 #   <包根目录> 即 npm 包根（含 package.json 与 bin/qa）

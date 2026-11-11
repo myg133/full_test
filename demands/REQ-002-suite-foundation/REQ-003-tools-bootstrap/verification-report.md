@@ -1,6 +1,9 @@
-# REQ-002.4 独立验收报告 —— `.tools` 工具链自举机制
+# REQ-003 独立验收报告 —— `.tools` 工具链自举机制
 
-- **验收对象**：`feature-REQ-002.4` 分支（`feature/REQ-002.4`，HEAD `6a4dc41`）
+> 编号说明：本 REQ 原编号 `REQ-002.4`，因 `aw.py` 的 worktree/分支命名规范要求三位扁平号，
+> 已改为 `REQ-003`（原号作废、不再复用）。下文提到分支 `feature/REQ-002.4` 均为改号前的历史名称。
+
+- **验收对象**：`feature-REQ-003` 分支（`feature/REQ-003`，HEAD `6a4dc41`）
   - `bin/qa`（薄启动器）、`bin/qa-impl.mjs`（主实现，1580 行）
   - `skills/qa-toolchain/SKILL.md`
   - `skills/qa-toolchain/references/tools-chain-contract.md`
@@ -137,7 +140,7 @@
 
 ## 4. BA 验收脚本质量评估（含假 PASS 风险）
 
-脚本：`BA/demands/REQ-002-suite-foundation/REQ-002.4-tools-bootstrap/verify-acceptance.sh`（279 行）。
+脚本：`BA/demands/REQ-002-suite-foundation/REQ-003-tools-bootstrap/verify-acceptance.sh`（279 行）。
 
 ### 4.1 总体评价
 - **写得比一般验收脚本好**：AC-003 已按要求改成"逐工具锚定状态行"（`has_state()` 用 `^\[$2\] $3(（|$)` 匹配 `[status] tool` 行），而不是全文 grep；404/不可达用本地端口造、不依赖外网；AC-005/AC-011 都先确认"清单合法"再测"装不上"路径；对未变异基线跑出 **16 PASS / 0 FAIL**，与开发者自验结论一致。
