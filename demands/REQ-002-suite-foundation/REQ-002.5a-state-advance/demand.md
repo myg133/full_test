@@ -245,9 +245,9 @@ node scripts/cycle-state.mjs show test-assets/cycles/R1-REQ-001 --json
 
 ### F8 验收脚本 `BA/demands/.../REQ-002.5a-state-advance/verify-acceptance.sh`
 
-本 REQ 的 18 条 AC 全部机械化，由 `verify-acceptance.sh` 逐条执行。
+本 REQ 的 27 条 AC 全部机械化，由 `verify-acceptance.sh` 逐条执行。
 
-**背景**：这个套件至今**没有任何自动化回归测试**，连续两次返工（REQ-002A、REQ-002B）都是靠手工逐条验证。手工验证 18 条 AC 必然漏判 —— 本 REQ 的缺陷 2、3 正是手工验收阶段漏掉、靠变异测试才挖出来的。
+**背景**：这个套件至今**没有任何自动化回归测试**，连续两次返工（REQ-002A、REQ-002B）都是靠手工逐条验证。手工验证 27 条 AC 必然漏判 —— 本 REQ 的缺陷 2、3、4 正是手工验收阶段漏掉、靠变异测试与独立 QA 才挖出来的。
 
 **用法**：
 
@@ -270,7 +270,7 @@ bash BA/demands/REQ-002-suite-foundation/REQ-002.5a-state-advance/verify-accepta
 
 ## 验收要点
 
-见 `acceptance.md`（18 条 AC）。
+见 `acceptance.md`（27 条 AC）。
 
 ## 依赖说明
 

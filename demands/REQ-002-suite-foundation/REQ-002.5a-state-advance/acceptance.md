@@ -129,5 +129,42 @@
 - **预期结果**: 骨架输出是合法 JSON 且**包含** `schema_version`（值为 `2`）、`requirements[]`、`open_questions[]`、`coverage_matrix[]`、`cases[]` 各字段；直接校验该骨架**退出码 0**（字段齐备，不因缺字段而 ERROR）
 - **类型**: 功能
 
+### AC-022: `cycle.json` 与 `index.json` 的状态一致性（QA P1）
+- **前置条件**: 合法项目；(a) 把 `cycles/index.json` 里对应条目的 `status` 改成与 `cycle.json` 不同的值；(b) 把 `test-assets/cycles/` 目录设为只读后执行 `advance`
+- **测试步骤**: (a) 跑 `verify-layout.mjs`；(b) 记录 `cycle.json` 的 sha256 后跑 `advance --to in_progress --by dev`，再比对 sha256，并解除只读后重试同一条命令
+- **预期结果**: (a) 退出码 1，报错指出 index 与 cycle 状态不一致；(b) `advance` 退出码非 0 且 **`cycle.json` 的 sha256 不变**（失败必须回滚）；解除只读后重试同一条命令，index 被补齐且与 cycle 一致
+- **类型**: 功能
+
+### AC-023: 推进器与校验器对 `scopes_skipped` 缺陷报告一致（QA P2）
+- **前置条件**: 合法轮次，分别注入三种缺陷 —— `scopes_skipped[0]` 缺 `at` / 缺 `by` / `reason` 为空
+- **测试步骤**: 对每种缺陷，分别跑 `cycle-state.mjs show --json`、`advance`、`skip-scope`、`set-stage`，再跑 `verify-layout.mjs`
+- **预期结果**: 推进器的**四个子命令全部拒绝**并报出与校验器**同类**的问题；推进器**不得**把坏文件继续写下去（各命令执行前后 `cycle.json` 的 sha256 不变）；`show --json` 的 `ok` 为 false 且 `problems` 非空
+- **类型**: 一致性
+
+### AC-024: `stages.<name>.status` 缺失 / 类型错 / 非法枚举被拦（QA P3）
+- **前置条件**: 合法项目，逐一制造：`stages.design = {}`（无 status）、`stages.design.status = 123`、`stages.design.status = "finished"`、`stages.design.artifacts = "notarray"`、`scopes = "string"`、`scopes_skipped = "string"`、`trigger = "string"`、`round = 123`（共 8 例）
+- **测试步骤**: 跑 `verify-layout.mjs`
+- **预期结果**: 8 例全部退出码 1，且报错点名具体字段路径
+- **类型**: 功能
+
+### AC-025: `suite.json` 顶层字段封闭（QA P3）
+- **前置条件**: 合法项目，给 `suite.json` 加 `load_scenario`（或 `threat_model` 等 scope 专属字段）
+- **测试步骤**: 跑 `verify-layout.mjs`
+- **预期结果**: 退出码 1，报错指出多余字段
+- **类型**: 功能
+
+### AC-026: `SKILL.md` 含全部子命令与可复制的完整调用序列（QA P4）
+- **前置条件**: 源码级检查
+- **测试步骤**: 检查 `SKILL.md` 是否出现 `init` / `show` / `advance` / `skip-scope` / `set-stage` 五个子命令名；是否存在一条包含 `init` 与 `skip-scope` 的可复制完整调用序列
+- **预期结果**: 五个子命令名全部出现；存在含 `init` 与 `skip-scope` 的完整调用序列示例
+- **类型**: 文档
+
+### AC-027: `--json` 在 usage 错误时 stdout 仍是合法 JSON（QA P5）
+- **前置条件**: 合法轮次
+- **测试步骤**: 跑 `cycle-state.mjs advance <轮次目录> --json --bogus 1`，把 stdout 交给 `JSON.parse`
+- **预期结果**: 退出码 2；stdout 可被 `JSON.parse` 成功
+- **类型**: 功能
+
+
 
 

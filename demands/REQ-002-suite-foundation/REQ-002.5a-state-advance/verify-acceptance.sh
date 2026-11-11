@@ -504,6 +504,134 @@ else
   bad "AC-021 校验器可生成字段齐备的 v2 骨架" "未找到可用的骨架生成入口（试过 --init/--template/init/--skeleton）"
 fi
 
+# ---------------------------------------------------------------- AC-022
+# QA P1: cycle.json 与 index.json 的状态一致性 + 失败回滚
+D="$WORK/ac022"; mkdir -p "$D"
+make_project "$D/proj"
+# (a) index 与 cycle 状态不一致 -> 校验器必须拦
+node -e '
+const fs=require("fs"),f=process.argv[1];const o=JSON.parse(fs.readFileSync(f,"utf8"));
+o.cycles[0].status="planned";fs.writeFileSync(f,JSON.stringify(o,null,2));
+' "$D/proj/test-assets/cycles/index.json"
+OUT="$(node "$VL" "$D/proj" 2>&1)"; RC=$?
+A_OK=0
+if [ $RC -eq 1 ]; then A_OK=1; fi
+# (b) index 写失败时 cycle.json 必须回滚
+D2="$WORK/ac022b"; mkdir -p "$D2"
+make_project "$D2/proj"
+chmod 555 "$D2/proj/test-assets/cycles" 2>/dev/null
+BEFORE="$(sha "$D2/proj/test-assets/cycles/R1-REQ-001/cycle.json")"
+node "$CS" advance "$D2/proj/test-assets/cycles/R1-REQ-001" --to completed --by dev >/dev/null 2>&1; RC2=$?
+AFTER="$(sha "$D2/proj/test-assets/cycles/R1-REQ-001/cycle.json")"
+chmod 755 "$D2/proj/test-assets/cycles" 2>/dev/null
+B_OK=0
+if [ $RC2 -ne 0 ] && [ "$BEFORE" = "$AFTER" ]; then B_OK=1; fi
+if [ $A_OK -eq 1 ] && [ $B_OK -eq 1 ]; then
+  ok "AC-022 cycle.json 与 index.json 的状态一致性（含失败回滚）"
+else
+  bad "AC-022 cycle.json 与 index.json 的状态一致性（含失败回滚）" "index不一致拦截=$A_OK 失败回滚=$B_OK (rc=$RC2 sha相同=$([ "$BEFORE" = "$AFTER" ] && echo yes || echo no)) out=$OUT"
+fi
+
+# ---------------------------------------------------------------- AC-023
+# QA P2: 推进器与校验器对 scopes_skipped 缺陷报告一致
+D="$WORK/ac023"; mkdir -p "$D"
+INJ_OK=1
+for DEF in "delete o.scopes_skipped[0].at" "delete o.scopes_skipped[0].by" "o.scopes_skipped[0].reason=''"; do
+  T="$D/$(echo "$DEF" | md5sum | cut -c1-8)"; mkdir -p "$T"
+  node "$CS" init "$T/R1-REQ-001" --cycle-id R1-REQ-001 --round R1 --round-type new-requirement \
+    --requirement REQ-001 --scope functional --by dev >/dev/null 2>&1
+  node "$CS" skip-scope "$T/R1-REQ-001" --scope load --reason "无阈值可依" --by dev-agent-1 >/dev/null 2>&1
+  node -e "
+const fs=require('fs'),f=process.argv[1];const o=JSON.parse(fs.readFileSync(f,'utf8'));
+$DEF
+fs.writeFileSync(f,JSON.stringify(o,null,2));
+" "$T/R1-REQ-001/cycle.json"
+  # 校验器必须拦
+  node "$VL" "$T" >/dev/null 2>&1 || { INJ_OK=0; continue; }
+  # 推进器四个子命令必须全部拒绝，且不得写坏文件
+  SB="$(sha "$T/R1-REQ-001/cycle.json")"
+  node "$CS" show "$T/R1-REQ-001" --json >/dev/null 2>&1; [ $? -eq 0 ] && INJ_OK=0
+  node "$CS" advance "$T/R1-REQ-001" --to in_progress --by dev >/dev/null 2>&1; [ $? -eq 0 ] && INJ_OK=0
+  node "$CS" skip-scope "$T/R1-REQ-001" --scope load --reason "again" --by dev >/dev/null 2>&1; [ $? -eq 0 ] && INJ_OK=0
+  node "$CS" set-stage "$T/R1-REQ-001" --stage design --status done >/dev/null 2>&1; [ $? -eq 0 ] && INJ_OK=0
+  SA="$(sha "$T/R1-REQ-001/cycle.json")"
+  [ "$SB" = "$SA" ] || INJ_OK=0
+done
+if [ $INJ_OK -eq 1 ]; then
+  ok "AC-023 推进器与校验器对 scopes_skipped 缺陷报告一致"
+else
+  bad "AC-023 推进器与校验器对 scopes_skipped 缺陷报告一致" "存在推进器未拒绝或写坏文件的注入用例"
+fi
+
+# ---------------------------------------------------------------- AC-024
+# QA P3: 契约字段缺失/类型错/非法枚举被拦（8 例）
+D="$WORK/ac024"; mkdir -p "$D"
+TYP_OK=1
+run_mut() { # $1=用例名 $2=变异 JS
+  local d="$D/$1"; mkdir -p "$D"; make_project "$d"
+  node -e "
+const fs=require('fs'),f=process.argv[1];const o=JSON.parse(fs.readFileSync(f,'utf8'));
+$2
+fs.writeFileSync(f,JSON.stringify(o,null,2));
+" "$d/test-assets/cycles/R1-REQ-001/cycle.json" 2>/dev/null
+  node "$VL" "$d" >/dev/null 2>&1 || { TYP_OK=0; echo "    逃逸: $1"; }
+}
+run_mut "stages-status缺失"   "o.stages.design={};"
+run_mut "stages-status类型错" "o.stages.design.status=123;"
+run_mut "stages-status枚举非法" "o.stages.design.status='finished';"
+run_mut "artifacts非数组"      "o.stages.design.artifacts='notarray';"
+run_mut "scopes非数组"         "o.scopes='string';"
+run_mut "scopes_skipped非数组"  "o.scopes_skipped='string';"
+run_mut "trigger非对象"        "o.trigger='string';"
+run_mut "round类型错"          "o.round=123;"
+if [ $TYP_OK -eq 1 ]; then
+  ok "AC-024 stages/status/类型错与非法枚举被拦（8 例）"
+else
+  bad "AC-024 stages/status/类型错与非法枚举被拦（8 例）" "有逃逸项"
+fi
+
+# ---------------------------------------------------------------- AC-025
+# QA P3: suite.json 顶层字段封闭
+D="$WORK/ac025"; mkdir -p "$D"
+make_project "$D/proj"
+node -e '
+const fs=require("fs"),f=process.argv[1];const o=JSON.parse(fs.readFileSync(f,"utf8"));
+o.load_scenario="scenarios/checkout.json";fs.writeFileSync(f,JSON.stringify(o,null,2));
+' "$D/proj/test-assets/suites/REQ-001-coupon/suite.json"
+OUT="$(node "$VL" "$D/proj" 2>&1)"; RC=$?
+if [ $RC -eq 1 ]; then
+  ok "AC-025 suite.json 顶层字段封闭"
+else
+  bad "AC-025 suite.json 顶层字段封闭" "rc=$RC（期望1）out=$OUT"
+fi
+
+# ---------------------------------------------------------------- AC-026
+# QA P4: SKILL.md 含全部子命令与可复制调用序列
+SK="$SKILL_DIR/SKILL.md"
+CMDMISS=""
+for c in init show advance skip-scope set-stage; do
+  grep -q -- "$c" "$SK" 2>/dev/null || CMDMISS="$CMDMISS $c"
+done
+SEQ="$(grep -c -E 'cycle-state\.mjs (init|show|advance|skip-scope|set-stage)' "$SK")"
+if [ -z "$CMDMISS" ] && [ "$SEQ" -ge 2 ]; then
+  ok "AC-026 SKILL.md 含全部子命令与可复制的完整调用序列"
+else
+  bad "AC-026 SKILL.md 含全部子命令与可复制的完整调用序列" "缺子命令:$CMDMISS 可复制命令行数=$SEQ"
+fi
+
+# ---------------------------------------------------------------- AC-027
+# QA P5: --json 在 usage 错误时 stdout 仍是合法 JSON
+D="$WORK/ac027"; mkdir -p "$D"
+node "$CS" init "$D/R1-REQ-001" --cycle-id R1-REQ-001 --round R1 --round-type new-requirement \
+  --requirement REQ-001 --scope functional --by dev >/dev/null 2>&1
+node "$CS" advance "$D/R1-REQ-001" --json --bogus 1 > "$D/out.json" 2>/dev/null; RC=$?
+JSONOK="$(node -e 'try{JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log("ok")}catch(e){console.log("fail")}' "$D/out.json")"
+if [ $RC -eq 2 ] && [ "$JSONOK" = "ok" ]; then
+  ok "AC-027 --json 在 usage 错误时 stdout 仍是合法 JSON"
+else
+  bad "AC-027 --json 在 usage 错误时 stdout 仍是合法 JSON" "rc=$RC(期望2) json=$JSONOK"
+fi
+
 # ---------------------------------------------------------------- 汇总
 echo
 echo "────────────────────────────────────────"

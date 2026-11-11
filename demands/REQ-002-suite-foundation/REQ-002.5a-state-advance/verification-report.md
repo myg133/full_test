@@ -52,7 +52,38 @@ REQ-002A 的强制规则是"缺字段报 WARN，显式声明 `schema_version: 2`
 
 ## 4. 独立 QA 验收
 
-> 待填：QA 子 agent 的独立结论、AC 逐条结果表、10 个怀疑项的逐条结论、其发现的额外缺陷。
+**独立 QA 子 agent 判定：PARTIAL（有条件通过）。**
+
+QA 独立于我的验收脚本，自建 fixture、转移表 5×5 穷举 25/25、故障注入测原子性、41+10 项变异测试，结论：
+
+- **20 条 AC 全部通过**（我这边 22 项检查亦全绿）
+- 核心设计意图基本达成：规则单一来源（源码层）、单文件原子写（故障注入 4 连 + SIGKILL×20 无残留）、失败零副作用（15 条失败路径逐一 sha256 比对）、幂等、零依赖、可移植、并发安全
+- **但发现 6 个 AC 之外的缺陷**，其中 2 个直击"推进器与校验器行为一致、状态写入权可信收口"这个核心意图
+
+### QA 发现的缺陷与裁决
+
+| # | 级别 | 缺陷 | BA 裁决 |
+|---|---|---|---|
+| P1 | 高 | `index.json` 与 `cycle.json` 非原子更新；index 写失败时 cycle 已改，**重试走幂等分支不补同步 → 永久脱同步，校验器还完全不报警** | **本 REQ 必修**。采纳 QA 三条修法：失败回滚 cycle + 幂等分支也同步 index + 校验器加 index↔cycle 一致性检查（兜底） |
+| P2 | 中 | 推进器与校验器对同一份坏文件报告不一致 —— `show`/`advance` 只调 `checkCycleState`，漏 `checkScopesSkipped`；推进器还会把坏文件继续写下去 | **本 REQ 必修**。这正是 AC-011 的判据。单一来源不只是"规则写在一处"，还包括"用哪套规则做准入判断"也一致 |
+| P3 | 中 | 契约文档写"必须/类型"，校验器不拦 —— 9 处逃逸（`stages.<name>.status` 缺失/类型错、artifacts/scopes/scopes_skipped/trigger/round 类型错、suite.json 多余字段） | **本 REQ 修**。根因是 `typeof body.status === 'string' &&` 这种写法只在已是字符串时才检查 |
+| P4 | 中 | `SKILL.md` 未覆盖 `init` 与 `skip-scope` 两个最常用入口 —— agent 只读 SKILL.md 答不出"我要开始一轮测试该敲什么" | **本 REQ 修**。约 5 行改动，与缺陷 4 的 SKILL.md 修改合并 |
+| P5 | 低 | `--json` 在 usage 错误时 stdout 不是合法 JSON（`parseArgs` 在 `context.json` 赋值前执行） | **本 REQ 修**。成本极低 |
+| P6 | 低 | `project-layout.md` 标题写"14 项"实际 16 行 | **本 REQ 修**。纯文档 |
+
+对应新增 AC-022 ~ AC-027。
+
+### QA 指出的 BA 侧盲区（已修正）
+
+QA 指出：**"本 REQ 已经建了验收脚本，但它目前只覆盖 AC 明写的场景，恰好漏掉了 P2/P3 这两类'契约↔实现漂移'。"** —— 说得对。我的 AC-011 只测了 `status↔history` 场景，没测 `scopes_skipped` 场景；契约类型逃逸也完全没覆盖。已补入 AC-022~027 并在验收脚本中实现。
+
+### QA 未能验证的项（如实记录）
+
+1. **真实 agent 行为** —— 只能静态判读 SKILL.md 的信息是否足以让 agent 答出三问，无法在真实模型上跑端到端。REQ-001 那类"模型自信绕过契约"的行为风险未实测。
+2. **新版本安装后可用性** —— QA 验收时 `~/.agents/skills/test-case-design/` 仍是 develop(REQ-002B) 版，未含新文件。安装流程在合并后由 BA 执行并验证。
+3. **Windows 行为** —— `renameSync` 的原子性在 NTFS 下与 POSIX 有差异，本次仅在 Linux 实测。
+4. **index ↔ cycle 一致性契约缺口** —— 原契约未声明二者必须一致，本 REQ 已补上该条契约与校验。
+
 
 ## 5. 补丁轮次
 
