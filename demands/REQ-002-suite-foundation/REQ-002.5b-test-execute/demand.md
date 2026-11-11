@@ -85,7 +85,7 @@ executor = {
   name: string,          // 如 "api"
   version: string,
   run(case, context) -> {
-    status: "passed" | "failed" | "blocked" | "skipped",
+    observed: object,    // 执行器实际观察到什么（状态码 / 响应体 / 响应头 / 提取值…）
     evidence: [{ path, media_type, bytes? }],
     reproduction?: { steps: string[], command?: string, expected?: string },
     error?: { type: string, message: string }
@@ -95,13 +95,48 @@ executor = {
 
 `context` 提供：`base_url` / `timeout_ms` / `headers` / `resolved_credentials` / `run_id` / `evidence_dir` / `case`。
 
+**执行器返回 `observed`（观察结果），不返回 `status`（判定结果）。** 判定由执行外壳按用例的 `assertions` 做 —— 这是刻意的分层：
+
+```
+执行器：跑 → 报告"我看到了什么"（observed）
+执行外壳：读 assertions → 比对 observed → 得出 status（passed/failed/blocked/skipped）
+```
+
 **接口的三条约束**：
 
-1. **执行器不判定"通过"的语义** —— 它只报告观察到的结果。"passed" 意味着「实际结果 == 用例的 `expected`」，这个比较由**执行外壳**做，不由执行器做。否则每个执行器各写一套比较逻辑，判定口径必然漂移。
+1. **执行器不判定"通过"的语义。** 否则每个执行器各写一套比较逻辑，判定口径必然漂移 —— 而且判定逻辑被写死在代码里（正是 F4 要消灭的东西）。执行器只负责"观察"，判定规则是**数据**（`assertions`），由执行外壳统一执行。
 2. **执行器不得自行写 `.test-artifacts/` 以外的文件**。
 3. **执行器必须产出可复现信息** —— 失败用例至少要有 `reproduction.steps`（照抄用例的 steps 即可）。做不到复现的失败等于没测。
 
-### F4 证据链结构
+### F4 执行器不可被 agent 定制 —— 用配置吸收需求，而不是放开源码
+
+**问题（用户亲历的真实故障模式）**：此前交付的一个 skill 用 Python 写 CLI，agent 拿到 skill 后**直接改那个 Python 源文件**来满足自己的需要。结果是工具实现被污染 —— 后续所有使用者拿到的都是被改过的工具，而改动不进版本库、无法追溯、无法回归。
+
+**为什么这是本 REQ 的头号风险**：本 REQ 交付的第一个「agent 可能会想去改」的可执行组件就是执行器。而执行器看起来特别"该改" —— 换一种请求方式、加一种断言、改一个字段名，每个看起来都只有几行。agent 的直觉会是"改脚本比配配置快"。
+
+**约束（三条，缺一不可）**：
+
+1. **执行器实现是 skill 的组成部分，agent 不得修改。** 改写进 `SKILL.md` 的硬约束段（与"状态文件只由脚本写"并列，同一类不可协商项）。
+2. **定制需求必须能被配置表达 —— 这是根治，不是禁止。** 如果 agent 想改代码，多半是因为"配置表达不了我要的东西"。所以执行器的**断言规则必须完全可配置**，而不是把判定逻辑写死在代码里：
+
+   | 可配置项 | 含义 |
+   |---|---|
+   | `request` | 请求构造（方法 / 路径 / body 模板 / 头） |
+   | `assertions[]` | 判定规则（状态码 / JSON 路径 / 值 / 正则 / 类型），每条含 `path` / `op` / `expected` / `on_fail` |
+   | `extract[]` | 从响应提取值，供后续用例引用 |
+   | `auth` | 鉴权方式（引用环境变量，不含明文） |
+   | `timeout_ms` / `retries` | 超时与重试 |
+
+   用例的 `expected` 应当落到 `assertions` 里，**而不是散落在执行器代码里**。
+3. **执行器注册表 `executors/index.json`** 声明每个执行器**支持哪些可配置项、不支持哪些**，让 agent 明确知道定制边界在哪。遇到注册表未声明的需求，走"提需求"而不是"改代码"。
+
+**为什么第 2 条是关键**：只写"不许改代码"而不给替代路径，agent 只会换个方式硬改（复制一份脚本到项目里、改了不回去）。给出**能用的配置能力**，改代码的动机自然消失。
+
+**顺带收益**：`assertions` 可配置让"通过/失败"的判定口径不再藏在代码里，而是数据 —— 这与 F3「判定由执行外壳统一做」配合，判定规则本身也可被 review、被 diff。
+
+**配套完整性自检**：`scripts/verify-integrity.mjs` 对本 skill 目录内的执行器实现算指纹，与随包发布的 `executors/manifest.json` 比对。agent 改了执行器源码 → 一条命令发现。**这条只覆盖执行器**；把 skill 全部文件的完整性校验推广到整个套件（安装器在锁文件里记 sha256）另立 REQ。
+
+### F5 证据链结构
 
 ```
 .test-artifacts/<run_id>/
@@ -139,7 +174,7 @@ executor = {
 | `reproduction` | 复现信息（失败/阻塞时必填） |
 | `error` | `{ type, message }`（失败时必填） |
 
-### F5 sha256 指纹与防篡改
+### F6 sha256 指纹与防篡改
 
 - 每个证据文件算 sha256，写进 `results.json` 的 `evidence[]`
 - `meta.json` 里再记一个 `evidence_manifest_sha256` = 对 `results.json` 中全部 evidence 条目（路径 + sha256）再算一次的总指纹
@@ -151,7 +186,7 @@ executor = {
 
 **为什么需要**：产物落 `.test-artifacts/`（本地、不进 Git），会被复制进制品库、贴进缺陷单、附到报告里。一旦某条证据被替换或某条结果被改写，没有指纹就永远查不出来。有了指纹，"这份报告可信吗"变成一条命令的事。
 
-### F6 与轮次状态集成
+### F7 与轮次状态集成
 
 执行必须经 `cycle-state.mjs` 推进状态：
 
@@ -164,7 +199,7 @@ node scripts/cycle-state.mjs set-stage <轮次目录> --stage triage --status in
 - 每次执行批次把 `run_id` 记进 `cycle.json` 的 `stages.execute.runs[]`
 - 执行**不得**直接改 `cycle.json`（REQ-002.5a 的写入权收口）
 
-### F7 产物脱敏
+### F8 产物脱敏
 
 执行产物可能含敏感数据（响应体里的 token、手机号、身份证、数据库连接串）。
 
@@ -173,7 +208,7 @@ node scripts/cycle-state.mjs set-stage <轮次目录> --stage triage --status in
 - 脱敏必须留痕：`meta.json` 记 `redaction: { rules_applied: [...], redacted_fields: N }`，让人知道"这里被处理过"，而不是让人以为原文如此
 - **脱敏后**的产物才可进制品库
 
-### F8 离线可跑
+### F9 离线可跑
 
 执行器必须有**不依赖外网**的实现，否则这个 skill 无法被验证：
 
