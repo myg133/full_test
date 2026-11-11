@@ -53,7 +53,7 @@ const COMMAND_SPECS = {
   show: { value: [] },
   advance: { value: ['to', 'by', 'reason'] },
   'skip-scope': { value: ['scope', 'reason', 'by'] },
-  'set-stage': { value: ['stage', 'status', 'artifacts'] },
+  'set-stage': { value: ['stage', 'status', 'artifacts', 'run'] },
 };
 
 const USAGE = [
@@ -66,7 +66,7 @@ const USAGE = [
   '  show       读当前状态：status / history / stages / 允许的下一步',
   '  advance    推进轮次状态  --to <状态> --by <agent> [--reason <文本>]',
   '  skip-scope 记录本轮跳过的 scope  --scope <scope> --reason <文本> --by <agent>',
-  '  set-stage  设置阶段状态  --stage <名称> --status <状态> [--artifacts a,b]',
+  '  set-stage  设置阶段状态  --stage <名称> --status <状态> [--artifacts a,b] [--run <run_id>]',
   '',
   '通用参数: --json 输出机器可读 JSON（缺省输出人读文本）',
 ].join('\n');
@@ -688,6 +688,11 @@ function cmdSetStage(target, flags) {
   const stage = requireFlag(flags, 'stage');
   const status = requireFlag(flags, 'status');
   const rawArtifacts = flags.get('artifacts');
+  const rawRun = flags.get('run');
+  const runId = typeof rawRun === 'string' ? rawRun.trim() : '';
+  if (rawRun !== undefined && runId === '') {
+    failValidation('参数 --run 的取值不能为空（要记的是一次执行的标识）', 'run');
+  }
   let artifacts;
   if (typeof rawArtifacts === 'string') {
     artifacts = rawArtifacts
@@ -714,8 +719,11 @@ function cmdSetStage(target, flags) {
       Array.isArray(current.artifacts) &&
       current.artifacts.length === artifacts.length &&
       current.artifacts.every((item, index) => item === artifacts[index]));
+  // runs[] 的幂等判断：同一个 run_id 不重复记
+  const currentRuns = isObject(current) && Array.isArray(current.runs) ? current.runs : [];
+  const runsSame = runId === '' || currentRuns.includes(runId);
 
-  if (currentStatus === status && artifactsSame) {
+  if (currentStatus === status && artifactsSame && runsSame) {
     writeResult({
       command: 'set-stage',
       target,
@@ -730,6 +738,11 @@ function cmdSetStage(target, flags) {
   const next = isObject(current) ? { ...current } : {};
   next.status = status;
   if (artifacts !== undefined) next.artifacts = artifacts;
+  if (runId !== '') {
+    // 追加一次执行记录；同一个 run_id 重复写入不产生重复项（幂等）
+    const runs = Array.isArray(next.runs) ? next.runs : [];
+    next.runs = runs.includes(runId) ? runs : [...runs, runId];
+  }
   data.stages[stage] = next;
   writeJsonAtomic(target.file, data);
 

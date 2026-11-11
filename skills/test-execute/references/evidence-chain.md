@@ -31,7 +31,8 @@
 ├── results.json         # 逐条用例的结果
 ├── evidence/
 │   └── TC-003/
-│       └── response.json
+│       ├── step-1-response.json      # 第 1 步的证据
+│       └── step-2-response.json      # 第 2 步的证据（多步用例才有）
 └── logs/
     └── runner.log
 ```
@@ -90,7 +91,7 @@
 | `started_at` / `finished_at` | string | 是 | ISO-8601 时间戳 |
 | `duration_ms` | number | 是 | 该用例耗时（毫秒） |
 | `evidence` | object[] | 是 | `{path, sha256, bytes, media_type}`；`path` 相对产物目录 |
-| `reproduction` | object | 是 | `{steps: [], command, expected}` —— 失败/阻塞时必填 |
+| `reproduction` | object | 是 | `{steps: [], command, expected}` —— 失败/阻塞时必填。`steps` 只写**实际执行过**的步骤 |
 | `error` | object\|null | 是 | `{type, message}` —— 失败/阻塞时必填 |
 
 `status` 的四种取值：
@@ -106,6 +107,20 @@
 > 把不可判定的用例算作通过，等于把"没测"记成"测过且通过"。宁可漏报通过，不可虚报通过。
 
 ---
+
+## 3.1 多步用例的证据
+
+一个用例有多步时，**每一步都有一份独立证据**，文件名带步骤序号：
+
+```text
+evidence/TC-003/
+├── step-1-response.json
+└── step-2-response.json
+```
+
+文件名里的序号是**执行顺序**（第几次请求），不是用例里的 step 下标。
+多步用例的证据条目数应等于它实际发出的请求数 —— 少一份就说明有请求没跑，
+而"没跑的步骤"会让判定看起来成立却毫无根据。
 
 ## 4. 指纹算法
 

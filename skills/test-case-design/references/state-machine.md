@@ -150,7 +150,7 @@ node scripts/cycle-state.mjs skip-scope test-assets/cycles/R1-REQ-001 \
 ### 3.5 `set-stage` —— 设置阶段状态
 
 ```console
-node scripts/cycle-state.mjs set-stage test-assets/cycles/R1-REQ-001 --stage design --status done [--artifacts a,b]
+node scripts/cycle-state.mjs set-stage test-assets/cycles/R1-REQ-001 --stage design --status done [--artifacts a,b] [--run <run_id>]
 ```
 
 | 参数 | 必填 | 说明 |
@@ -158,8 +158,11 @@ node scripts/cycle-state.mjs set-stage test-assets/cycles/R1-REQ-001 --stage des
 | `--stage` | 是 | 阶段名（`clarify` / `design` / `data` / `execute` / `triage` / `report`，允许自定义） |
 | `--status` | 是 | 阶段状态，必须在阶段状态枚举内 |
 | `--artifacts` | 否 | 逗号分隔的产物路径列表 |
+| `--run` | 否 | 本次执行的标识（run_id）。**追加**进 `stages.<阶段>.runs[]`（数组，元素是 run_id 字符串）；同一个 run_id 重复写入不产生重复项（幂等）。取值空 → 退出码 1，文件不动 |
 
-产出：`stages.<stage>.status` 被设置（已存在则更新）。阶段状态不改变轮次状态，因此不动 `history`。
+产出：`stages.<stage>.status` 被设置（已存在则更新）；给了 `--run` 时把 run_id **追加**进 `stages.<stage>.runs[]`（该数组不存在则创建）。阶段状态不改变轮次状态，因此不动 `history`。
+
+`runs[]` 是"这个阶段跑过哪几次执行"的追溯信息：只由本命令写入，元素必须是非空字符串（校验器会拦），同一个 run_id 不重复记。
 
 ---
 
@@ -171,6 +174,7 @@ node scripts/cycle-state.mjs set-stage test-assets/cycles/R1-REQ-001 --stage des
 4. **每次推进必留痕**：`history` 新增一条 `{at, from, to, by}`，`from` = 推进前状态，`to` = 推进后状态。
 5. **跳过必留痕**：`skip-scope` 的 `--reason` 为空或缺失 → 拒绝（退出码 1），文件不动；`--by` 缺失 → 拒绝（退出码 2）。写入的记录含 `scope` / `reason` / `at` / `by` 四个字段，跳过的决定可被审计。
 6. **幂等**：重复执行同一命令不产生额外副作用。
+   - `set-stage --run <同一个 run_id>` → 不产生重复项（`runs[]` 里已有就不再追加）。
    - `advance --to <当前状态>` → 报"已在该状态"，不追加 `history`，退出码 0。
    - `skip-scope` 同 scope 同 reason 同 `by` → 报"已记录"，不重复写入。
    - `set-stage` 同阶段同状态 → 报"已是该状态"，不重复写入。

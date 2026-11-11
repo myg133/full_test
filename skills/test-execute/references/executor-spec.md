@@ -36,14 +36,20 @@ executor = {
   version: string,
   start?(context) -> { base_url? }   // 可选：启动钩子（mock 驱动在这里起桩服务）
   run(case, context) -> {
-    observed: object,    // 执行器实际观察到什么（状态码 / 响应体 / 响应头 / 时长…）
-    evidence: [{ path, media_type, content }],
+    observed: object,    // 执行器实际观察到什么（单步时 = 该步的 observed；多步时 = 最后一步）
+    evidence: [{ path, media_type, content }],   // 所有步骤证据的汇总（向后兼容）
+    steps: [{ step_index, observed, evidence: [{ path, media_type, content }] }],
     reproduction?: { steps: string[], command?: string, expected?: string },
     error?: { type: string, message: string }
   },
   stop?(context) -> void             // 可选：结束钩子
 }
 ```
+
+**证据条目带 `content`（内容本体），落盘归执行外壳**（需求 D17）：
+执行器**不落盘**，把内容交回外壳，由外壳先脱敏 → 再写 → 再算指纹。
+F3 原来的 `{path, media_type, bytes?}` 隐含"执行器已写盘"，那样就无法满足
+F8 的"脱敏在写入前"；两者以本接口调和。
 
 ### `context`
 
@@ -58,6 +64,7 @@ executor = {
 | `variables` | 前面用例 `extract` 出来的值，供 `${名称}` 引用 |
 | `evidence_dir` | 该用例的证据目录 |
 | `case` | 用例对象 |
+| `steps` | **执行计划**：`[{step_index, request, action}]`，按顺序逐步执行（见 §2.1） |
 | `request` | 该用例解析出的请求配置（见 §3） |
 | `auth` | 该用例的鉴权配置（见 §5） |
 
@@ -73,6 +80,27 @@ executor = {
 - `error`：出错时的错误描述 `{type, message}`。`type` 决定判定结果（见 §6）。
 
 ---
+
+## 2.1 多步用例：逐步执行、逐步判定
+
+一个用例可以有多步。**每条断言绑定到它自己所在 step 的响应** ——
+拿第一个响应当所有断言的判据，会让"半个用例"报通过（本 skill 要消灭的虚报）。
+
+| 情形 | 跑几次请求 | 断言怎么绑 |
+|---|---|---|
+| 用例级载体 `case.request` / `case.data.request` | 1 次 | **所有** step 的断言都针对这同一次响应（合法的"一次响应多条断言"） |
+| 无用例级载体，多个可执行 step | 每个可执行 step 各 1 次 | 每条断言绑定到**它自己所在 step** 的响应 |
+| 无用例级载体，只有一个可执行 step | 1 次 | 所有断言都针对这同一次响应 |
+| 无任何可执行 step | 0 次 | 没有可判的响应 → 判 `blocked`（`assertion_without_response`） |
+
+**可执行 step 的定义**：有 `step.request`，或 `step.action` 能解析成 `METHOD /path`。
+
+- 断言所在 step 不可执行、且该用例不止一次请求时 → 该用例判 `blocked`
+  （`error.type = assertion_without_response`），**不得判 `passed`**。
+- 步骤之间**不做隐式数据串联**：`${name}` 仍只跨**用例**（前一个用例 `extract` 的值供后一个用例用），
+  不跨 step。跨 step 串联意味着 step 2 依赖 step 1 的响应，判定就不再是"一次请求一组断言"。
+- 证据逐步留痕：每步至少一份证据，文件名带步骤序号（`step-1-response.json` / `step-2-response.json`）。
+- `reproduction.steps` 只写**实际执行过**的步骤，不照抄用例里没跑的步骤。
 
 ## 2. 断言载体：`steps[].expected` 的两种形态
 
@@ -154,6 +182,10 @@ executor = {
 环境缺失和用例失败是两回事，混为一谈会让报告失真。
 
 证据与复现命令里出现的是**环境变量名**（如 `${TOKEN_ENV}`），不是真实值。
+
+> **已知限制（D19）**：复现命令**不含鉴权头**，只含环境变量名。
+> 代价是"带鉴权的用例不能照抄命令就跑通"，需要自己按 `auth_mode` 把环境变量补上。
+> 这是刻意的取舍：命令里带明文凭证 = 把凭证写进证据链，与"产物零凭证"直接冲突。
 
 ---
 

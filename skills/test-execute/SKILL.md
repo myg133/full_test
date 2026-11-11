@@ -16,7 +16,7 @@ description: |
 
 ## 硬约束（不可协商）
 
-1. **执行器实现是 skill 的组成部分，agent 不得修改。**
+1. **agent 不得修改执行器实现**（`executors/` 目录下的全部文件都是 skill 的组成部分，不是可定制项）。**不得改写、不得编辑、不得改动它们，也不得把它们复制到项目里再改。**
    `executors/` 目录下的全部文件（`api.mjs` / `mock.mjs` / `http-core.mjs` / `index.json` / `mock-endpoints.json`）
    属于 skill 的实现，不是可定制项。**不要改它们，也不要把它们复制到项目里再改** ——
    改动不进版本库、无法追溯，后续所有使用者拿到的都是被改过的工具。
@@ -93,6 +93,13 @@ description: |
 `exists` / `not_exists` / `type` / `gt` / `gte` / `lt` / `lte`。
 被检路径：`$status`（HTTP 状态码）、`$header.X-Trace-Id`（响应头）、`$.a.b[0].c`（响应体）、`$`（整个响应体）。
 
+**多步用例逐步执行、逐步判定**：一个用例的每个可执行 step 各发一次请求（step 有 `step.request`，
+或 `step.action` 能解析成 `METHOD /path`），**每条断言绑定到它自己所在 step 的响应**。
+拿第一个响应当所有断言的判据，会让"半个用例"报通过 —— 那正是本 skill 要消灭的虚报。
+断言所在 step 不可执行、又没有可判的响应时，该用例判 `blocked`（`assertion_without_response`），
+**不得判 `passed`**。步骤之间不做隐式数据串联：`${name}` 只跨用例，不跨 step。
+每步的证据文件名带序号（`step-1-response.json` / `step-2-response.json`）。
+
 > **一条用例至少有一条 `steps[].expected` 是断言对象，才算可机械判定。**
 > 全部是普通字符串的用例执行时判 `blocked`（理由：缺少可机械判定的断言），
 > **不得判 `passed`** —— 执行器"跑完了没报错"不等于"通过"，把不可判定算成通过等于把"没测"记成"测过且通过"。
@@ -109,7 +116,8 @@ description: |
 ├── results.json       # 逐条用例的结果（status / 时间 / 证据 / 复现 / 错误）
 ├── evidence/
 │   └── TC-003/
-│       └── response.json
+│       ├── step-1-response.json   # 每步一份证据，文件名带步骤序号
+│       └── step-2-response.json
 └── logs/
     └── runner.log
 ```
@@ -134,8 +142,15 @@ description: |
 | 2 | 调用方式错误（缺参数、参数拼错、路径不存在） |
 
 **退出码说的是执行流程本身成不成功，不等于"用例有没有通过"。**
+
+| 码 | 含义 |
+|---|---|
+| 0 | 执行流程成功完成且证据链自校验通过 —— **用例结果可能是 failed / blocked，那是业务事实** |
+| 1 | 执行流程失败：配置非法、驱动起不来、执行器异常、证据链自校验不通过；或 `--strict` 下有用例失败/阻塞 |
+| 2 | 调用方式错误（缺参数、参数拼错、路径不存在） |
+
 用例的通过/失败/阻塞看 `results.json` 的 `status` 与 `meta.json` 的计数。
-需要"有失败用例就让流水线红"的场景，加 `--strict`。
+需要"有失败用例就让流水线红"的场景，加 `--strict`（此时有用例 failed/blocked 就退 1）。
 
 `--json` 模式下 stdout **只有 JSON**（成功 / 校验失败 / 用法错误三种情形都是），可以直接 `JSON.parse`。
 

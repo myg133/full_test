@@ -14,6 +14,11 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import process from 'node:process';
 
+import { collectAssertions } from './assertion.mjs';
+
+/** 步骤 action 里可解析出 HTTP 请求的形式（形如 "GET /ok"） */
+const ACTION_REQUEST_PATTERN = /^\s*(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(\/\S*)\s*$/i;
+
 /** suite.json 的必填字段 */
 export const SUITE_REQUIRED_FIELDS = Object.freeze([
   'suite',
@@ -255,9 +260,10 @@ export function resolveDriverName(suiteConfig, environmentConfig) {
 }
 
 /**
- * 取出用例的请求构造配置。
+ * 取出**用例级**的请求构造配置。
  *
- * 载体优先级：case.request → case.data.request → case.steps[].request。
+ * 载体优先级：case.request → case.data.request。
+ * step 级的请求由 stepRequest() 单独解析（逐步执行时每个 step 各有自己的请求）。
  *
  * @param {object} caseObj 用例
  * @returns {object|null}
@@ -266,18 +272,79 @@ export function caseRequest(caseObj) {
   if (!isObject(caseObj)) return null;
   if (isObject(caseObj.request)) return caseObj.request;
   if (isObject(caseObj.data) && isObject(caseObj.data.request)) return caseObj.data.request;
-  if (Array.isArray(caseObj.steps)) {
-    for (const step of caseObj.steps) {
-      if (isObject(step) && isObject(step.request)) return step.request;
-    }
+  return null;
+}
+
+/**
+ * 取出单个 step 的请求构造配置。
+ *
+ * 一个 step 可执行，当且仅当它有 step.request，或它的 action 能解析成 "METHOD /path"。
+ *
+ * @param {object} step 步骤对象
+ * @returns {object|null}
+ */
+export function stepRequest(step) {
+  if (!isObject(step)) return null;
+  if (isObject(step.request)) return step.request;
+  if (typeof step.action === 'string') {
+    const matched = ACTION_REQUEST_PATTERN.exec(step.action);
+    if (matched) return { method: matched[1].toUpperCase(), path: matched[2] };
   }
   return null;
 }
 
 /**
+ * 解析一个用例的执行计划：跑哪些请求、每条断言绑到哪次响应。
+ *
+ * 规则（需求 F3 的多步语义）：
+ *   1. 用例级载体（case.request / case.data.request）存在 → 整个用例只跑这一次请求，
+ *      所有 step 上的断言都针对这同一次响应（合法的"一次响应多条断言"）。
+ *   2. 否则 → 每个可执行 step 各跑一次请求，按 steps 顺序。
+ *   3. 断言归属它自己所在的 step；该 step 不可执行且用例不止一次请求时，
+ *      这条断言没有可判的响应 → 判 blocked（assertion_without_response），不得判 passed。
+ *
+ * @param {object} caseObj 用例
+ * @returns {{requests: {step_index: number|null, request: object, action: string}[],
+ *            assertions: {assertion: object, stepIndex: number, action: string}[],
+ *            unbound: {assertion: object, stepIndex: number, action: string}[]}}
+ */
+export function resolveExecutionPlan(caseObj) {
+  const assertions = collectAssertions(caseObj);
+  const steps = isObject(caseObj) && Array.isArray(caseObj.steps) ? caseObj.steps : [];
+  const caseLevel = caseRequest(caseObj);
+  const requests = [];
+  if (caseLevel) {
+    requests.push({ step_index: null, request: caseLevel, action: '' });
+  } else {
+    steps.forEach((step, index) => {
+      const request = stepRequest(step);
+      if (!request) return;
+      requests.push({
+        step_index: index,
+        request,
+        action: isObject(step) && typeof step.action === 'string' ? step.action : '',
+      });
+    });
+  }
+
+  let unbound = [];
+  if (requests.length === 0) {
+    // 一次请求都没解析出来 → 所有断言都没有可判的响应
+    unbound = assertions.slice();
+  } else if (requests.length === 1) {
+    // 只解析出一次请求 → 全部断言都针对这同一次响应
+    unbound = [];
+  } else {
+    const executable = new Set(requests.map((item) => item.step_index));
+    unbound = assertions.filter((item) => !executable.has(item.stepIndex));
+  }
+  return { requests, assertions, unbound };
+}
+
+/**
  * 从步骤描述里回退解析 HTTP 请求（形如 "GET /ok"）。
  *
- * 只在用例没有显式声明请求时使用：步骤的 action 本来是给人读的一句话，
+ * 只在单个 step 没有显式声明请求时使用：步骤的 action 本来是给人读的一句话，
  * 但写成 "GET /ok" 这样的形式时也能直接驱动执行。
  *
  * @param {object} caseObj 用例
@@ -285,12 +352,9 @@ export function caseRequest(caseObj) {
  */
 export function requestFromSteps(caseObj) {
   if (!isObject(caseObj) || !Array.isArray(caseObj.steps)) return null;
-  const pattern = /^\s*(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(\/\S*)\s*$/i;
   for (const step of caseObj.steps) {
-    if (!isObject(step) || typeof step.action !== 'string') continue;
-    const matched = pattern.exec(step.action);
-    if (!matched) continue;
-    return { method: matched[1].toUpperCase(), path: matched[2] };
+    const request = stepRequest(step);
+    if (request) return request;
   }
   return null;
 }

@@ -44,13 +44,19 @@ const ENV_FIELD_TYPES = {
   headers: 'object',
   verify_tls: 'boolean',
   data_fixtures: 'array',
+  driver: 'string',
 };
 const ENV_ALLOWED_FIELDS = Object.keys(ENV_FIELD_TYPES);
+// 允许在环境配置里声明"用哪个驱动"（执行器实现由 test-execute skill 提供）
+const ENV_DRIVER_VALUES = ['api', 'mock'];
+// 项目自带的 _schema.json 可能还没写 driver（契约刚放开），
+// 这些字段对项目 schema 而言算"契约已认可"，不按多余字段拦下
+const ENV_TOLERATED_SCHEMA_KEYS = ['driver'];
 
 // suite.json 的契约基线
 const SUITE_REQUIRED = ['suite', 'requirement', 'scope', 'environment', 'cases_file', 'executor'];
 const SUITE_SCOPES = ['functional', 'security', 'load'];
-const SUITE_EXECUTORS = ['api', 'ui', 'load', 'security'];
+const SUITE_EXECUTORS = ['api', 'ui', 'load', 'security', 'mock'];
 // suite.json 的顶层字段集是封闭的：出现表外字段（含 load_scenario / threat_model
 // 这类 scope 专属字段）一律判 FAIL。语义与 environments 的顶层封闭集合一致。
 const SUITE_ALLOWED_FIELDS = [
@@ -220,7 +226,7 @@ function readJson(file, rel) {
  * @param {string} path 当前字段路径（根为 ''）
  * @returns {{kind: string, path: string, text: string}[]} 问题列表
  */
-function validateAgainstSchema(data, schema, path = '') {
+function validateAgainstSchema(data, schema, path = '', toleratedKeys = []) {
   const issues = [];
   if (!isObject(schema)) return issues;
 
@@ -265,6 +271,7 @@ function validateAgainstSchema(data, schema, path = '') {
 
     if (schema.additionalProperties === false) {
       for (const key of Object.keys(data)) {
+        if (toleratedKeys.includes(key)) continue;
         if (!Object.prototype.hasOwnProperty.call(props, key)) {
           const at = joinPath(path, key);
           issues.push({
@@ -313,6 +320,14 @@ function validateEnvBaseline(data, rel) {
     if (!ENV_ALLOWED_FIELDS.includes(key)) {
       addIssue(rel, 'extra', key, `${key} 是多余的字段（未在 schema 中定义）`);
     }
+  }
+  if (typeof data.driver === 'string' && !ENV_DRIVER_VALUES.includes(data.driver)) {
+    addIssue(
+      rel,
+      'enum',
+      'driver',
+      `driver 取值非法："${data.driver}"（允许值: ${ENV_DRIVER_VALUES.join(' / ')}）`,
+    );
   }
 }
 
@@ -377,7 +392,7 @@ function checkEnvironments(root, envDir, schema) {
     }
 
     if (schema) {
-      for (const issue of validateAgainstSchema(data, schema, '')) {
+      for (const issue of validateAgainstSchema(data, schema, '', ENV_TOLERATED_SCHEMA_KEYS)) {
         addIssue(rel, issue.kind, issue.path, issue.text);
       }
     }

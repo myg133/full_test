@@ -73,17 +73,18 @@ export async function callCycleState(args, timeoutMs = 30000) {
 /**
  * 推进执行阶段：把本次执行批次记进轮次状态。
  *
- * 只用推进器已有的能力：set-stage 设置阶段状态与产物路径。
- * 推进器不接受"追加一条运行记录"的参数，所以运行标识写进 stages.execute.artifacts
- * （产物路径列表），而不是另造字段 —— 见 references/evidence-chain.md 的说明。
+ * 只用推进器的能力：
+ *   - `--status in_progress` 设置阶段状态
+ *   - `--artifacts` 记产物路径
+ *   - `--run <run_id>` 把本次执行追加进 `stages.execute.runs[]`（REQ-002.5a 的推进器已支持）
  *
  * @param {string} cycleDir 轮次目录
  * @param {string} artifactPath 本次产物目录（相对项目根）
- * @param {string} agent 执行者标识
+ * @param {string} runId 本次执行标识
  * @returns {Promise<{ok: boolean, code: number, payload: object|null, message: string}>}
  */
-export async function advanceExecuteStage(cycleDir, artifactPath, agent) {
-  const result = await callCycleState([
+export async function advanceExecuteStage(cycleDir, artifactPath, runId) {
+  const args = [
     'set-stage',
     cycleDir,
     '--stage',
@@ -92,7 +93,9 @@ export async function advanceExecuteStage(cycleDir, artifactPath, agent) {
     'in_progress',
     '--artifacts',
     artifactPath,
-  ]);
+  ];
+  if (typeof runId === 'string' && runId !== '') args.push('--run', runId);
+  const result = await callCycleState(args);
   let payload = null;
   try {
     payload = JSON.parse(result.stdout);
@@ -101,7 +104,8 @@ export async function advanceExecuteStage(cycleDir, artifactPath, agent) {
   }
   const ok = result.code === 0;
   const message = ok
-    ? `轮次 ${cycleDir} 的 execute 阶段已推进（状态 in_progress），产物路径已记入 stages.execute.artifacts`
+    ? `轮次 ${cycleDir} 的 execute 阶段已推进（状态 in_progress），产物路径已记入 stages.execute.artifacts，` +
+      `本次执行标识已记入 stages.execute.runs[]`
     : `轮次状态推进失败（退出码 ${result.code}）: ${result.stderr || result.stdout}`;
   return { ok, code: result.code, payload, message };
 }

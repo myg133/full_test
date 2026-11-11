@@ -225,6 +225,39 @@ export async function performRequest(spec) {
 }
 
 /**
+ * 生成复现命令里的鉴权片段。
+ *
+ * **只含环境变量名，不含凭证值**（需求 D19）：复现命令里写明文凭证 = 把凭证写进证据链，
+ * 与"产物零凭证"直接冲突。代价是"带鉴权的用例不能照抄命令就跑通"，
+ * 需要按环境变量名补上 —— 这是已知且被接受的限制。
+ *
+ * @param {object} auth 鉴权配置
+ * @returns {string[]} curl 参数片段
+ */
+export function buildAuthCommand(auth) {
+  if (!isObject(auth)) return [];
+  const type = typeof auth.type === 'string' ? auth.type.trim().toLowerCase() : 'none';
+  if (type === 'bearer') {
+    const env = typeof auth.env === 'string' ? auth.env.trim() : '';
+    if (!env) return [];
+    return [`-H 'Authorization: Bearer \${${env}}'`];
+  }
+  if (type === 'basic') {
+    const user = typeof auth.username_env === 'string' ? auth.username_env.trim() : '';
+    const pass = typeof auth.password_env === 'string' ? auth.password_env.trim() : '';
+    if (!user) return [];
+    return [`-u '\${${user}}:\${${pass}}'`];
+  }
+  if (type === 'header') {
+    const header = typeof auth.header === 'string' ? auth.header.trim() : '';
+    const env = typeof auth.env === 'string' ? auth.env.trim() : '';
+    if (!header || !env) return [];
+    return [`-H '${header}: \${${env}}'`];
+  }
+  return [];
+}
+
+/**
  * 生成 curl 形式的复现命令。
  *
  * 凭证以环境变量名出现（`${TOKEN_ENV}`），**不写真实值**。
@@ -237,9 +270,104 @@ export function buildCurlCommand(spec) {
   for (const [key, value] of Object.entries(spec.headers || {})) {
     parts.push(`-H '${key}: ${value}'`);
   }
+  for (const fragment of buildAuthCommand(spec.auth)) {
+    parts.push(fragment);
+  }
   if (spec.body !== undefined && spec.body !== null) {
     const body = typeof spec.body === 'string' ? spec.body : JSON.stringify(spec.body);
     parts.push(`-d '${body}'`);
   }
   return parts.join(' ');
+}
+
+/**
+ * 按执行计划逐步发请求，如实报告每一步观察到什么。
+ *
+ * 计划由执行外壳给出（`context.steps`）：`[{step_index, request, action}]`，按顺序执行。
+ * 本函数**不做任何判定**，只负责"跑"与"报告"（需求 F3 的分层）。
+ *
+ * @param {object} caseObj 用例
+ * @param {object} context 执行上下文
+ * @returns {Promise<object>}
+ */
+export async function executePlan(caseObj, context) {
+  const plan = Array.isArray(context.steps) ? context.steps : [];
+  const variables = context.variables || {};
+  const steps = [];
+  const commands = [];
+  const executedActions = [];
+
+  for (const item of plan) {
+    const request = item.request || {};
+    const method = String(request.method || 'GET').toUpperCase();
+    const path = interpolateDeep(request.path === undefined ? '/' : request.path, variables);
+    const headers = interpolateDeep(request.headers || {}, variables);
+    const body = request.body === undefined ? undefined : interpolateDeep(request.body, variables);
+
+    const auth = buildAuthHeaders(context.auth, context.resolved_credentials);
+    if (auth.missing.length > 0) {
+      return {
+        error: {
+          type: 'credential_missing',
+          message: `环境变量未设置: ${auth.missing.join(' / ')}（读不到凭证 → 该用例算阻塞，不是失败）`,
+        },
+      };
+    }
+    const allHeaders = { ...headers, ...auth.headers };
+    const url = buildUrl(context.base_url, path, interpolateDeep(request.query || {}, variables));
+    const outcome = await performRequest({
+      url,
+      method,
+      headers: allHeaders,
+      body,
+      timeoutMs: context.timeout_ms,
+      retries: context.retries,
+    });
+    if (!outcome.ok) return { error: outcome.error };
+
+    const observed = outcome.observed;
+    const content = `${JSON.stringify(
+      {
+        driver: context.driver_name,
+        request: { method, path, url, auth_mode: auth.description },
+        response: { status_code: observed.status_code, headers: observed.headers, body: observed.body },
+      },
+      null,
+      2,
+    )}\n`;
+    steps.push({
+      step_index: item.step_index,
+      observed,
+      evidence: [{ path: 'response.json', media_type: 'application/json', content }],
+    });
+    commands.push(
+      buildCurlCommand({
+        method,
+        url,
+        headers: request.headers || {},
+        body,
+        auth: context.auth,
+      }),
+    );
+    if (typeof item.action === 'string' && item.action !== '') executedActions.push(item.action);
+  }
+
+  const last = steps.length > 0 ? steps[steps.length - 1] : null;
+  const flatEvidence = [];
+  for (const item of steps) {
+    for (const evidence of item.evidence) flatEvidence.push(evidence);
+  }
+  return {
+    steps,
+    observed: last ? last.observed : null,
+    evidence: flatEvidence,
+    reproduction: {
+      steps: executedActions,
+      command: commands.length > 0 ? commands.join('\n') : null,
+      expected: (Array.isArray(caseObj.steps) ? caseObj.steps : [])
+        .map((step) => (step && typeof step.expected === 'string' ? step.expected : ''))
+        .filter((item) => item !== '')
+        .join('; '),
+    },
+  };
 }

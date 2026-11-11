@@ -1,6 +1,6 @@
 # test-agent-skills
 
-> Full Test —— 测试 Agent Skill 套件（首期能力域：**需求 → 测试用例设计**）
+> Full Test —— 测试 Agent Skill 套件（首期能力域：**需求 → 测试用例设计 → 执行与证据链**）
 
 把测试能力以 **Agent Skill** 的形式安装到用户级 skill 目录 `~/.agents/skills/`，
 让 Agent 在任何项目里都能按统一的测试方法论工作。
@@ -110,6 +110,7 @@ test-agent-skills <command> [options]
 | Skill | 能力 |
 |-------|------|
 | `test-case-design` | 需求 → 测试用例设计：拆解需求条目、判定可测试性、套用测试设计方法、按固定 schema 输出用例集与追溯矩阵 |
+| `test-execute` | 用例集 → 执行与证据链：读执行配置与用例集、调度可插拔执行器、按断言逐步判定、产出带 sha256 指纹与脱敏留痕的证据链（入口命令：`node skills/test-execute/scripts/run-suite.mjs <suite.json>`） |
 
 ---
 

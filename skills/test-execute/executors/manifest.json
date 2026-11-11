@@ -5,18 +5,18 @@
   "files": [
     {
       "path": "api.mjs",
-      "sha256": "0953657c94c9ebf7a83bba682d932050d463c105476f7da1a91b13809fb5ec7a",
-      "bytes": 3615
+      "sha256": "6fd69c7098cb61c6ceb53106a366bbe6b4fa6c816eabe3be3097a4b965ab1870",
+      "bytes": 1862
     },
     {
       "path": "http-core.mjs",
-      "sha256": "02f4961cf50f624cbf89bf4252b154ac3cca02af9af48d5377f340b9b01f71a4",
-      "bytes": 8893
+      "sha256": "a2eca4a338bceced64b003a404409fe4afb1060b6e20e881283a7b909e9b6efe",
+      "bytes": 13494
     },
     {
       "path": "index.json",
-      "sha256": "fbda34802ef5d3b52df58caff438f59b09fb516224fa9651b4e864d8adcceea7",
-      "bytes": 3098
+      "sha256": "5105200a227233fa2f23da8337cf2f036f6d31fc9ee80cb3bf31b1806aba98e1",
+      "bytes": 3416
     },
     {
       "path": "mock-endpoints.json",
@@ -25,8 +25,8 @@
     },
     {
       "path": "mock.mjs",
-      "sha256": "6221018badb1a9065c78e7fe95bf041ef8d84d43df6d1b5950861ab3ec5c05d3",
-      "bytes": 7340
+      "sha256": "887113a13b466c3bbefff76b433aba4017fab4b03c07d3ccdf64649458ea1cf4",
+      "bytes": 5598
     }
   ]
 }

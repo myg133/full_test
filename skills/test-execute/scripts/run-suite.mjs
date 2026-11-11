@@ -38,8 +38,8 @@ import {
   writeJson,
   writeOut,
 } from './lib/cli.mjs';
-import { resolvePath } from './lib/assertion.mjs';
-import { collectAssertions, decide, STATUS } from './lib/verdict.mjs';
+import { collectAssertions, resolvePath } from './lib/assertion.mjs';
+import { decide, STATUS } from './lib/verdict.mjs';
 import { createRedactor } from './lib/redaction.mjs';
 import {
   evidenceManifestFingerprint,
@@ -52,9 +52,10 @@ import {
   loadCases,
   loadEnvironment,
   loadSuite,
-  requestFromSteps,
   resolveCredentials,
+  requestFromSteps,
   resolveDriverName,
+  resolveExecutionPlan,
   selectCases,
 } from './lib/suite-loader.mjs';
 import { advanceExecuteStage } from './lib/cycle.mjs';
@@ -298,9 +299,8 @@ async function executeSuite(options) {
     const caseId = caseObj.id;
     const caseStartedAt = new Date();
     const caseStartedMs = Date.now();
-    const assertions = collectAssertions(caseObj);
+    const plan = resolveExecutionPlan(caseObj);
     const lifecycle = typeof caseObj.status === 'string' ? caseObj.status : 'active';
-    const request = caseRequest(caseObj) || requestFromSteps(caseObj);
     const auth = caseAuth(caseObj);
     const timeoutMs =
       firstNumber(caseObj.timeout_ms, caseObj.data && caseObj.data.timeout_ms, environment.config.timeout_ms) || 30000;
@@ -318,7 +318,7 @@ async function executeSuite(options) {
             '（读不到凭证 → 该用例判 blocked，不是 failed；环境缺失与用例失败是两回事）',
         },
       };
-    } else if (assertions.length === 0) {
+    } else if (plan.assertions.length === 0) {
       execution = {
         error: {
           type: 'no_mechanical_assertion',
@@ -338,8 +338,9 @@ async function executeSuite(options) {
         variables,
         evidence_dir: join(evidenceRoot, caseId),
         case: caseObj,
-        request,
         auth,
+        // 执行计划：每个可执行 step 各一次请求（用例级 request 则只有一次）
+        steps: plan.requests,
       };
       try {
         execution = (await driver.run(caseObj, context)) || { error: { type: 'executor_error', message: '执行器没有返回结果' } };
@@ -353,28 +354,37 @@ async function executeSuite(options) {
       }
     }
 
-    const verdict = decide({ lifecycle, assertions, execution });
+    const verdict = decide({ lifecycle, plan, execution });
 
-    // 证据写入：先脱敏，再落盘，再算指纹
+    // 证据写入：先脱敏，再落盘，再算指纹。
+    // 文件名带步骤序号（step-1-response.json / step-2-response.json）——
+    // 多步用例要能一眼看出"每个请求都真的发出去了、各自留了证据"。
     const evidenceEntries = [];
-    const evidenceItems = Array.isArray(execution.evidence) ? execution.evidence : [];
-    for (const evidenceItem of evidenceItems) {
-      const relPath = `evidence/${caseId}/${evidenceItem.path}`;
-      if (!isSafeRelativePath(relPath)) {
-        log(`跳过不安全的证据路径: ${evidenceItem.path}`);
-        continue;
+    const stepResults = Array.isArray(execution.steps) ? execution.steps : [];
+    const evidenceGroups = stepResults.length > 0
+      ? stepResults.map((item) => (Array.isArray(item.evidence) ? item.evidence : []))
+      : [Array.isArray(execution.evidence) ? execution.evidence : []];
+    evidenceGroups.forEach((evidenceItems, groupIndex) => {
+      for (const evidenceItem of evidenceItems) {
+        const fileName = `step-${groupIndex + 1}-${evidenceItem.path}`;
+        const relPath = `evidence/${caseId}/${fileName}`;
+        if (!isSafeRelativePath(relPath)) {
+          log(`跳过不安全的证据路径: ${evidenceItem.path}`);
+          continue;
+        }
+        const absPath = join(runDir, relPath);
+        mkdirSync(dirname(absPath), { recursive: true });
+        writeFileSync(absPath, redactContent(evidenceItem.content, redactor), 'utf8');
+        const fingerprint = fingerprintFile(absPath);
+        evidenceEntries.push({
+          path: relPath,
+          sha256: fingerprint.sha256,
+          bytes: fingerprint.bytes,
+          media_type:
+            typeof evidenceItem.media_type === 'string' ? evidenceItem.media_type : 'application/octet-stream',
+        });
       }
-      const absPath = join(runDir, relPath);
-      mkdirSync(dirname(absPath), { recursive: true });
-      writeFileSync(absPath, redactContent(evidenceItem.content, redactor), 'utf8');
-      const fingerprint = fingerprintFile(absPath);
-      evidenceEntries.push({
-        path: relPath,
-        sha256: fingerprint.sha256,
-        bytes: fingerprint.bytes,
-        media_type: typeof evidenceItem.media_type === 'string' ? evidenceItem.media_type : 'application/octet-stream',
-      });
-    }
+    });
 
     // 提取值：供后续用例用 ${name} 引用
     const extractSpec = Array.isArray(caseObj.extract)
@@ -390,9 +400,13 @@ async function executeSuite(options) {
       }
     }
 
-    const steps = (Array.isArray(caseObj.steps) ? caseObj.steps : [])
-      .map((step) => (step && typeof step.action === 'string' ? step.action : ''))
-      .filter((item) => item !== '');
+    // 复现信息只写**实际执行过**的步骤（不是照抄用例里没跑的步骤）
+    const executedActions = plan.requests.map((item) => item.action).filter((item) => item !== '');
+    const steps = executedActions.length > 0
+      ? executedActions
+      : (Array.isArray(caseObj.steps) ? caseObj.steps : [])
+          .map((step) => (step && typeof step.action === 'string' ? step.action : ''))
+          .filter((item) => item !== '');
     const reproduction = execution.reproduction && typeof execution.reproduction === 'object'
       ? {
           steps: Array.isArray(execution.reproduction.steps) && execution.reproduction.steps.length > 0
@@ -449,7 +463,7 @@ async function executeSuite(options) {
   let cycleInfo = null;
   if (options.cycle) {
     const artifactPath = relative(projectRoot, runDir) || runDir;
-    const advanced = await advanceExecuteStage(options.cycle, artifactPath, options.agent);
+    const advanced = await advanceExecuteStage(options.cycle, artifactPath, runId);
     cycleInfo = {
       cycle_dir: resolve(options.cycle),
       ok: advanced.ok,
@@ -459,6 +473,7 @@ async function executeSuite(options) {
       stage_status: 'in_progress',
       artifact_path: artifactPath,
       run_id: runId,
+      runs_recorded: true,
     };
     log(advanced.message);
   }

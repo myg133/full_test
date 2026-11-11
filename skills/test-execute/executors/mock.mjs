@@ -27,13 +27,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import {
-  buildAuthHeaders,
-  buildCurlCommand,
-  buildUrl,
-  interpolateDeep,
-  performRequest,
-} from './http-core.mjs';
+import { executePlan } from './http-core.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const endpointTable = JSON.parse(readFileSync(join(here, 'mock-endpoints.json'), 'utf8'));
@@ -156,71 +150,23 @@ export async function stop() {
 }
 
 /**
- * 执行一条用例：向内置 mock 服务发一次真实 HTTP 请求，如实报告观察结果。
+ * 执行一条用例：按执行计划逐步向内置 mock 服务发真实 HTTP 请求，如实报告每一步观察到什么。
  *
  * @param {object} caseObj 用例
  * @param {object} context 执行上下文
  * @returns {Promise<object>}
  */
 export async function run(caseObj, context) {
-  const request = context.request || {};
-  const variables = context.variables || {};
-  const method = String(request.method || 'GET').toUpperCase();
-  const path = interpolateDeep(request.path === undefined ? '/' : request.path, variables);
-  const headers = interpolateDeep(request.headers || {}, variables);
-  const body = request.body === undefined ? undefined : interpolateDeep(request.body, variables);
-
-  const auth = buildAuthHeaders(context.auth, context.resolved_credentials);
-  const missing = auth.missing;
-  if (missing.length > 0) {
+  const plan = Array.isArray(context.steps) ? context.steps : [];
+  if (plan.length === 0) {
     return {
       error: {
-        type: 'credential_missing',
-        message: `环境变量未设置: ${missing.join(' / ')}（读不到凭证 → 该用例算阻塞，不是失败）`,
+        type: 'request_spec_missing',
+        message:
+          '用例没有可执行的步骤（既没有 case.request / case.data.request，' +
+          '也没有能解析成 "METHOD /path" 的 step.request 或 step.action）',
       },
     };
   }
-  const allHeaders = { ...headers, ...auth.headers };
-
-  const url = buildUrl(context.base_url, path, interpolateDeep(request.query || {}, variables));
-  const outcome = await performRequest({
-    url,
-    method,
-    headers: allHeaders,
-    body,
-    timeoutMs: context.timeout_ms,
-    retries: context.retries,
-  });
-  if (!outcome.ok) return { error: outcome.error };
-
-  const observed = outcome.observed;
-  const evidenceContent = `${JSON.stringify(
-    {
-      driver: name,
-      request: { method, path, url, auth_mode: auth.description },
-      response: { status_code: observed.status_code, headers: observed.headers, body: observed.body },
-    },
-    null,
-    2,
-  )}\n`;
-
-  return {
-    observed,
-    evidence: [{ path: 'response.json', media_type: 'application/json', content: evidenceContent }],
-    reproduction: {
-      steps: (Array.isArray(caseObj.steps) ? caseObj.steps : [])
-        .map((step) => (step && typeof step.action === 'string' ? step.action : ''))
-        .filter((item) => item !== ''),
-      command: buildCurlCommand({
-        method,
-        url,
-        headers: request.headers || {},
-        body,
-      }),
-      expected: (Array.isArray(caseObj.steps) ? caseObj.steps : [])
-        .map((step) => (step && typeof step.expected === 'string' ? step.expected : ''))
-        .filter((item) => item !== '')
-        .join('; '),
-    },
-  };
+  return executePlan(caseObj, { ...context, driver_name: name });
 }

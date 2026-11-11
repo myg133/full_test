@@ -375,6 +375,26 @@ export function checkCycleState(data) {
             text: `${at}.artifacts 类型错误：期望 array，实际 ${describeType(body.artifacts)}`,
           });
         }
+        // runs: 可选（执行批次记录），必须是数组，元素是非空字符串
+        if (body.runs !== undefined) {
+          if (!Array.isArray(body.runs)) {
+            issues.push({
+              kind: 'type',
+              path: `${at}.runs`,
+              text: `${at}.runs 类型错误：期望 array，实际 ${describeType(body.runs)}`,
+            });
+          } else {
+            body.runs.forEach((runId, index) => {
+              if (!isFilledString(runId)) {
+                issues.push({
+                  kind: 'missing',
+                  path: `${at}.runs[${index}]`,
+                  text: `${at}.runs[${index}] 缺少必填字段（或不是非空字符串）：执行批次记录必须可被追溯`,
+                });
+              }
+            });
+          }
+        }
       }
     }
   }

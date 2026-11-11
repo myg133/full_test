@@ -3,7 +3,7 @@
   "meta": {
     "source": "test-execute skill 的离线示例（自造需求条目，不对应真实需求）",
     "generated_at": "2026-11-11T18:00:00+08:00",
-    "case_count": 5
+    "case_count": 6
   },
   "requirements": [
     { "id": "R-1", "title": "内置桩服务按约定端点响应", "source_ref": "examples/offline/README.md", "testable": true }
@@ -20,7 +20,7 @@
   "cases": [
     {
       "id": "TC-001",
-      "title": "/ok 返回 status=ok",
+      "title": "/ok 返回 status=ok，且状态码是 200（一次请求，多条断言）",
       "requirement_refs": ["R-1"],
       "dimension": "functional",
       "priority": "P0",
@@ -93,6 +93,22 @@
       ],
       "data": {},
       "tags": ["demo", "redaction"]
+    },
+    {
+      "id": "TC-006",
+      "title": "多步用例：两步都成立 → passed（每步各留一份证据）",
+      "requirement_refs": ["R-1"],
+      "dimension": "functional",
+      "priority": "P1",
+      "method": ["M0.1"],
+      "status": "active",
+      "preconditions": [],
+      "steps": [
+        { "action": "GET /ok", "expected": { "path": "$.status", "op": "equals", "expected": "ok" } },
+        { "action": "GET /created", "expected": { "path": "$.status", "op": "equals", "expected": "created" } }
+      ],
+      "data": {},
+      "tags": ["demo", "multi-step"]
     }
   ]
 }

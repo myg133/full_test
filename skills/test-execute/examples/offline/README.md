@@ -35,6 +35,7 @@ node skills/test-execute/scripts/run-suite.mjs \
 | TC-003 | **故意失败**：断言写成期望 200，实际 404 | `failed` |
 | TC-004 | **故意不可判定**：`expected` 是普通字符串 | `blocked`（不是 `passed`） |
 | TC-005 | 脱敏：`/token` 的 `token` 字段在产物里不可见明文 | `passed`，产物里搜不到 `secret-value` |
+| TC-006 | 多步用例：两步都成立 | `passed`，证据两份（`step-1-response.json` / `step-2-response.json`） |
 
 TC-003 与 TC-004 是**故意**失败的示例：它们演示"判定随断言变化"与"不可判定不许算通过"。
 删掉它们就得到一个全绿的示例套件。
@@ -52,15 +53,14 @@ offline/
         └── cases.json                           # 用例集（REQ-002A 的 schema v2）
 ```
 
-## 两处与 REQ-002B 目录契约的待对齐项
+## mock 驱动怎么启用
 
-1. `environments/mock.json` 里的 `"driver": "mock"` 字段：REQ-002B 的环境配置字段集是封闭的，
-   尚未包含 `driver`；`verify-layout.mjs` 会把多余字段判为违规。
-2. `suite.json` 的 `"executor": "api"` 保持 REQ-002B 的合法取值，mock 驱动由环境配置的 `driver` 决定 ——
-   这是本示例选用的写法。另一种写法是 `"executor": "mock"`，同样超出 REQ-002B 现行枚举。
+本示例用的是**环境配置的 `driver` 字段**（`environments/mock.json` 里的 `"driver": "mock"`）——
+"用哪个驱动"是环境属性，同一环境可以换驱动跑。
+`suite.json` 的 `"executor": "api"` 保持目录契约的合法取值。
 
-契约侧的放开由 REQ-002B 的维护方处理（`suite.json` 的 `executor` 枚举与环境配置的字段基线两处）。
-在那之前，`test-execute` 两种写法都接受。
+另一种写法是 `suite.json` 的 `"executor": "mock"`，目录契约也已放行（两种都接受）。
+优先级：**环境配置的 `driver` > `suite.json` 的 `executor`**。
 
 ## 关于凭证
 

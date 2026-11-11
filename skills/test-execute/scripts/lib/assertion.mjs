@@ -271,6 +271,30 @@ function numeric(value) {
 }
 
 /**
+ * 从用例里收集结构化断言。
+ *
+ * 载体：steps[].expected 为断言对象时算一条断言；为普通字符串时不算。
+ *
+ * @param {object} caseObj 用例对象
+ * @returns {{assertion: object, stepIndex: number, action: string}[]}
+ */
+export function collectAssertions(caseObj) {
+  const found = [];
+  if (!isObject(caseObj)) return found;
+  const steps = Array.isArray(caseObj.steps) ? caseObj.steps : [];
+  steps.forEach((step, stepIndex) => {
+    if (!isObject(step)) return;
+    if (!isAssertionObject(step.expected)) return;
+    found.push({
+      assertion: step.expected,
+      stepIndex,
+      action: typeof step.action === 'string' ? step.action : '',
+    });
+  });
+  return found;
+}
+
+/**
  * 执行单条断言。
  *
  * @param {object} assertion 断言对象
