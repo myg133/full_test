@@ -17,6 +17,12 @@
 | 上游基线回归（REQ-002A） | `bash BA/demands/REQ-002-suite-foundation/REQ-002A-schema-v2/verify-regression-002a.sh feature-REQ-005/skills/test-case-design` | **19 PASS / 0 FAIL** |
 | 上游基线回归（REQ-002B） | `bash BA/demands/REQ-002-suite-foundation/REQ-002B-project-layout/verify-regression-002b.sh feature-REQ-005/skills/test-case-design` | **41 PASS / 0 FAIL** |
 
+**钉版本**：上表三条结论由 `BA/demands/REQ-002-suite-foundation/REQ-005-method-library/verify-acceptance.sh`
+的下列这个版本跑出（D25 ⑤）。脚本一改，下面的 sha256 就对不上，AC-034 立即判红 ——
+「跑的是哪一版脚本出的结论」从此由脚本判定，不再只靠人工记着钉版。
+
+- 验收脚本 sha256: f377b875fce7334b429614a0526076f2a8a7ee1e46aa9934ad7c4692d6e37dd1
+
 主验收耗时约 3 分钟（AC-026 会在 skill 副本上注入 19 个变异体，并**嵌套跑一遍完整验收**，
 比对"失败的 AC 键集合"是否发生变化）—— 跑得久是正常的。
 
@@ -44,7 +50,21 @@
 
 ## 三、历轮改了什么
 
-### 本轮（第七轮）：元数据数字同步到当前 + 追溯矩阵补齐
+### 本轮（第八轮）：追溯链钉版 —— 把验收脚本的 sha256 记进验证报告
+
+本轮**只改 `feature-meta/` 里的两份文件**，方法库本体与验收脚本一行未动
+（验收脚本是 BA 的资产，D25 ② 冻结期内不得改）。
+
+| # | 问题 | 改法 | 落点 |
+|---|---|---|---|
+| 1 | 独立验收第四轮发现护栏漏洞 A39：**删掉整个 `feature-meta/` 目录后，验收仍全绿** —— 护栏在"找不到被护对象"时自我豁免（判"不适用"），追溯链整段删掉照样放行 | BA 侧已按 D25 ④⑤ 改好验收脚本：四件套缺任一即 FAIL（不再有"不适用"分支），且要求追溯链记下**当前**验收脚本的 sha256 | `BA/demands/REQ-002-suite-foundation/REQ-005-method-library/verify-acceptance.sh`（BA 侧资产，本轮未改） |
+| 2 | 追溯链没有记下"这批结论是哪一版脚本跑出来的" —— D25 ② 记录过 BA 在验收跑批中改了 3 次脚本而钉版没同步，此前"钉版本"只靠人工纪律 | 验证报告里记下当前验收脚本的 sha256（**恰好一处**），脚本一改即判红 | `feature-meta/verification-report.md` |
+| 3 | 追溯矩阵里 AC-028 / AC-034 的判据形式措辞落后于 BA 侧收紧后的判据 | 按 BA 侧新措辞同步这两行；其余行、判据条数、决策号一律不动 | `feature-meta/traceability.md` |
+
+**这一轮的实质**：把"钉版本"从**人工纪律**变成**脚本判定** ——
+「跑的是哪一版脚本出的结论」不再由写报告的人自己记着，而是报告里的 sha256 与当前脚本文件比对。
+
+### 第七轮：元数据数字同步到当前 + 追溯矩阵补齐
 
 本轮**只改 `feature-meta/` 里的三份文件**，方法库本体与脚本一行未动。
 
