@@ -14,7 +14,7 @@
 bash /tmp/qa-0024/acceptance.sh
 ```
 
-结果：**PASS=48 FAIL=0**（逐条明细见 `feature-meta/traceability.md`）。
+结果：**PASS=51 FAIL=0**（逐条明细见 `feature-meta/traceability.md`）。
 
 ## 2. 关键实测记录
 
@@ -29,6 +29,7 @@ bash /tmp/qa-0024/acceptance.sh
 | 失败显式 | 来源不可达的 binary 工具 → 安装退出码 1，`qa doctor` 状态 `unavailable` ✅ |
 | 清单进 Git | `.tools/*` + `!.tools/manifest.json` → `git check-ignore -q .tools/manifest.json` 退出码 1（未忽略）；`git status -uall` 列出清单 ✅ |
 | 反例验证 | 写成 `.tools/` 时 `git check-ignore -q .tools/manifest.json` 退出码 0（被忽略）→ 证明必须用 `.tools/*` ✅ |
+| 分发链路（AC-016） | `npm pack --dry-run` 清单含 `bin/qa`、`bin/qa-impl.mjs`、`skills/qa-toolchain/SKILL.md`、`skills/qa-toolchain/references/tools-chain-contract.md` ✅ |
 
 ## 3. 已知限制
 

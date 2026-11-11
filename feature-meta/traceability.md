@@ -21,6 +21,12 @@
 | AC-013 | F6 | `bin/qa-impl.mjs:cmdInstall`（写 state）、`writeState` | `state.json` 条目含 `name` / `version`(3.2.0，与 spec 一致) / `source` / `installed_at` | PASS |
 | AC-014 | F1 | `bin/qa-impl.mjs:cmdInit`（写 `.gitignore` 规则） | `git check-ignore -q .tools/.venv/x` → 忽略；`git check-ignore -q .tools/manifest.json` → 未忽略；`git status -uall` 列出清单。反例：写成 `.tools/` 时清单被忽略 | PASS |
 | AC-015 | 非功能 | `bin/qa`、`bin/qa-impl.mjs`（仅 `node:` 内置模块）；`package.json`（`bin` 注册，dependencies 空） | 源码检索无第三方依赖；退出码 0 / 1 / 2 三态实测 | PASS |
+| AC-016 | 分发链路 | `package.json` 的 `files` 白名单含 `skills/`；契约文档置于 `skills/qa-toolchain/references/tools-chain-contract.md` | `npm pack --dry-run` 逐项核对：`bin/qa`、`bin/qa-impl.mjs`、`skills/qa-toolchain/SKILL.md`、契约文档全部在 tarball 清单里 | PASS |
+
+> **AC-016 备注**：`feature-meta/*.md` 是仓库工作元数据（与其它 REQ 一致，不进 npm 包），
+> 不是交付物；AC-016 点名的三类交付物（入口、实现文件、契约文档）全部在包内。
+> 契约文档**未**放在包根 `references/`——该目录不在 `files` 白名单里，放那里会重演
+> REQ-002B 的"工作区有、用户机器上没有"。
 
 ## 非功能要求对照
 
