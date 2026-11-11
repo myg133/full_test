@@ -1152,9 +1152,22 @@ fi
 step "AC-028 feature-meta 不得张冠李戴（D19 / D20）"
 # feature-meta 在**仓库根**（skills/<name>/ 的上上级），不是 skill 目录的同级。
 FMETA="$(cd "$TCD/../.." 2>/dev/null && pwd)/feature-meta"
+# 独立验收第四轮 A39：**删掉整个 feature-meta/ 目录 → 验收仍 35 PASS / 0 FAIL**。
+# 根因：护栏在「找不到被护对象」时自我豁免（判"不适用"）。但追溯件
+# （status.md / traceability.md / verification-report.md / manifest.json）
+# 本身就是 REQ-005 的交付物之一（D19 / D20）——「找不到」不等于「不适用」，
+# 缺失一律判 FAIL；单缺一个文件同理（否则删掉 traceability.md 即逃逸）。
+FM_FILES="status.md traceability.md verification-report.md manifest.json"
+FM_MISSING=""
+for F in $FM_FILES; do
+  [ -f "$FMETA/$F" ] || FM_MISSING="$FM_MISSING $F"
+done
 if [ ! -d "$FMETA" ]; then
-  # 被验目录没有 feature-meta（例如验收脚本被单独拷走）→ 不适用，但不静默
-  ok "AC-028 feature-meta 不适用（被验目录无 feature-meta，跳过）"
+  bad "AC-028 feature-meta 归属正确、demand_dir 存在" \
+      "feature-meta/ 目录缺失（$FMETA）—— 追溯件是 REQ-005 的交付物之一，缺失不得判'不适用'放行"
+elif [ -n "$FM_MISSING" ]; then
+  bad "AC-028 feature-meta 归属正确、demand_dir 存在" \
+      "feature-meta/ 缺少文件：$FM_MISSING —— 四件套（status.md / traceability.md / verification-report.md / manifest.json）缺一即追溯链断裂"
 else
   FM_OTHER=""
   for F in status.md traceability.md verification-report.md; do
@@ -1175,11 +1188,19 @@ else
   DMISS=""
   if [ -f "$FMETA/manifest.json" ]; then
     DDIR="$(node -e 'const fs=require("fs");let o;try{o=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));}catch(e){process.exit(0);}console.log(o.demand_dir||"");' "$FMETA/manifest.json" 2>/dev/null)"
-    if [ -n "$DDIR" ]; then
+    if [ -z "$DDIR" ]; then
+      DMISS="(空 demand_dir)"
+    else
+      # demand_dir 必须指向**本 REQ 的需求目录**，而不只是「某个存在的目录」
+      # （A39 同族漏洞：指向 REQ-004 的目录也能通过 = 追溯链张冠李戴）
       FOUND=0
+      SELFDIR_ABS="$(cd "$SELF_DIR" 2>/dev/null && pwd -P)"
       for R in "$DEMAND_ROOT" "$(cd "$TCD/../../.." 2>/dev/null && pwd)" "$(cd "$TCD/../../../.." 2>/dev/null && pwd)"; do
         [ -n "$R" ] || continue
-        if [ -d "$R/$DDIR" ]; then FOUND=1; break; fi
+        if [ -d "$R/$DDIR" ]; then
+          CAND="$(cd "$R/$DDIR" 2>/dev/null && pwd -P)"
+          if [ -n "$CAND" ] && [ "$CAND" = "$SELFDIR_ABS" ]; then FOUND=1; break; fi
+        fi
       done
       if [ $FOUND -eq 0 ]; then DMISS="$DDIR"; fi
     fi
@@ -1416,7 +1437,11 @@ step "AC-034 feature-meta 里的判据条数 / 决策号 / 验收数字必须与
 # 后果：追溯链上的数字是**没人核过的** —— 这正是本套件要消灭的那类"看着像已验、其实没验"。
 # 这条把「元数据里的数字」也纳入机械核验：数字必须与**当前**的判据数、决策号、验收结果一致。
 if [ ! -d "$FMETA" ]; then
-  ok "AC-034 feature-meta 数字与实际一致（被验目录无 feature-meta，不适用）"
+  bad "AC-034 feature-meta 数字与实际一致" \
+      "feature-meta/ 目录缺失（$FMETA）—— 没有追溯件可比对，不得判'不适用'放行"
+elif [ -n "$FM_MISSING" ]; then
+  bad "AC-034 feature-meta 数字与实际一致" \
+      "feature-meta/ 缺少文件：$FM_MISSING —— 比对基线不完整，数字无处可核"
 else
   M34="$(node -e '
   const fs=require("fs");
@@ -1465,6 +1490,21 @@ else
   ' "$FMETA" "$SELF_DIR/acceptance.md" "$SELF_DIR/decisions.md" 2>/dev/null)"
   P34="$(printf '%s\n' "$M34" | sed -n 's/^prob=//p')"
   D34="$(printf '%s\n' "$M34" | sed -n 's/^detail=//p')"
+  # ---- 钉版自检：追溯链必须记下**当前验收脚本**的 sha256（D25 ⑤）
+  # 动机：D25 ② —— BA 在验收期间改了 3 次脚本而钉版没同步，3 个变异体作废。
+  # 「任何脚本全绿的结论都必须钉版本」此前只有人工纪律，没有机械护栏 → 本条把它变成脚本判定。
+  CURSHA="$(sha256sum "$SELF" 2>/dev/null | awk '{print $1}')"
+  SHALINES="$(grep -icE '验收脚本[[:space:]]*sha256' "$FMETA/verification-report.md" 2>/dev/null | tr -d ' ')"
+  REPSHA="$(grep -iE '验收脚本[[:space:]]*sha256' "$FMETA/verification-report.md" 2>/dev/null | grep -oE '[0-9a-f]{64}' | head -1)"
+  if [ -z "$CURSHA" ]; then
+    P34=$(( ${P34:-1} + 1 )); D34="$D34; 算不出当前验收脚本的 sha256（sha256sum 不可用?）"
+  elif [ "${SHALINES:-0}" != "1" ]; then
+    P34=$(( ${P34:-1} + 1 )); D34="$D34; verification-report.md 里「验收脚本 sha256」记录了 ${SHALINES:-0} 处（应为恰好 1 处，只留当前值）"
+  elif [ -z "$REPSHA" ]; then
+    P34=$(( ${P34:-1} + 1 )); D34="$D34; verification-report.md 未记下当前验收脚本的 sha256 —— 追溯链没有钉版本"
+  elif [ "$REPSHA" != "$CURSHA" ]; then
+    P34=$(( ${P34:-1} + 1 )); D34="$D34; verification-report.md 记的验收脚本 sha256 与当前脚本不一致（报告不是本版脚本跑出来的）"
+  fi
   if [ "${P34:-1}" -eq 0 ] 2>/dev/null; then
     ok "AC-034 feature-meta 的判据条数 / 决策号 / 验收数字与实际一致"
   else
