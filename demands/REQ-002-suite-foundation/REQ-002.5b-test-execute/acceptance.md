@@ -181,3 +181,42 @@
 - **预期结果**: 判 `blocked`；`error.type` 为 `incomplete_request_carrier`（**不是** `conflicting_request_carrier` —— 缺 path 的 step 载体与用例级载体并不"冲突"，是它自己没写全）
 - **理由**（D25）: "缺 path 是补齐，不是二选一"这条规则与载体在哪一层无关；只对用例级载体生效等于规则只写了一半
 - **类型**: 功能
+
+### AC-025: 判 `skipped` 的用例不得发出请求
+- **前置条件**: 本地起一个**计数 HTTP 服务器**（记录收到的每一个请求路径），环境配置的 `base_url` 指向它、不设 `driver`（即走 `api` 驱动）。三条用例各带一条可执行 step：`TC-ACT`（`status: active`，`GET /ok`）、`TC-DEP`（`status: deprecated`，`GET /notfound`）、`TC-BLK`（`status: blocked`，`GET /created`）；后两条另带非空 `revision.change`
+- **测试步骤**: 执行后检查 ①`results.json` 里各用例的 `status` 与证据条目数 ②计数服务器收到的请求路径列表
+- **预期结果**:
+  1. `TC-DEP` 判 `skipped`
+  2. 计数服务器的请求列表里**不含** `/notfound`，也不含任何属于被判跳过用例的路径
+  3. 所有 `status == skipped` 的用例，证据条目数 == 0
+  4. **对照组**：`TC-ACT` 判 `passed`，且计数服务器**确实收到过** `GET /ok`
+- **理由**（D28）: 判了 `skipped` 却真发请求，是"证据链说的与实际做的不一致"（D21）的另一个入口；比"虚报通过"更危险 —— 报告说这条没跑，**被测系统却已经被改了**。第 4 条是对照组：没有它，"什么都不发"也能让前三条判绿
+- **类型**: 功能
+
+### AC-026: 传输层错误时，已执行步骤的证据必须保留
+- **前置条件**: mock 驱动。一条用例含两个可执行 step：第 1 步 `GET /ok`（成功），第 2 步 `GET /slow?ms=3000`（**超时**）；用例级 `timeout_ms: 300`
+- **测试步骤**: 执行后检查该用例的 `status`、`error.type`、证据条目数、`reproduction.steps` 的长度
+- **预期结果**:
+  1. `status == failed`（超时是执行失败，不是环境缺失）
+  2. `error.type == timeout`
+  3. 证据条目数 ≥ 1 —— **第 1 步成功的响应必须留下**
+  4. `reproduction.steps` 非空，且**证据条目数 == `reproduction.steps` 长度**（D21/D24：执行过请求时两者必须一致）
+- **第 4 条的等价表述**: `reproduction.steps` 里的每一步都必须对应一份证据 —— 要么把超时这一步也留一份证据（失败记录本身也是观察结果），要么就不把它列进 `reproduction.steps`。**"列了但没证据"与"有证据但没列"都不行**
+- **理由**（D29）: 实测当前实现里，执行器在请求失败时直接 `return { error }`，把**此前已成功的步骤全部丢弃** —— 第 1 步明明跑过、响应明明拿到了，证据却一份不剩；`reproduction.steps` 却仍列着两步。传输层错误不该抹掉已经发生的执行事实
+- **类型**: 功能
+
+### AC-027: 执行器生命周期必须收尾（异常路径也要停）
+- **前置条件**: 复制一份 skill 目录，把 `scripts/lib/verdict.mjs` 的 `export function decide(` 改成**立即抛异常**（模拟判定层崩溃）；用 mock 驱动跑一条用例
+- **测试步骤**: `timeout 20 node scripts/run-suite.mjs <suite.json> --json`，看退出码
+- **预期结果**: 退出码 **≠ 124**（124 = 被 `timeout` 杀掉 = 挂死）。进程必须在有限时间内结束
+- **理由**（D30）: mock 驱动会起一个内置 HTTP 桩服务。执行外壳的 `driver.stop()` 只在正常路径上调用，没有 `finally` —— 任何异常都会跳过收尾，桩服务继续持有事件循环，**进程永不退出**。实测：判定层改成抛异常后，JSON 已输出（exit_code 1），进程却一直挂着直到被杀掉
+- **类型**: 健壮性
+
+### AC-028: `meta.cycle` 段不得谎报推进结果
+- **前置条件**: 两个子场景。①`--cycle` 指向**不存在的轮次目录**（推进必然失败）②`--cycle` 指向**存在的轮次目录**（推进应当成功）
+- **测试步骤**: 两次都跑 `--json`，检查 `cycle` 段与退出码
+- **预期结果**:
+  - ① `cycle.ok == false`；`cycle.runs_recorded` **不得为 `true`**；`cycle.stage_status` **不得为 `"in_progress"`**；**退出码 == 1**
+  - ② `cycle.ok == true`；`cycle.runs_recorded == true`；`cycle.stage_status == "in_progress"`；**退出码 == 0**
+- **理由**（D31）: `meta.cycle` 段当前把 `stage_status` 与 `runs_recorded` **硬编码**成 `in_progress` / `true`，与同一段里的 `ok: false` 自相矛盾 —— 推进失败也照写"已记录"。轮次推进失败属于执行流程失败（用户要求把这次执行记进轮次，没记上就是没做完），按 D18 退出码应取 1；用例本身全通过不改变这一点。②是配对的**成功场景**，防止为了满足①而把字段一律写成 `false`
+- **类型**: 功能

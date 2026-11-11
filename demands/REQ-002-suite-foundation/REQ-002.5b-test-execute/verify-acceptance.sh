@@ -182,23 +182,16 @@ export LOCAL_USER="qa-local-user"
 export LOCAL_PASS="qa-local-pass"
 make_cases "$WORK/proj/test-assets/suites/REQ-001-coupon/cases.json" "[ $CASE_OK, $CASE_FAIL ]"
 
-# 探测 mock 的启用方式
+# mock 的启用方式**按 D16 写死一种**：环境配置的 `driver` 字段。
+# 早先这里做"三路自适应探测"，是验收方不该有的自由度 —— 契约必须唯一，
+# 否则实现方改掉任一种写法，验收仍会通过（契约与实现可以悄悄分叉）。
 MOCK_MODE=""
 detect_mock() {
-  # 方案 B: 环境配置 driver=mock
   node -e '
   const fs=require("fs"),f=process.argv[1];const o=JSON.parse(fs.readFileSync(f,"utf8"));
   o.driver="mock";fs.writeFileSync(f,JSON.stringify(o,null,2));
   ' "$WORK/proj/test-assets/environments/local.json" 2>/dev/null
   if run_suite "$WORK/proj" >/dev/null 2>&1; then MOCK_MODE="env-driver"; return; fi
-  # 方案 A: suite.json executor=mock
-  node -e '
-  const fs=require("fs"),f=process.argv[1];const o=JSON.parse(fs.readFileSync(f,"utf8"));
-  o.executor="mock";fs.writeFileSync(f,JSON.stringify(o,null,2));
-  ' "$WORK/proj/test-assets/suites/REQ-001-coupon/suite.json" 2>/dev/null
-  if run_suite "$WORK/proj" >/dev/null 2>&1; then MOCK_MODE="executor-enum"; return; fi
-  # 方案 C: 命令行覆盖
-  if run_suite "$WORK/proj" --executor mock >/dev/null 2>&1; then MOCK_MODE="cli-flag"; return; fi
   MOCK_MODE=""
 }
 
@@ -230,7 +223,7 @@ detect_mock
 if [ -n "$MOCK_MODE" ] && [ -n "$RUN_DIR" ]; then
   ok "AC-014 离线可跑 —— mock 执行器跑通完整链路（启用方式: $MOCK_MODE）"
 else
-  bad "AC-014 离线可跑 —— mock 执行器跑通完整链路" "三种启用方式均未跑通（env-driver / executor-enum / cli-flag）"
+  bad "AC-014 离线可跑 —— mock 执行器跑通完整链路" "按契约（环境配置 driver=mock，D16）未跑通"
 fi
 
 # ---------------------------------------------------------------- AC-008
@@ -401,10 +394,18 @@ if run_suite "$D21" >/dev/null 2>&1 && [ -n "$RUN_DIR" ]; then
   console.log(s.length);
   ' "$RUN_DIR/results.json" 2>/dev/null)"
 fi
-if [ "$S21" = "blocked" ]; then
-  ok "AC-021 载体冲突判 blocked（显式用例级载体 + 不同端点的 step，不得判 passed）"
+# 必须同时校验 error.type：冲突被误诊成 incomplete 时 status 仍是 blocked，
+# 只判 status 会放过去（独立验收 M9：误诊 → 脚本仍 23/0 全绿）
+T21="$(node -e '
+  const o=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));
+  const a=Array.isArray(o)?o:(o.results||o.cases||[]);
+  const r=a[0]||{};
+  console.log(r.error&&r.error.type?r.error.type:"NONE");
+' "$RUN_DIR/results.json" 2>/dev/null)"
+if [ "$S21" = "blocked" ] && [ "$T21" = "conflicting_request_carrier" ]; then
+  ok "AC-021 载体冲突判 blocked（error.type=conflicting_request_carrier，不得判 passed）"
 else
-  bad "AC-021 载体冲突判 blocked" "status=$S21（期望 blocked；若为 passed 说明 step 级请求被静默丢掉 —— 半个用例报通过）"
+  bad "AC-021 载体冲突判 blocked" "status=$S21 error.type=$T21（期望 blocked + conflicting_request_carrier）"
 fi
 
 # 场景 B：端点一致 → 视为同一次请求，证据条数必须与复现步骤数一致
@@ -565,10 +566,16 @@ if run_suite "$D6" >/dev/null 2>&1 && [ -n "$RUN_DIR" ]; then
   const arr=Array.isArray(o)?o:(o.results||o.cases||[]);
   console.log(arr.length?arr[0].status:"NO_CASES");
   ' "$RUN_DIR/results.json" 2>/dev/null)"
-  if [ "$ST" = "blocked" ]; then
-    ok "AC-006 凭证缺失判 blocked 而非 failed"
+  ET6="$(node -e '
+  const o=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));
+  const a=Array.isArray(o)?o:(o.results||o.cases||[]);
+  const r=a[0]||{};
+  console.log(r.error&&r.error.type?r.error.type:"NONE");
+  ' "$RUN_DIR/results.json" 2>/dev/null)"
+  if [ "$ST" = "blocked" ] && [ "$ET6" = "credential_missing" ]; then
+    ok "AC-006 凭证缺失判 blocked 而非 failed（error.type=credential_missing）"
   else
-    bad "AC-006 凭证缺失判 blocked 而非 failed" "实际 status=$ST（期望 blocked）"
+    bad "AC-006 凭证缺失判 blocked 而非 failed" "status=$ST error.type=$ET6（期望 blocked + credential_missing）"
   fi
 else
   bad "AC-006 凭证缺失判 blocked 而非 failed" "执行未产出结果"
@@ -578,11 +585,24 @@ fi
 step "AC-013 脱敏在写入前完成，且留痕"
 D13="$WORK/ac013"; make_project "$D13"
 make_cases "$D13/test-assets/suites/REQ-001-coupon/cases.json" "[ $CASE_TOKEN ]"
+# ⚠️ 必须显式启用 mock：否则走 api 打 127.0.0.1:9 → network_error → 0 份证据，
+#    /token 根本没被请求，脱敏断言恒真（独立验收 M7：删掉脱敏脚本仍 23/0 全绿）。
+node -e '
+const fs=require("fs"),f=process.argv[1];const o=JSON.parse(fs.readFileSync(f,"utf8"));
+o.driver="mock";fs.writeFileSync(f,JSON.stringify(o,null,2));
+' "$D13/test-assets/environments/local.json"
 if run_suite "$D13" >/dev/null 2>&1 && [ -n "$RUN_DIR" ]; then
   LEAK="$(grep -rl "secret-value" "$RUN_DIR" 2>/dev/null | wc -l)"
   RED="$(jget "$RUN_DIR/meta.json" redaction)"
-  if [ "$LEAK" -eq 0 ] && echo "$RED" | grep -q "rules_applied"; then
-    ok "AC-013 脱敏在写入前完成，且留痕"
+  EVD13="$(find "$RUN_DIR/evidence" -type f 2>/dev/null | wc -l)"
+  # 场景有效性闸：没有证据 = /token 根本没被请求 = 脱敏场景是空的，断言会恒真
+  if [ "$EVD13" -eq 0 ]; then
+    bad "AC-013 脱敏在写入前完成，且留痕" "场景无效：证据 0 份，/token 未被请求（脱敏场景被掏空，断言恒真）"
+  elif [ "$LEAK" -eq 0 ] && echo "$RED" | grep -q "rules_applied" \
+       && grep -rq "REDACTED" "$RUN_DIR/evidence" 2>/dev/null; then
+    # 必须看到**脱敏痕迹**，不能只查 rules_applied 这个键名 ——
+    # 否则 mock 端点不再返回敏感字段时，会因为"没东西可脱敏"而判绿（独立验收 M13）。
+    ok "AC-013 脱敏在写入前完成，且留痕（证据 $EVD13 份，场景非空且有脱敏痕迹）"
   elif [ "$LEAK" -ne 0 ]; then
     bad "AC-013 脱敏在写入前完成，且留痕" "产物里出现了 secret-value（$LEAK 个文件）"
   else
@@ -606,13 +626,49 @@ if [ -f "$CS" ]; then
     else
       bad "AC-012 与轮次状态集成" "runs[] 未含 run_id=$RID（实际=$RUNS）"
     fi
+    # 幂等：同一个 run_id 写两次，runs[] 不得出现重复项
+    # （独立验收 M8：去掉幂等判断 → runs=["RUN-QA-1","RUN-QA-1"]，原脚本判绿）
+    CY="$D12/test-assets/cycles/R1-REQ-001"
+    node "$CS" set-stage "$CY" --stage execute --status in_progress --run RUN-QA-1 >/dev/null 2>&1
+    node "$CS" set-stage "$CY" --stage execute --status in_progress --run RUN-QA-1 >/dev/null 2>&1
+    RUNS2="$(jget "$CY/cycle.json" stages execute runs)"
+    N2="$(printf '%s' "$RUNS2" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const a=JSON.parse(s);console.log(Array.isArray(a)?a.length:-1)}catch(e){console.log(-1)}})')"
+    UNIQ="$(printf '%s' "$RUNS2" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const a=JSON.parse(s);console.log(Array.isArray(a)?new Set(a).size:-1)}catch(e){console.log(-1)}})')"
+    if [ "${N2:-0}" -ge 1 ] && [ "$N2" = "$UNIQ" ]; then
+      ok "AC-012b set-stage --run 幂等（同一 run_id 重复写不产生重复项）"
+    else
+      bad "AC-012b set-stage --run 幂等" "runs[]=$RUNS2（条数=$N2 去重后=$UNIQ —— 重复项说明幂等判断没了）"
+    fi
   else
     bad "AC-012 与轮次状态集成" "带 --cycle 执行未产出结果"
   fi
-  # 执行器不得直接写 cycle.json
-  DIRECT="$(grep -c -E "writeFile.*cycle\.json|writeFileSync.*cycle\.json" "$TE"/executors/*.mjs "$EX"/*.mjs 2>/dev/null | grep -v ':0' | wc -l)"
-  if [ "$DIRECT" -eq 0 ]; then
-    ok "AC-012b 执行器/脚本中无直接写 cycle.json 的路径"
+  # 执行器与脚本不得直接写 cycle.json。
+  # 检索范围要**覆盖 scripts/lib/**（独立验收 M11：在 lib/ 里绕过推进器直写 cycle.json → 原脚本判绿）。
+  # 并且要先**去掉注释**再检索 —— 否则源码里的注释示例会被误判。
+  DIRECT="$(node -e '
+  const fs=require("fs"), path=require("path");
+  const roots=process.argv.slice(1);
+  const files=[];
+  const walk=(d)=>{ for(const e of fs.readdirSync(d,{withFileTypes:true})){ const p=path.join(d,e.name);
+    if(e.isDirectory()) walk(p); else if(/\.(mjs|js|cjs)$/.test(e.name)) files.push(p); } };
+  for(const r of roots){ if(fs.existsSync(r)) walk(r); }
+  const hits=[];
+  for(const f of files){
+    let src=fs.readFileSync(f,"utf8");
+    src=src.replace(/\/\*[\s\S]*?\*\//g,"").replace(/^\s*\/\/.*$/gm,"");
+    // 写 cycle.json 的各种写法：writeFile(Sync)? / rename / copyFile 目的地含 cycle.json
+    const lines=src.split(/\r?\n/);
+    lines.forEach((ln,i)=>{
+      if(/(writeFile|writeFileSync|rename|copyFile|appendFile|createWriteStream|openSync)\s*\([^)]*cycle\.json/.test(ln)){
+        hits.push(f+":"+(i+1)+" "+ln.trim().slice(0,80));
+      }
+    });
+  }
+  console.log(hits.length);
+  if(hits.length) console.error(hits.slice(0,5).join("\n"));
+  ' "$TE/executors" "$EX" "$TCD/scripts" 2>/dev/null | head -1)"
+  if [ "${DIRECT:-1}" -eq 0 ]; then
+    ok "AC-012b 执行器/脚本中无直接写 cycle.json 的路径（含 scripts/lib/，去注释后检索）"
   else
     bad "AC-012b 执行器/脚本中无直接写 cycle.json 的路径" "命中 $DIRECT 处"
   fi
@@ -650,14 +706,22 @@ make_cases "$D17/test-assets/suites/REQ-001-coupon/cases.json" "[ $CASE_OK ]"
 cd "$D17"
 node "$EX/run-suite.mjs" "$D17/test-assets/suites/REQ-001-coupon/suite.json" --json > "$WORK/j1.json" 2>/dev/null; RC1=$?
 node "$EX/run-suite.mjs" "$D17/test-assets/suites/REQ-001-coupon/suite.json" --json --bogus 1 > "$WORK/j2.json" 2>/dev/null; RC2=$?
-node "$EX/run-suite.mjs" "$D17/test-assets/suites/REQ-001-coupon/suite.json" --json > "$WORK/j3.json" 2>/dev/null; RC3=$?
+# exit 1 场景：suite.json 缺必填字段 → 校验失败
+D17B="$WORK/ac017b"; make_project "$D17B"
+printf '{ "suite":"REQ-001-coupon" }' > "$D17B/test-assets/suites/REQ-001-coupon/suite.json"
+make_cases "$D17B/test-assets/suites/REQ-001-coupon/cases.json" "[ $CASE_OK ]"
+node "$EX/run-suite.mjs" "$D17B/test-assets/suites/REQ-001-coupon/suite.json" --json > "$WORK/j4.json" 2>/dev/null; RC4=$?
 cd - >/dev/null
 J1="$(node -e 'try{JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log("ok")}catch(e){console.log("fail")}' "$WORK/j1.json")"
 J2="$(node -e 'try{JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log("ok")}catch(e){console.log("fail")}' "$WORK/j2.json")"
-if [ "$J1" = "ok" ] && [ "$J2" = "ok" ] && [ $RC2 -eq 2 ]; then
-  ok "AC-017 --json 输出与退出码语义"
+J4="$(node -e 'try{JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log("ok")}catch(e){console.log("fail")}' "$WORK/j4.json")"
+# ⚠️ 必须断言**成功路径的退出码是 0** —— 原来只采集不断言，
+#    成功路径返回 1 也照样判绿（独立验收 M10）。
+if [ "$J1" = "ok" ] && [ "$J2" = "ok" ] && [ "$J4" = "ok" ] \
+   && [ $RC1 -eq 0 ] && [ $RC2 -eq 2 ] && [ $RC4 -eq 1 ]; then
+  ok "AC-017 --json 输出与退出码语义（成功0 / 校验失败1 / 用法错误2，stdout 均可 JSON.parse）"
 else
-  bad "AC-017 --json 输出与退出码语义" "成功json=$J1(rc=$RC1) usage json=$J2(rc=$RC2，期望2)"
+  bad "AC-017 --json 输出与退出码语义" "成功json=$J1(rc=$RC1，期望0) 校验失败json=$J4(rc=$RC4，期望1) usage json=$J2(rc=$RC2，期望2)"
 fi
 
 # ---------------------------------------------------------------- AC-015
@@ -667,11 +731,244 @@ DEPS="0"
 [ -f "$PKG" ] && DEPS="$(node -e 'const p=require(process.argv[1]);console.log(Object.keys(p.dependencies||{}).length)' "$PKG" 2>/dev/null)"
 BADIMPORT="$(grep -h -E "^\s*import .*from ['\"]" "$EX"/*.mjs "$EX"/lib/*.mjs "$TE"/executors/*.mjs 2>/dev/null \
   | grep -v -E "from ['\"]node:" | grep -v -E "from ['\"]\./" | grep -v -E "from ['\"]\.\./" | wc -l)"
-EXT="$(grep -c -E "child_process|execSync|spawnSync|/tmp/|python3" "$EX"/*.mjs "$TE"/executors/*.mjs 2>/dev/null | grep -v ':0' | wc -l)"
+# ⚠️ 检索范围必须**递归覆盖 scripts/lib/**（独立验收 M12：在 lib/ 里引 child_process → 原脚本判绿）
+EXT="$(node -e '
+const fs=require("fs"),path=require("path");
+const roots=process.argv.slice(1);const files=[];
+const walk=(d)=>{ for(const e of fs.readdirSync(d,{withFileTypes:true})){ const p=path.join(d,e.name);
+  if(e.isDirectory()) walk(p); else if(/\.(mjs|js|cjs)$/.test(e.name)) files.push(p); } };
+for(const r of roots){ if(fs.existsSync(r)) walk(r); }
+const hits=[];
+for(const f of files){
+  const src=fs.readFileSync(f,"utf8").replace(/\/\*[\s\S]*?\*\//g,"").replace(/^\s*\/\/.*$/gm,"");
+  src.split(/\r?\n/).forEach((ln,i)=>{
+    if(/child_process|execSync|spawnSync|execFile|\/bin\/bash|python3/.test(ln)) hits.push(f+":"+(i+1));
+  });
+}
+console.log(hits.length);
+if(hits.length) console.error(hits.slice(0,5).join("\n"));
+' "$EX" "$TE/executors" 2>/dev/null | head -1)"
 if [ "$DEPS" = "0" ] && [ "$BADIMPORT" = "0" ] && [ "$EXT" = "0" ]; then
   ok "AC-015 零依赖 + 可移植"
 else
   bad "AC-015 零依赖 + 可移植" "deps=$DEPS 非内置import=$BADIMPORT 外部调用行=$EXT"
+fi
+
+# ---------------------------------------------------------------- AC-025
+step "AC-025 判 skipped 的用例不得发出请求"
+D25="$WORK/ac025"; make_project "$D25"
+# 计数 HTTP 服务器：记录收到的每一个请求 —— 用来证明"某条用例到底有没有真发请求"，
+# 而不是靠证据条数间接推断（间接推断会被"发了但没记账"绕过）。
+cat > "$WORK/count-server.mjs" <<'EOF'
+import { createServer } from 'node:http';
+import { writeFileSync } from 'node:fs';
+const hits = [];
+const server = createServer((req, res) => {
+  const url = req.url || '/';
+  if (url.startsWith('/__stats')) {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ count: hits.length, hits }));
+    return;
+  }
+  hits.push(`${req.method} ${url}`);
+  res.writeHead(200, { 'content-type': 'application/json' });
+  res.end(JSON.stringify({ status: 'ok' }));
+});
+server.listen(0, '127.0.0.1', () => {
+  writeFileSync(process.argv[2], String(server.address().port), 'utf8');
+});
+EOF
+node "$WORK/count-server.mjs" "$WORK/port25" >/dev/null 2>&1 &
+CNT_PID=$!
+CNT_WAIT=0
+while [ ! -s "$WORK/port25" ] && [ "$CNT_WAIT" -lt 100 ]; do sleep 0.1; CNT_WAIT=$((CNT_WAIT+1)); done
+PORT25="$(cat "$WORK/port25" 2>/dev/null || true)"
+if [ -z "$PORT25" ]; then
+  bad "AC-025 判 skipped 的用例不得发出请求" "计数服务器没起来（无法判定请求是否发出）"
+else
+  node -e '
+  const fs=require("fs");const f=process.argv[1];const o=JSON.parse(fs.readFileSync(f,"utf8"));
+  o.base_url="http://127.0.0.1:"+process.argv[2];
+  fs.writeFileSync(f,JSON.stringify(o,null,2));
+  ' "$D25/test-assets/environments/local.json" "$PORT25"
+  CASE_ACT25='{ "id":"TC-ACT","title":"活跃用例","requirement_refs":["R-1"],"dimension":"functional","priority":"P0","method":["M0.1"],"status":"active","steps":[ { "action":"GET /ok","expected":{ "path":"$.status","op":"equals","expected":"ok" } } ] }'
+  CASE_DEP25='{ "id":"TC-DEP","title":"废弃用例","requirement_refs":["R-1"],"dimension":"functional","priority":"P0","method":["M0.1"],"status":"deprecated","revision":{ "previous_status":"active","change":"需求变更，用例废弃" },"steps":[ { "action":"GET /notfound","expected":{ "path":"$.status","op":"equals","expected":"ok" } } ] }'
+  CASE_BLK25='{ "id":"TC-BLK","title":"阻塞用例","requirement_refs":["R-1"],"dimension":"functional","priority":"P0","method":["M0.1"],"status":"blocked","revision":{ "previous_status":"active","change":"环境未就绪，标记阻塞" },"steps":[ { "action":"GET /created","expected":{ "path":"$.status","op":"equals","expected":"ok" } } ] }'
+  make_cases "$D25/test-assets/suites/REQ-001-coupon/cases.json" "[ $CASE_ACT25, $CASE_DEP25, $CASE_BLK25 ]"
+  if run_suite "$D25" >/dev/null 2>&1 && [ -n "$RUN_DIR" ]; then
+    STATS="$(curl -s "http://127.0.0.1:$PORT25/__stats" 2>/dev/null || true)"
+    printf '%s' "$STATS" > "$WORK/stats25.json"
+    node -e '
+    const fs=require("fs");
+    const [resFile,casesFile,statsFile]=process.argv.slice(1);
+    const out=[];
+    let results=[],cases={cases:[]},hits=[];
+    try{ results=JSON.parse(fs.readFileSync(resFile,"utf8")); }catch(e){}
+    try{ cases=JSON.parse(fs.readFileSync(casesFile,"utf8")); }catch(e){}
+    try{ hits=(JSON.parse(fs.readFileSync(statsFile,"utf8")).hits)||[]; }catch(e){}
+    const dep=results.find(r=>r.case_id==="TC-DEP");
+    const act=results.find(r=>r.case_id==="TC-ACT");
+    out.push("dep_status="+(dep?dep.status:"__MISSING__"));
+    out.push("act_status="+(act?act.status:"__MISSING__"));
+    // 被判 skipped 的用例：证据条数必须为 0，且它声明的路径一个都没被请求过
+    let withEv="",hitPath="";
+    for(const r of results){
+      if(r.status!=="skipped") continue;
+      if((r.evidence||[]).length>0) withEv=withEv+r.case_id+" ";
+      const c=(cases.cases||[]).find(x=>x.id===r.case_id);
+      const paths=((c&&Array.isArray(c.steps))?c.steps:[]).map(s=>{
+        const a=(s&&typeof s.action==="string")?s.action:"";
+        const m=a.match(/^[A-Z]+\s+(\S+)/);return m?m[1]:null;
+      }).filter(Boolean);
+      for(const p of paths){ if(hits.some(h=>h.endsWith(" "+p))) hitPath=hitPath+r.case_id+":"+p+" "; }
+    }
+    out.push("skipped_with_evidence="+(withEv.trim()||"none"));
+    out.push("skipped_path_requested="+(hitPath.trim()||"none"));
+    // 对照组：活跃用例必须真跑过（否则"什么都没发"也能让上面几条判绿）
+    out.push("act_requested="+(hits.some(h=>h.endsWith(" /ok"))?"yes":"no"));
+    out.push("hit_count="+hits.length);
+    console.log(out.join("\n"));
+    ' "$RUN_DIR/results.json" "$D25/test-assets/suites/REQ-001-coupon/cases.json" "$WORK/stats25.json" > "$WORK/v25.txt"
+    V25="$(cat "$WORK/v25.txt")"
+    DEP_S="$(printf '%s\n' "$V25" | sed -n 's/^dep_status=//p')"
+    ACT_S="$(printf '%s\n' "$V25" | sed -n 's/^act_status=//p')"
+    SK_EV="$(printf '%s\n' "$V25" | sed -n 's/^skipped_with_evidence=//p')"
+    SK_HIT="$(printf '%s\n' "$V25" | sed -n 's/^skipped_path_requested=//p')"
+    ACT_REQ="$(printf '%s\n' "$V25" | sed -n 's/^act_requested=//p')"
+    if [ "$DEP_S" = "skipped" ] && [ "$ACT_S" = "passed" ] && [ "$SK_EV" = "none" ] \
+       && [ "$SK_HIT" = "none" ] && [ "$ACT_REQ" = "yes" ]; then
+      ok "AC-025 判 skipped 的用例不得发出请求"
+    else
+      bad "AC-025 判 skipped 的用例不得发出请求" \
+          "TC-DEP=$DEP_S(期望skipped) TC-ACT=$ACT_S(期望passed) 跳过但有证据=$SK_EV 跳过却发了请求=$SK_HIT 活跃用例未发出请求=$ACT_REQ"
+    fi
+  else
+    bad "AC-025 判 skipped 的用例不得发出请求" "套件未跑通（无产物目录）"
+  fi
+fi
+kill "$CNT_PID" 2>/dev/null || true
+wait "$CNT_PID" 2>/dev/null || true
+
+# ---------------------------------------------------------------- AC-026
+step "AC-026 传输层错误时，已执行步骤的证据必须保留"
+D26="$WORK/ac026"; make_project "$D26"
+node -e '
+const fs=require("fs");const f=process.argv[1];const o=JSON.parse(fs.readFileSync(f,"utf8"));
+o.driver="mock";fs.writeFileSync(f,JSON.stringify(o,null,2));
+' "$D26/test-assets/environments/local.json"
+CASE_ERR26='{ "id":"TC-ERR","title":"传输层错误","requirement_refs":["R-1"],"dimension":"functional","priority":"P0","method":["M0.1"],"status":"active","timeout_ms":300,"steps":[ { "action":"GET /ok","expected":{ "path":"$.status","op":"equals","expected":"ok" } }, { "action":"GET /slow?ms=3000","expected":{ "path":"$.status","op":"equals","expected":"ok" } } ] }'
+make_cases "$D26/test-assets/suites/REQ-001-coupon/cases.json" "[ $CASE_ERR26 ]"
+if run_suite "$D26" >/dev/null 2>&1 && [ -n "$RUN_DIR" ]; then
+  V26="$(node -e '
+  const fs=require("fs");
+  const results=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));
+  const r=results.find(x=>x.case_id==="TC-ERR");
+  if(!r){console.log("status=__MISSING__\nerror=__MISSING__\nevidence=-1\nrepro=-1");process.exit(0);}
+  const ev=(r.evidence||[]).length;
+  const rp=(r.reproduction&&Array.isArray(r.reproduction.steps))?r.reproduction.steps.length:-1;
+  console.log("status="+r.status);
+  console.log("error="+(r.error&&r.error.type?r.error.type:"none"));
+  console.log("evidence="+ev);
+  console.log("repro="+rp);
+  ' "$RUN_DIR/results.json")"
+  S26="$(printf '%s\n' "$V26" | sed -n 's/^status=//p')"
+  E26="$(printf '%s\n' "$V26" | sed -n 's/^error=//p')"
+  N26="$(printf '%s\n' "$V26" | sed -n 's/^evidence=//p')"
+  P26="$(printf '%s\n' "$V26" | sed -n 's/^repro=//p')"
+  # 证据条数 ≥ 1（第 1 步成功的响应必须留下）；证据条数 == 复现步骤数（D21/D24）
+  if [ "$S26" = "failed" ] && [ "$E26" = "timeout" ] && [ "$N26" -ge 1 ] 2>/dev/null \
+     && [ "$P26" -ge 1 ] 2>/dev/null && [ "$N26" -eq "$P26" ]; then
+    ok "AC-026 传输层错误时，已执行步骤的证据必须保留"
+  else
+    bad "AC-026 传输层错误时，已执行步骤的证据必须保留" \
+        "status=$S26(期望failed) error=$E26(期望timeout) 证据条数=$N26(期望≥1) 复现步骤数=$P26(期望=证据条数且≥1)"
+  fi
+else
+  bad "AC-026 传输层错误时，已执行步骤的证据必须保留" "套件未跑通（无产物目录）"
+fi
+
+# ---------------------------------------------------------------- AC-027
+step "AC-027 执行器生命周期必须收尾（异常路径也要停）"
+D27="$WORK/ac027"; make_project "$D27"
+node -e '
+const fs=require("fs");const f=process.argv[1];const o=JSON.parse(fs.readFileSync(f,"utf8"));
+o.driver="mock";fs.writeFileSync(f,JSON.stringify(o,null,2));
+' "$D27/test-assets/environments/local.json"
+make_cases "$D27/test-assets/suites/REQ-001-coupon/cases.json" "[ $CASE_OK ]"
+# 变异体：把判定层改成"一进来就抛异常" —— 模拟判定层崩溃。
+# 若执行外壳的收尾钩子只在正常路径上调用（没有 finally），桩服务会一直持有
+# 事件循环，进程永不退出 → 被 timeout 杀掉（退出码 124）。
+rm -rf "$WORK/mutant"
+cp -r "$TE" "$WORK/mutant"
+MUT_OK=1
+node -e '
+const fs=require("fs");const p=process.argv[1];
+let s=fs.readFileSync(p,"utf8");
+const needle="export function decide(";
+if(!s.includes(needle)){process.exit(3);}
+s=s.replace(needle,"export function decide(){ throw new Error(\"mutant-abort\"); }"+String.fromCharCode(10)+"function _decide_unused(");
+fs.writeFileSync(p,s);
+' "$WORK/mutant/scripts/lib/verdict.mjs" || MUT_OK=0
+if [ "$MUT_OK" -ne 1 ]; then
+  bad "AC-027 执行器生命周期必须收尾（异常路径也要停）" "变异体没造出来（判定层入口找不到）"
+else
+  ( cd "$D27" && timeout 20 node "$WORK/mutant/scripts/run-suite.mjs" \
+      "$D27/test-assets/suites/REQ-001-coupon/suite.json" --json ) >/dev/null 2>&1
+  RC27=$?
+  # 124 = 被 timeout 杀掉 = 进程挂死
+  if [ "$RC27" -ne 124 ] && [ "$RC27" -ne 137 ]; then
+    ok "AC-027 执行器生命周期必须收尾（异常路径也要停）"
+  else
+    bad "AC-027 执行器生命周期必须收尾（异常路径也要停）" \
+        "退出码=$RC27（124/137 = 进程挂死，判定层异常后执行器没被收尾）"
+  fi
+fi
+
+# ---------------------------------------------------------------- AC-028
+step "AC-028 meta.cycle 段不得谎报推进结果"
+D28="$WORK/ac28"; make_project "$D28"
+node -e '
+const fs=require("fs");const f=process.argv[1];const o=JSON.parse(fs.readFileSync(f,"utf8"));
+o.driver="mock";fs.writeFileSync(f,JSON.stringify(o,null,2));
+' "$D28/test-assets/environments/local.json"
+make_cases "$D28/test-assets/suites/REQ-001-coupon/cases.json" "[ $CASE_OK ]"
+# 子场景①：轮次目录不存在 → 推进必然失败
+( cd "$D28" && node "$EX/run-suite.mjs" "$D28/test-assets/suites/REQ-001-coupon/suite.json" \
+    --cycle "$WORK/no-such-cycle" --json ) > "$WORK/cyc-fail.json" 2>/dev/null
+RC28F=$?
+# 子场景②：轮次目录存在 → 推进应当成功
+( cd "$D28" && node "$EX/run-suite.mjs" "$D28/test-assets/suites/REQ-001-coupon/suite.json" \
+    --cycle "$D28/test-assets/cycles/R1-REQ-001" --json ) > "$WORK/cyc-ok.json" 2>/dev/null
+RC28O=$?
+V28="$(node -e '
+const fs=require("fs");
+function read(f){ try{ return JSON.parse(fs.readFileSync(f,"utf8")); }catch(e){ return null; } }
+const bad=read(process.argv[1]), ok=read(process.argv[2]);
+const c=(bad&&bad.cycle)?bad.cycle:{};
+const d=(ok&&ok.cycle)?ok.cycle:{};
+console.log("fail_ok="+String(c.ok));
+console.log("fail_recorded="+String(c.runs_recorded));
+console.log("fail_stage="+String(c.stage_status));
+console.log("fail_rc="+String(bad?bad.exit_code:"__PARSE_ERR__"));
+console.log("ok_ok="+String(d.ok));
+console.log("ok_recorded="+String(d.runs_recorded));
+console.log("ok_stage="+String(d.stage_status));
+console.log("ok_rc="+String(ok?ok.exit_code:"__PARSE_ERR__"));
+' "$WORK/cyc-fail.json" "$WORK/cyc-ok.json")"
+F_OK="$(printf '%s\n' "$V28" | sed -n 's/^fail_ok=//p')"
+F_REC="$(printf '%s\n' "$V28" | sed -n 's/^fail_recorded=//p')"
+F_STG="$(printf '%s\n' "$V28" | sed -n 's/^fail_stage=//p')"
+F_RC="$(printf '%s\n' "$V28" | sed -n 's/^fail_rc=//p')"
+O_OK="$(printf '%s\n' "$V28" | sed -n 's/^ok_ok=//p')"
+O_REC="$(printf '%s\n' "$V28" | sed -n 's/^ok_recorded=//p')"
+O_STG="$(printf '%s\n' "$V28" | sed -n 's/^ok_stage=//p')"
+O_RC="$(printf '%s\n' "$V28" | sed -n 's/^ok_rc=//p')"
+if [ "$F_OK" = "false" ] && [ "$F_REC" != "true" ] && [ "$F_STG" != "in_progress" ] && [ "$F_RC" = "1" ] \
+   && [ "$O_OK" = "true" ] && [ "$O_REC" = "true" ] && [ "$O_STG" = "in_progress" ] && [ "$O_RC" = "0" ]; then
+  ok "AC-028 meta.cycle 段不得谎报推进结果"
+else
+  bad "AC-028 meta.cycle 段不得谎报推进结果" \
+      "失败场景: ok=$F_OK(期望false) runs_recorded=$F_REC(期望≠true) stage_status=$F_STG(期望≠in_progress) 退出码=$F_RC(期望1) || 成功场景: ok=$O_OK(期望true) runs_recorded=$O_REC(期望true) stage_status=$O_STG(期望in_progress) 退出码=$O_RC(期望0)"
 fi
 
 # ---------------------------------------------------------------- 汇总
