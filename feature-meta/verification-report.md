@@ -1,9 +1,21 @@
 # REQ-002.5b 验证报告
 
-- 需求：REQ-002.5b 执行 skill 与证据链（第三轮修复：载体冲突 + 复现信息 + 绑定规则入契约）
-- 分支：`feature/REQ-002.5B`｜基线 `51bd8af`
-- 验收：BA 的 `verify-acceptance.sh` → **21 PASS / 0 FAIL**；REQ-002A 回归 → **19 PASS / 0 FAIL**
-- 自验：`/tmp/qa-0025b/qa-0025b.mjs` → **28 PASS / 0 FAIL**；`/tmp/qa-0025b/qa-round3.mjs` → **8 PASS / 0 FAIL**
+- 需求：REQ-002.5b 执行 skill 与证据链（第四轮修复：载体缺 path 判 `incomplete_request_carrier`）
+- 分支：`feature/REQ-002.5B`｜基线 `880f32c`
+- 验收：BA 的 `verify-acceptance.sh` → **22 PASS / 0 FAIL**；REQ-002A 回归 → **19 PASS / 0 FAIL**
+- 自验：`/tmp/qa-0025b/qa-0025b.mjs` → **28 PASS / 0 FAIL**；`qa-round3.mjs` → **8 PASS / 0 FAIL**；`qa-round4.mjs`（D23 探针）→ **6 PASS / 0 FAIL**
+
+## 第四轮改了什么（D23）
+
+| 任务 | 落点 |
+|---|---|
+| 载体缺 path 判 `incomplete_request_carrier` | `scripts/lib/suite-loader.mjs`（`hasRequestPath()`；`resolveExecutionPlan()` 里用例级载体缺 path 时**不参与冲突比对**，改为产出 `incomplete` 结构）、`scripts/lib/verdict.mjs`（`BLOCK_TYPES.INCOMPLETE_REQUEST_CARRIER` + 判定分支，消息指向"补 path"而非"冲突"）、`scripts/run-suite.mjs`（载体不完整时**一个请求都不发**，与冲突分支一致） |
+| 文档同步 | `references/executor-spec.md`（§2.2 绑定表补一行、§2.3 拆成"先看载体写全了没 / 再比两边"两张表 + 两种修法对照表、§6 `error.type` 表补 `incomplete_request_carrier`）、`SKILL.md`（硬约束第 5 条、可配置项段落、Failure handling）、`executors/index.json`（`request_carrier` 补缺 path 的处置） |
+
+**与第三轮的关系**：第三轮我把"缺 path 的载体"当成 `GET /` 参与冲突比对，于是报出
+"用例级载体指向 GET /，steps[0]（GET /ok）指向不同的端点" —— 这是**误诊**：
+调用方会去找一个根本不存在的冲突，而真正的问题是"载体没写路径"。
+D23 把两者拆开：缺 path = **补齐**（`incomplete_request_carrier`），冲突 = **二选一**（`conflicting_request_carrier`）。
 
 ## 第三轮改了什么（D20 / D21 / D22）
 
@@ -32,6 +44,8 @@
 | 断言所在 step 不可执行 | `blocked`（`assertion_without_response`），不是 passed |
 | **用例级载体 + 不同端点的 step** | `blocked`（`conflicting_request_carrier`），证据 0 份 —— 不判 passed，不静默丢请求 |
 | **用例级载体 + 同端点的 step** | 视为同一次请求 → `passed`，证据 1 份 == 复现步骤 1 步 |
+| **用例级载体缺 path**（只有 query） | `blocked`（`incomplete_request_carrier`），证据 0 份 —— 消息指向"补 path"，不说成冲突 |
+| **用例级载体缺 method**（有 path） | 合法（默认 GET）→ `passed`，不因此拒 |
 | **复现信息与证据条数一致** | 多请求用例：证据 2 份 == 复现步骤 2 步；凭证缺失时回退到用例声明的步骤 |
 | 单请求 + 叙述性 step 带断言 | `passed`（规则 4 保留：叙述性 step 的断言绑到那一次响应） |
 | 多请求 + 叙述性 step 带断言 | `blocked`（`assertion_without_response`） |
@@ -40,13 +54,16 @@
 | 完整性自检 | 改执行器一个字节 → exit 1；改回 → exit 0（清单已随源码重新生成） |
 | 打包 | `npm pack --dry-run` 含 test-execute 全部文件 |
 
-## 本轮修掉的实现缺陷
+## 累计修掉的实现缺陷
 
 1. **载体冲突静默丢 step 级请求**（P0，D20）：用例级载体存在时，step 级请求被整体忽略，
    后一条断言被拿去判前一次响应 → 半个用例报 passed。现在判 `blocked`（`conflicting_request_carrier`），一个请求都不发。
 2. **`reproduction.steps` 谎称执行过没跑的步骤**（P0，D21）：执行器没给复现步骤时回退到用例声明的步骤，
    而"用例想跑什么"不等于"实际跑了什么"。现在按执行器回报的步骤推导；一个请求都没执行时才回退到声明。
 3. **用例级载体那一次请求在复现信息里丢失**（D21）：`action` 为空被过滤掉。现在用 `METHOD /path` 兜底描述。
+4. **缺 path 的载体被误诊为"载体冲突"**（D23）：把缺 path 的载体当成 `GET /` 去比对，
+   报出"指向 GET / 与 GET /ok 冲突" —— 调用方会去找一个不存在的冲突。现在单独判
+   `blocked`（`incomplete_request_carrier`），消息指向"补 path"。
 
 ## 已知限制与待上游处理
 
@@ -55,3 +72,7 @@
 2. **`ui` / `load` / `security` 三个执行器未实现**（属后续 REQ；注册表已用 `not_implemented` 声明）。
 3. **`verify-integrity.mjs --update` 是维护者路径**，不是定制路径（已在 SKILL.md 与 executor-spec §8 警示）。
 4. **复现命令不含鉴权头，只含环境变量名**（需求 D19 的已知限制）：带鉴权的用例不能照抄命令跑通。
+5. **"证据份数 == 复现步骤数"不是全局恒等式**（需求 D24 的裁决）：判 blocked 且一个请求都没执行时
+   （凭证缺失、载体冲突、载体不完整），`reproduction.steps` **回退到用例声明的步骤**（证据 0 份）。
+   这是刻意的 —— 复现一个被阻塞的用例时，调用方恰恰需要知道"该跑哪些步骤"；
+   置空会让复现信息变成空壳。该恒等式只在**执行过请求**时成立。实现与 D24 一致，未改动。

@@ -9,7 +9,7 @@
     "timeout_ms": "单请求超时（毫秒）。载体：case.timeout_ms 或 case.data.timeout_ms，缺省取环境配置的 timeout_ms。",
     "retries": "失败重试次数。载体：case.retries 或 case.data.retries，缺省取环境配置的 retries。",
     "multi_step": "逐步执行：一个用例的每个可执行 step 各发一次请求（step.request，或 action 能解析成 \"METHOD /path\"）；每条断言绑定到它自己所在 step 的响应。执行计划由执行外壳给出，执行器只负责逐步跑并如实回报。",
-    "request_carrier": "载体优先级与冲突判定：用例级载体（case.request / case.data.request）与 step 级请求（step.request，或 action 能解析成 \"METHOD /path\"）同时存在时，method+path 一致 → 视为同一次请求（只发一次，断言都绑到那一次响应）；method+path 不一致 → 判 blocked（conflicting_request_carrier），不静默丢弃其中任何一边，也不判 passed。比较用 path 模板原文，不做插值。",
+    "request_carrier": "载体优先级与冲突判定：用例级载体（case.request / case.data.request）与 step 级请求（step.request，或 action 能解析成 \"METHOD /path\"）同时存在时，method+path 一致 → 视为同一次请求（只发一次，断言都绑到那一次响应）；method+path 不一致 → 判 blocked（conflicting_request_carrier），不静默丢弃其中任何一边，也不判 passed。比较用 path 模板原文，不做插值。用例级载体缺 path → 判 blocked（incomplete_request_carrier），修法是补 path（method 可省略，默认 GET），与\"冲突\"（修法是二选一）分开报。",
     "assertion_binding": "断言与响应的绑定规则：断言所在 step 可执行 → 绑到该 step 的响应；用例只解析出一次请求 → 该用例所有 step 上的断言都绑到那一次响应；用例有多次请求且断言所在 step 不可执行 → 判 blocked（assertion_without_response）；用例级载体与 step 级请求冲突 → 判 blocked（conflicting_request_carrier）。书写约定：断言要写在它所描述的那个可执行 step 上。"
   },
   "executors": [

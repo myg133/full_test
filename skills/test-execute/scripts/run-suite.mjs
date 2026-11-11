@@ -309,10 +309,12 @@ async function executeSuite(options) {
 
     let execution = { observed: null, evidence: [], reproduction: null, error: null };
 
-    if (plan.conflict) {
-      // 载体冲突：显式拒，一个请求都不发。
-      // 发哪一次、用例级载体和 step 级请求谁是准的，是需求方的意图 —— 不替需求方裁定。
-      // 判定由 verdict.mjs 给出（blocked / conflicting_request_carrier），这里只负责"不执行"。
+    if (plan.incomplete || plan.conflict) {
+      // 载体不完整（缺 path）或载体冲突：显式拒，一个请求都不发。
+      // 前者是「补齐 path」，后者是「一次调用还是多次调用要需求方裁定」——
+      // 两者都是需求方的意图，实现不替需求方猜。
+      // 判定由 verdict.mjs 给出（blocked / incomplete_request_carrier 或 conflicting_request_carrier），
+      // 这里只负责"不执行"。
       execution = { observed: null, evidence: [], reproduction: null, error: null };
     } else if (credentials.missing.length > 0) {
       execution = {

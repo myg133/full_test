@@ -43,6 +43,8 @@ description: |
    "这次是一次调用还是多次调用"是**需求方的意图** —— 实现不替需求方猜：
    该用例判 `blocked`（`conflicting_request_carrier`），**不得判 `passed`**，
    也不静默丢掉其中一边的请求。两条都要：**要么执行，要么显式拒**。
+   用例级载体**缺 path** 是另一回事：那是「补齐」，判 `blocked`（`incomplete_request_carrier`），
+   **不报成冲突** —— 混同会让调用方去找一个根本不存在的冲突。
 
 6. **证据链说的必须与实际做的一致。**
    `reproduction.steps` 只记**实际执行过**的步骤，一个都不能多、也不能少；
@@ -114,6 +116,7 @@ description: |
 **载体冲突显式拒**：用例级载体与 step 级请求**同时**存在时，
 method + path 一致 → 视为同一次请求（只发一次，断言都绑到那一次响应）；
 不一致 → 判 `blocked`（`conflicting_request_carrier`），不静默丢掉其中一边，也不判 `passed`。
+用例级载体**没写 path** → 判 `blocked`（`incomplete_request_carrier`）：修法是**补上 path**，不是二选一。
 
 **断言与响应的绑定规则**（可预期行为，不是隐藏实现）：
 
@@ -187,7 +190,9 @@ method + path 一致 → 视为同一次请求（只发一次，断言都绑到�
   `no_mechanical_assertion` = 该用例的 `steps[].expected` 全是字符串，补断言对象；
   `environment_missing` / `request_spec_missing` = 配置缺项；
   `conflicting_request_carrier` = 用例级载体与 step 级请求指向不同端点 —— **一次调用还是多次调用要需求方裁定**，
-  实现不替你选：改用例（去掉用例级载体，或让两边指向同一端点）再跑。
+  实现不替你选：改用例（去掉用例级载体，或让两边指向同一端点）再跑；
+  `incomplete_request_carrier` = 用例级载体**没写 path** —— **补上 path** 即可（`method` 可省略，默认 GET；
+  若本意是由 step 提供路径，就去掉用例级载体）。这两种修法不同，别改错地方。
 - **用例判 `failed`**：看 `error.message` 里的断言明细与 `evidence/` 下的原始响应；
   `reproduction.command` 是可复制的复现命令（凭证以环境变量名出现，不含明文）。
 - **驱动起不来 / 未注册**：看 `executors/index.json`。`ui` / `load` / `security` 属后续 REQ，本 skill 只交付 `api` 与 `mock`。

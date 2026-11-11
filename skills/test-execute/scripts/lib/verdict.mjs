@@ -43,6 +43,7 @@ export const BLOCK_TYPES = Object.freeze({
   REQUEST_SPEC_MISSING: 'request_spec_missing',
   ASSERTION_WITHOUT_RESPONSE: 'assertion_without_response',
   CONFLICTING_REQUEST_CARRIER: 'conflicting_request_carrier',
+  INCOMPLETE_REQUEST_CARRIER: 'incomplete_request_carrier',
   EXECUTOR_ERROR: 'executor_error',
 });
 
@@ -150,6 +151,29 @@ export function decide(spec) {
       },
       failures: [],
       reason: blocking ? '环境/凭证缺失，无法执行' : '执行报错',
+    };
+  }
+
+  // 载体不完整（需求 D23）：用例级载体没有写明 path。
+  // 缺 path 是「补齐」，冲突是「二选一」—— 两种修法不同，错误类型必须分开，
+  // 否则调用方会照着"冲突"去改（去掉载体 / 去掉 step），而真正要补的是 path。
+  const incomplete = isObject(plan.incomplete) ? plan.incomplete : null;
+  if (incomplete) {
+    const method =
+      typeof incomplete.method === 'string' && incomplete.method.trim() !== ''
+        ? incomplete.method.trim()
+        : 'GET';
+    return {
+      ...empty,
+      status: STATUS.BLOCKED,
+      error: {
+        type: BLOCK_TYPES.INCOMPLETE_REQUEST_CARRIER,
+        message:
+          '用例级请求载体没有写明 path —— 请补上 path（method 可省略，默认 GET；' +
+          `当前读到 method=${method}）。` +
+          '若本意是由 step 提供路径，请去掉用例级载体。判 blocked（不得判 passed）',
+      },
+      reason: '用例级请求载体不完整（缺 path）',
     };
   }
 

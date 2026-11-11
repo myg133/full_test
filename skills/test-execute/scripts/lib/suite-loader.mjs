@@ -314,6 +314,21 @@ export function requestSignature(request) {
 }
 
 /**
+ * 这个请求载体有没有写明 path。
+ *
+ * **缺 path 与"载体冲突"是两种不同的修法**（需求 D23）：
+ * 缺 path 是「补齐」，冲突是「二选一」—— 混成一个错误类型会让调用方
+ * 去找一个根本不存在的冲突。method 缺省按 GET 处理（HTTP 的合理默认），
+ * 不因此拒。
+ *
+ * @param {object} request 请求配置
+ * @returns {boolean}
+ */
+export function hasRequestPath(request) {
+  return isObject(request) && typeof request.path === 'string' && request.path.trim() !== '';
+}
+
+/**
  * 把一个请求描述成 "METHOD /path"。
  *
  * 用于复现步骤与冲突信息：既然请求本身没有人类可读的动作描述，
@@ -330,21 +345,24 @@ export function describeRequest(request) {
 /**
  * 解析一个用例的执行计划：跑哪些请求、每条断言绑到哪次响应。
  *
- * 规则（需求 F3 的多步语义 + D20 的载体冲突处理）：
- *   1. 用例级载体（case.request / case.data.request）与 step 级请求**不一致**时
+ * 规则（需求 F3 的多步语义 + D20 的载体冲突处理 + D23 的载体不完整处理）：
+ *   1. 用例级载体**缺 path**时 → 显式拒（incomplete 非空）：缺 path 是「补齐」，
+ *      与"载体冲突"的「二选一」是两种不同的修法，不能混成一个错误类型。
+ *   2. 用例级载体与 step 级请求**不一致**时
  *      → 显式拒（conflict 非空）：到底是"一次调用"还是"多次调用"是需求方的意图，
  *      实现不替需求方裁定，也不静默丢掉其中一边的请求。
- *   2. 用例级载体存在且与所有 step 级请求一致（method+path 相同）→ 整个用例只跑这一次请求，
+ *   3. 用例级载体存在且与所有 step 级请求一致（method+path 相同）→ 整个用例只跑这一次请求，
  *      所有 step 上的断言都针对这同一次响应（合法的"一次响应多条断言"）。
- *   3. 无用例级载体 → 每个可执行 step 各跑一次请求，按 steps 顺序。
- *   4. 断言归属它自己所在的 step；该 step 不可执行且用例不止一次请求时，
+ *   4. 无用例级载体 → 每个可执行 step 各跑一次请求，按 steps 顺序。
+ *   5. 断言归属它自己所在的 step；该 step 不可执行且用例不止一次请求时，
  *      这条断言没有可判的响应 → 判 blocked（assertion_without_response），不得判 passed。
  *
  * @param {object} caseObj 用例
  * @returns {{requests: {step_index: number|null, request: object, action: string}[],
  *            assertions: {assertion: object, stepIndex: number, action: string}[],
  *            unbound: {assertion: object, stepIndex: number, action: string}[],
- *            conflict: object|null}}
+ *            conflict: object|null,
+ *            incomplete: object|null}}
  */
 export function resolveExecutionPlan(caseObj) {
   const assertions = collectAssertions(caseObj);
@@ -370,31 +388,42 @@ export function resolveExecutionPlan(caseObj) {
 
   const requests = [];
   let conflict = null;
+  let incomplete = null;
 
   if (caseLevel) {
-    const caseSignature = requestSignature(caseLevel);
-    const mismatched = stepRequests.filter((item) => {
-      const signature = requestSignature(item.request);
-      return signature.method !== caseSignature.method || signature.path !== caseSignature.path;
-    });
-    if (mismatched.length > 0) {
-      // 载体冲突：一边是"整个用例跑这一次"，一边是"这一步跑那一次"。
-      // 不静默丢任何一边 —— 显式交给判定层（判 blocked）。
-      conflict = {
-        case_request: { ...caseSignature, label: describeRequest(caseLevel) },
-        steps: mismatched.map((item) => ({
-          step_index: item.step_index,
-          action: item.action,
-          ...requestSignature(item.request),
-          label: describeRequest(item.request),
-        })),
+    if (!hasRequestPath(caseLevel)) {
+      // 载体不完整（缺 path）：不参与冲突比对 —— 两边没法比，
+      // 硬比出来的"冲突"是误诊（会让人去找一个根本不存在的冲突）。
+      incomplete = {
+        carrier: 'case',
+        missing: 'path',
+        method: requestSignature(caseLevel).method,
       };
     } else {
-      requests.push({
-        step_index: null,
-        request: caseLevel,
-        action: describeRequest(caseLevel),
+      const caseSignature = requestSignature(caseLevel);
+      const mismatched = stepRequests.filter((item) => {
+        const signature = requestSignature(item.request);
+        return signature.method !== caseSignature.method || signature.path !== caseSignature.path;
       });
+      if (mismatched.length > 0) {
+        // 载体冲突：一边是"整个用例跑这一次"，一边是"这一步跑那一次"。
+        // 不静默丢任何一边 —— 显式交给判定层（判 blocked）。
+        conflict = {
+          case_request: { ...caseSignature, label: describeRequest(caseLevel) },
+          steps: mismatched.map((item) => ({
+            step_index: item.step_index,
+            action: item.action,
+            ...requestSignature(item.request),
+            label: describeRequest(item.request),
+          })),
+        };
+      } else {
+        requests.push({
+          step_index: null,
+          request: caseLevel,
+          action: describeRequest(caseLevel),
+        });
+      }
     }
   } else {
     requests.push(...stepRequests);
@@ -411,7 +440,7 @@ export function resolveExecutionPlan(caseObj) {
     const executable = new Set(requests.map((item) => item.step_index));
     unbound = assertions.filter((item) => !executable.has(item.stepIndex));
   }
-  return { requests, assertions, unbound, conflict };
+  return { requests, assertions, unbound, conflict, incomplete };
 }
 
 /**

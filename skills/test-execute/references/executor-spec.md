@@ -116,6 +116,7 @@ F8 的"脱敏在写入前"；两者以本接口调和。
 | 用例只解析出**一次**请求 | 该用例**所有** step 上的断言都绑到那一次响应 |
 | 用例有**多次**请求，且断言所在 step **不可执行** | 判 `blocked`（`assertion_without_response`） |
 | 用例级载体与 step 级请求**冲突**（method+path 不一致） | 判 `blocked`（`conflicting_request_carrier`，见 §2.3） |
+| 用例级载体**缺 path** | 判 `blocked`（`incomplete_request_carrier`，见 §2.3） |
 
 **第 2 行的适用范围**：它只在"这个用例确实只解析出一次请求"时成立 ——
 即用例级载体与所有 step 级请求一致，或全用例只有一个可执行 step。
@@ -137,7 +138,14 @@ F8 的"脱敏在写入前"；两者以本接口调和。
 - **用例级载体**：`case.request` 或 `case.data.request` —— 描述"这个用例要打哪个接口"
 - **step 级请求**：`step.request`，或 `step.action` 能解析成 `METHOD /path` —— 描述"这一步打哪个接口"
 
-两者**同时**存在时：
+两者**同时**存在时，先看用例级载体本身写全了没有：
+
+| 情形 | 处理 |
+|---|---|
+| 用例级载体**没有写明 path** | 判 `blocked`（`error.type = incomplete_request_carrier`），**一个请求都不发** |
+| 用例级载体写全了（`method` 可省略，默认 `GET`） | 继续往下比对 |
+
+写全了再比两边的 method + path：
 
 | 比较结果 | 处理 |
 |---|---|
@@ -146,7 +154,16 @@ F8 的"脱敏在写入前"；两者以本接口调和。
 
 **比较口径**：method + path，path 用**模板原文**（不插值）——
 `{id}` 插值后可能变成不同值，模板更稳定，也才是"用例作者写了什么"的忠实反映。
-method 缺省 `GET`，path 缺省 `/`。
+method 缺省 `GET`（HTTP 的合理默认，不因此拒）；**path 不能缺**（缺了是上表的 `incomplete_request_carrier`）。
+
+**两种修法不同，不能混成一个错误类型**：
+
+| 错误类型 | 修法 | 典型现场 |
+|---|---|---|
+| `incomplete_request_carrier` | **补齐**：把 path 写上 | `"request": {"query": {"a": "1"}}` —— 只写了 query，忘了 path |
+| `conflicting_request_carrier` | **二选一**：去掉用例级载体，或去掉 step 级请求 | 用例级 `GET /ok`，step 却指向 `GET /notfound` |
+
+混同会让调用方照着"冲突"去改（去掉载体 / 去掉 step），而真正要补的是 path —— 那是个不存在的冲突。
 
 **为什么不替需求方裁定**：这次调用到底是一次还是多次，是**需求方的意图**。
 静默丢掉一边会让"半个用例"报通过（虚报），替需求方猜一边则会让报告与用例意图不符。
@@ -269,6 +286,7 @@ method 缺省 `GET`，path 缺省 `/`。
 | `no_mechanical_assertion` | `blocked` | 该用例没有可机械判定的断言 |
 | `assertion_without_response` | `blocked` | 断言所在 step 不可执行，没有可判的响应（见 §2.2） |
 | `conflicting_request_carrier` | `blocked` | 用例级载体与 step 级请求冲突，一次还是多次需需求方裁定（见 §2.3） |
+| `incomplete_request_carrier` | `blocked` | 用例级载体没有写明 path（见 §2.3） |
 | `timeout` | `failed` | 请求超时 |
 | `network_error` | `failed` | 网络错误 |
 | `assertion_failed` | `failed` | 有断言不成立 |

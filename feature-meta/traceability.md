@@ -1,10 +1,10 @@
 # REQ-002.5b 追溯性矩阵
 
-- 需求：REQ-002.5b（执行 skill 与证据链）｜第三轮：载体冲突判 blocked（D20）+ 复现信息如实（D21）+ 绑定规则写进契约（D22）
+- 需求：REQ-002.5b（执行 skill 与证据链）｜第四轮：载体缺 path 判 `incomplete_request_carrier`（D23）
 - 分支：`feature/REQ-002.5B`
-- 验收脚本（BA 的资产）：`BA/demands/REQ-002-suite-foundation/REQ-002.5b-test-execute/verify-acceptance.sh` → **21 PASS / 0 FAIL**
+- 验收脚本（BA 的资产）：`BA/demands/REQ-002-suite-foundation/REQ-002.5b-test-execute/verify-acceptance.sh` → **22 PASS / 0 FAIL**
 - REQ-002A 回归：`BA/demands/REQ-002-suite-foundation/REQ-002A-schema-v2/verify-regression-002a.sh` → **19 PASS / 0 FAIL**
-- 自验脚本（自用，不进仓库）：`/tmp/qa-0025b/qa-0025b.mjs` → **28 PASS / 0 FAIL**；`/tmp/qa-0025b/qa-round3.mjs`（本轮行为探针）→ **8 PASS / 0 FAIL**
+- 自验脚本（自用，不进仓库）：`/tmp/qa-0025b/qa-0025b.mjs` → **28 PASS / 0 FAIL**；`qa-round3.mjs` → **8 PASS / 0 FAIL**；`qa-round4.mjs`（D23 探针）→ **6 PASS / 0 FAIL**
 
 > 编号说明：`AC-0xx` 是 BA 验收脚本的编号；`AC-Qxx` 是我自加的检查项（避免与 BA 编号撞号）。
 
@@ -36,8 +36,10 @@
 | **AC-020 多步全通过** | 同上 | 两步都成立 → passed，证据 2 份 | PASS |
 | **AC-021 载体冲突判 blocked** | `lib/suite-loader.mjs`（`resolveExecutionPlan` 的 conflict 判定）、`lib/verdict.mjs`（`BLOCK_TYPES.CONFLICTING_REQUEST_CARRIER`）、`scripts/run-suite.mjs`（冲突时不发请求） | 用例级载体 `GET /ok` + step `GET /notfound` → blocked（非 passed），证据 0 份 | PASS |
 | **AC-022 复现信息如实** | `scripts/run-suite.mjs`（按执行器回报的步骤推导 `reproduction.steps`）、`executors/http-core.mjs`（`describeRequest` 兜底） | 用例级载体 + 同端点 step → 非 blocked，证据份数 == `reproduction.steps` 长度 | PASS |
+| **AC-023 载体缺 path 判 incomplete_request_carrier** | `lib/suite-loader.mjs`（`hasRequestPath` + `resolveExecutionPlan` 的 `incomplete`）、`lib/verdict.mjs`（`BLOCK_TYPES.INCOMPLETE_REQUEST_CARRIER`）、`scripts/run-suite.mjs`（不完整时不发请求） | `request: {query:{a:"1"}}` + step `GET /ok` → blocked 且 `error.type=incomplete_request_carrier`（不是 conflicting） | PASS |
 | AC-Q01（自加）断言所在 step 不可执行 | `verdict.mjs`（`BLOCK_TYPES.ASSERTION_WITHOUT_RESPONSE`） | 三步用例（第三步无请求载体）→ blocked，非 passed | PASS |
 | AC-Q02（自加）REQ-002B 放开 mock | `test-case-design/scripts/verify-layout.mjs`（枚举 + `driver`）、`references/project-layout.md` | `executor=mock` + 环境 `driver` + `runs[]` 判合法；非法值仍被拦 | PASS |
 | AC-Q03（自加）`set-stage --run` 幂等 | `test-case-design/scripts/cycle-state.mjs` | 重复 run_id → `runs[]` 两项不重复 | PASS |
 | AC-Q04（自加）复现步骤与证据条数一致 | `scripts/run-suite.mjs`（`executedActions` 推导） | 多请求用例：证据 2 份 == 复现步骤 2 步；凭证缺失时回退到声明的步骤 | PASS |
 | AC-Q05（自加）绑定规则的两条既有行为未被破坏 | `lib/verdict.mjs`（`bindAssertions`） | 单请求 + 叙述性 step → passed；多请求 + 叙述性 step → blocked | PASS |
+| AC-Q06（自加）载体缺 method 合法、缺 path 不误诊 | `lib/suite-loader.mjs`（`requestSignature` 默认 GET、`hasRequestPath`） | 载体只有 path → passed（默认 GET）；真冲突仍报 `conflicting_request_carrier` | PASS |
