@@ -45,7 +45,7 @@ REQ-002A 起的对策是"把强制落在脚本上"（`validate-cases.mjs --init`
   "schema_version": 1,
   "methods": [
     {
-      "id": "M0.2",
+      "id": "M1.2",
       "name": "边界值分析",
       "aliases": ["边界值", "BVA"],
       "purpose": "取边界及其邻近值，重点测边界内外一格",
@@ -58,6 +58,17 @@ REQ-002A 起的对策是"把强制落在脚本上"（`validate-cases.mjs --init`
   ]
 }
 ```
+
+**编号分段（重要）**：方法编号**分两段**，不要混用 ——
+
+| 编号段 | 含义 | 归属 |
+|--------|------|------|
+| `M0.x` / `M4.x` | Layer 0 的**必选测试点**（测什么：正常路径 / 边界值 / 异常输入 / 非法迁移 / 幂等 / 服务端校验 / 数据质量） | 架构稿 `schema-v2-design.md`；**不在本方法库内** |
+| `M1.x` | **测试设计方法**（怎么测：等价类 / 边界值分析 / 判定表 / 状态迁移 / 正交 / 场景法） | **本 REQ 的 `methods.json`** |
+
+`methods.json` **只收录 `M1.x`**。用��里出现 `M0.x` / `M4.x`（比如照着 `case-schema.md` 的示例写 `method: ["M0.1","M4.5"]`）时，
+`check-methods.mjs` 报**"无法判定"**（该编号不在设计方法库内），**不得默认通过**。
+理由见 `decisions.md` 的 D8 —— 两套编号同号不同义会让核验结果错乱。
 
 **硬要求**：`methods.json` 是**唯一来源** —— `references/design-methods.md` 改为**从数据生成的说明文档**
 （手写解释 + 指向 JSON），两者的方法 id / 名称 / 适用信号必须一致，由脚本校验（AC-002）。
@@ -110,7 +121,10 @@ REQ-002A 起的对策是"把强制落在脚本上"（`validate-cases.mjs --init`
 
 脚本检查：
 - 有强适用信号的维度，该需求条目下**一条用例都没有** → 报 `DIMENSION_MISSING`（WARN）
-- 跳过某维度**必须**在 `coverage_matrix[].skipped[]` 里带 reason（ERROR）
+- 跳过某维度**必须**在 `coverage_matrix[].skipped[]` 里带 reason（ERROR）。
+  **写法**：元素结构仍以 REQ-002A 为准（只有 `method` + `reason`），
+  维度跳过用 `method` 字段记 `"dimension:<维度名>"`（如 `{"method":"dimension:concurrency","reason":"..."}`）——
+  见 `decisions.md` 的 D7
 - 用例的 `dimension` 取值必须在这 8 个枚举内（已有规则，保持）
 
 ### F5 新增脚本 `scripts/check-methods.mjs`
@@ -169,7 +183,7 @@ node scripts/check-methods.mjs --methods <路径> --dimensions <路径>   # 换�
 
 ---
 
-验收标准见同目录 `acceptance.md`（AC-001 ~ AC-014）。
+验收标准见同目录 `acceptance.md`（AC-001 ~ AC-015）。
 
 ## 4. 不做什么（明确排除）
 

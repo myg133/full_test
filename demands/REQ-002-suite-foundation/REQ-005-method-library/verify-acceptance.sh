@@ -48,7 +48,7 @@ mkcases() {
 
 # 一条用例：$1=id $2=title $3=dimension $4=steps JSON
 mkcase() {
-  printf '{ "id": "%s", "title": "%s", "requirement_refs": ["R-1"], "dimension": "%s", "priority": "P0", "method": ["M0.1"], "status": "active", "steps": %s }' "$1" "$2" "$3" "$4"
+  printf '{ "id": "%s", "title": "%s", "requirement_refs": ["R-1"], "dimension": "%s", "priority": "P0", "method": ["M1.1"], "status": "active", "steps": %s }' "$1" "$2" "$3" "$4"
 }
 
 # 一条断言式 step：$1=action $2=path $3=op $4=expected
@@ -117,9 +117,9 @@ fi
 
 # ---------------------------------------------------------------- AC-003 / AC-004
 step "AC-003/004 声称用了方法但无对应产出 → 被发现（且不误报）"
-# 场景 A：声明用了 M0.2（边界值），但该条目下**没有** boundary 维度的用例 → 应报错
+# 场景 A：声明用了 M1.2（边界值），但该条目下**没有** boundary 维度的用例 → 应报错
 CASES_A="[ $(mkcase TC-001 功能用例 functional "[ $(astep '输入密码' '$.code' 'equals' '"E001"') ]") ]"
-MATRIX_A='[ { "requirement": "R-1", "methods_applied": ["M0.2"], "skipped": [], "dimensions": ["functional"] } ]'
+MATRIX_A='[ { "requirement": "R-1", "methods_applied": ["M1.2"], "skipped": [], "dimensions": ["functional"] } ]'
 mkcases "$WORK/a.json" "$CASES_A" "$MATRIX_A"
 OUT_A="$(node "$CM" "$WORK/a.json" --methods "$MTH" 2>&1)"; RC_A=$?
 # 场景 B：补上 3 条 boundary 用例，断言取值互不相同 → 不应再报"缺少必需产出"
@@ -128,7 +128,7 @@ $(mkcase TC-001 功能用例 functional "[ $(astep '输入密码' '$.code' 'equa
 $(mkcase TC-002 边界下界 boundary "[ $(astep '长度7' '$.len' 'equals' '7') ]"), \
 $(mkcase TC-003 边界上界 boundary "[ $(astep '长度8' '$.len' 'equals' '"8"') ]"), \
 $(mkcase TC-004 边界越界 boundary "[ $(astep '长度21' '$.len' 'equals' '21') ]") ]"
-MATRIX_B='[ { "requirement": "R-1", "methods_applied": ["M0.2"], "skipped": [], "dimensions": ["functional","boundary"] } ]'
+MATRIX_B='[ { "requirement": "R-1", "methods_applied": ["M1.2"], "skipped": [], "dimensions": ["functional","boundary"] } ]'
 mkcases "$WORK/b.json" "$CASES_B" "$MATRIX_B"
 OUT_B="$(node "$CM" "$WORK/b.json" --methods "$MTH" 2>&1)"; RC_B=$?
 # 场景 B2：三条 boundary 用例的 expected 取值**完全相同** → distinct_expected 谓词必须报错
@@ -143,7 +143,7 @@ OUT_B2="$(node "$CM" "$WORK/b2.json" --methods "$MTH" 2>&1)"; RC_B2=$?
 A3=0; A4=0
 # 判据：脚本必须**点名**那条方法与那条需求条目，而不是泛泛说"有问题"
 # ⚠️ 必须**同行**出现 —— 只查"输出里有两个词"可能命中的是别处的提及
-if [ $RC_A -ne 0 ] && printf '%s' "$OUT_A" | grep -qE "M0\.2.*R-1|R-1.*M0\.2"; then A3=1; fi
+if [ $RC_A -ne 0 ] && printf '%s' "$OUT_A" | grep -qE "M1\.2.*R-1|R-1.*M1\.2"; then A3=1; fi
 if [ $RC_B -eq 0 ]; then A4=1; fi
 if [ $A3 -eq 1 ]; then
   ok "AC-003 声称用了方法但没有对应产出 → 被发现"
@@ -165,28 +165,38 @@ fi
 
 # ---------------------------------------------------------------- AC-005
 step "AC-005 适用性检查能发现漏用方法（WARN 不阻断）"
-# 需求文本含"长度 8-20 位"这类强边界信号，但 methods_applied 里没有 M0.2
+# 需求文本含"长度 8-20 位"这类强边界信号，但 methods_applied 里没有 M1.2
 CASES_C="[ $(mkcase TC-001 功能用例 functional "[ $(astep '输入密码' '$.code' 'equals' '"E001"') ]") ]"
-MATRIX_C='[ { "requirement": "R-1", "methods_applied": ["M0.1"], "skipped": [], "dimensions": ["functional"] } ]'
+MATRIX_C='[ { "requirement": "R-1", "methods_applied": ["M1.1"], "skipped": [], "dimensions": ["functional"] } ]'
 mkcases "$WORK/c.json" "$CASES_C" "$MATRIX_C"
 OUT_C="$(node "$CM" "$WORK/c.json" --methods "$MTH" 2>&1)"; RC_C=$?
-# 必须点名类型 METHOD_MISSING（F3 定死的类型名）—— 只查 "M0.2" 可能命中别处的提及
-if [ $RC_C -eq 0 ] && printf '%s' "$OUT_C" | grep -q "METHOD_MISSING" && printf '%s' "$OUT_C" | grep -q "M0.2"; then
+# 必须点名类型 METHOD_MISSING（F3 定死的类型名）—— 只查 "M1.2" 可能命中别处的提及
+if [ $RC_C -eq 0 ] && printf '%s' "$OUT_C" | grep -q "METHOD_MISSING" && printf '%s' "$OUT_C" | grep -q "M1.2"; then
   ok "AC-005 适用性检查能发现漏用方法（WARN，退出码仍 0）"
 else
   bad "AC-005 适用性检查能发现漏用方法" "rc=$RC_C out=$OUT_C"
 fi
 
 # ---------------------------------------------------------------- AC-006
-step "AC-006 跳过维度必须写理由"
-MATRIX_D='[ { "requirement": "R-1", "methods_applied": ["M0.1"], "skipped": [ { "dimension": "concurrency" } ], "dimensions": ["functional"] } ]'
+step "AC-006 跳过必须写理由（方法跳过 / 维度跳过两种写法）"
+# D7：维度跳过也用 skipped[].method 记（"dimension:<维度名>"），
+#     元素结构仍以 REQ-002A 为准（只有 method + reason）—— 两种写法都必须被发现。
+MATRIX_D='[ { "requirement": "R-1", "methods_applied": ["M1.1"], "skipped": [ { "method": "M1.4" } ], "dimensions": ["functional"] } ]'
 mkcases "$WORK/d.json" "$CASES_C" "$MATRIX_D"
 OUT_D="$(node "$CM" "$WORK/d.json" --methods "$MTH" 2>&1)"; RC_D=$?
-# 必须点名"缺 reason"这件事 —— 只查 "concurrency" 可能命中别处的提及
-if [ $RC_D -ne 0 ] && printf '%s' "$OUT_D" | grep -q "concurrency" && printf '%s' "$OUT_D" | grep -qi "reason"; then
-  ok "AC-006 跳过维度必须写理由"
+# 场景 D2：跳过**维度**（用 dimension: 前缀），同样缺 reason
+MATRIX_D2='[ { "requirement": "R-1", "methods_applied": ["M1.1"], "skipped": [ { "method": "dimension:concurrency" } ], "dimensions": ["functional"] } ]'
+mkcases "$WORK/d2.json" "$CASES_C" "$MATRIX_D2"
+OUT_D2="$(node "$CM" "$WORK/d2.json" --methods "$MTH" 2>&1)"; RC_D2=$?
+# 必须点名"缺 reason"这件事 —— 只查一个关键词可能命中别处的提及
+D_OK=0
+if [ $RC_D -ne 0 ] && printf '%s' "$OUT_D" | grep -q "M1.4" && printf '%s' "$OUT_D" | grep -qi "reason"; then D_OK=1; fi
+D2_OK=0
+if [ $RC_D2 -ne 0 ] && printf '%s' "$OUT_D2" | grep -q "concurrency" && printf '%s' "$OUT_D2" | grep -qi "reason"; then D2_OK=1; fi
+if [ $D_OK -eq 1 ] && [ $D2_OK -eq 1 ]; then
+  ok "AC-006 跳过必须写理由（方法跳过 / 维度跳过两种写法）"
 else
-  bad "AC-006 跳过维度必须写理由" "rc=$RC_D out=$OUT_D"
+  bad "AC-006 跳过必须写理由" "方法跳过 rc=$RC_D(期望≠0,点名M1.4+reason) 维度跳过 rc=$RC_D2(期望≠0,点名concurrency+reason) out1=$OUT_D out2=$OUT_D2"
 fi
 
 # ---------------------------------------------------------------- AC-007
@@ -318,17 +328,25 @@ if [ ! -f "$VC" ]; then
   bad "AC-014 验收场景的样本本身必须合法" "缺 validate-cases.mjs"
 else
   BAD_SAMPLE=""
-  for f in a b b2 c d e; do
+  for f in a b b2 c e; do
     [ -f "$WORK/$f.json" ] || continue
     OUTV="$(node "$VC" "$WORK/$f.json" 2>&1)"; RCV=$?
     if [ $RCV -ne 0 ]; then
       BAD_SAMPLE="$BAD_SAMPLE $f(rc=$RCV)"
     fi
   done
-  if [ -z "$BAD_SAMPLE" ]; then
-    ok "AC-014 验收场景的样本本身必须合法（全部通过 REQ-002A 校验器）"
+  # d.json 是**故意的反例**（AC-006 的测试对象：跳过项缺 reason）——
+  # 对它的正确期望是「被 REQ-002A 拦截」，不是「通过」。
+  D_BLOCKED=0
+  if [ -f "$WORK/d.json" ]; then
+    node "$VC" "$WORK/d.json" >/dev/null 2>&1
+    [ $? -ne 0 ] && D_BLOCKED=1
+  fi
+  if [ -z "$BAD_SAMPLE" ] && [ "$D_BLOCKED" -eq 1 ]; then
+    ok "AC-014 验收场景的样本本身必须合法（d 是反例、须被拦截，其余全部通过）"
   else
-    bad "AC-014 验收场景的样本本身必须合法" "非法样本:$BAD_SAMPLE —— 拿非法输入测出来的结论不算数"
+    bad "AC-014 验收场景的样本本身必须合法" \
+        "非法样本:$BAD_SAMPLE d.json被拦截=$D_BLOCKED(期望1) —— 拿非法输入测出来的结论不算数"
   fi
 fi
 
@@ -407,6 +425,9 @@ else
   V13="$(node -e '
 const fs=require("fs");
 let o; try{o=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));}catch(e){console.log("parse_err=1");process.exit(0);}
+let cases={requirements:[],coverage_matrix:[]};
+try{ cases=JSON.parse(fs.readFileSync(process.argv[2],"utf8")); }catch(e){}
+const matrix=cases.coverage_matrix||[];
 const arr=(k)=>Array.isArray(o[k])?o[k]:null;
 const E=arr("errors"),W=arr("warnings"),U=arr("undecidable"),V=arr("verdicts"),S=o.summary||{};
 let prob=[];
@@ -431,10 +452,21 @@ else {
   // 5) 每个 (requirement, method) 组合只能有一个 verdict
   const seen=new Set();
   for(const v of V){ const k=key(v); if(seen.has(k)) prob.push("verdict 重复: "+k); seen.add(k); }
+  // 6) 覆盖完整性：每个 (需求条目 × 方法) 组合都必须有结论 ——
+  //    只给"有问题"的组合写结论 = 漏判（D9：此前没有验收保护）
+  const combos=new Set();
+  for(const r of (cases.requirements||[])){
+    if(!r||r.testable===false) continue;
+    for(const m of (matrix||[])){
+      if(!m||m.requirement!==r.id) continue;
+      for(const mid of (m.methods_applied||[])) combos.add(String(r.id)+"|"+String(mid));
+    }
+  }
+  for(const c of combos){ if(!seen.has(c)) prob.push("verdict 漏判: "+c); }
 }
 console.log("problems="+prob.length);
 console.log("detail="+(prob.slice(0,4).join(" ; ")||"none"));
-' "$WORK/aj.json")"
+' "$WORK/aj.json" "$WORK/a.json")"
 P13="$(printf '%s\n' "$V13" | sed -n 's/^problems=//p')"
 D13="$(printf '%s\n' "$V13" | sed -n 's/^detail=//p')"
 if [ "${P13:-1}" -eq 0 ] 2>/dev/null; then
@@ -442,6 +474,46 @@ if [ "${P13:-1}" -eq 0 ] 2>/dev/null; then
 else
   bad "AC-013 --json 输出结构自洽" "问题数=$P13 明细=$D13"
 fi
+fi
+
+# ---------------------------------------------------------------- AC-015
+step "AC-015 维度适用性检查能被测出（F4 的 DIMENSION_MISSING / METHOD_SUSPECT）"
+# 为什么要有这条：F4 的这段检查此前**没有任何 AC 直接测** ——
+# 把整段代码删掉，15 条 AC 仍全绿。实现方写了、验收没测 → 下次重构就会悄悄删掉。
+# 没有验收保护的代码等于不存在。
+if [ ! -f "$CM" ]; then
+  bad "AC-015 维度适用性检查能被测出" "缺 check-methods.mjs"
+else
+  # 场景 1：需求条目命中某维度的强适用信号，但该条目下**一条用例都没有** → DIMENSION_MISSING（WARN）
+  MATRIX_E='[ { "requirement": "R-1", "methods_applied": ["M1.1"], "skipped": [], "dimensions": [] } ]'
+  mkcases "$WORK/e2.json" "[]" "$MATRIX_E"
+  OUT_E2="$(node "$CM" "$WORK/e2.json" --methods "$MTH" 2>&1)"; RC_E2=$?
+  # 场景 2：声明了 M1.2（边界值分析），需求文本里**没有**边界信号，但**必需产出齐备**
+  #         → METHOD_SUSPECT（WARN，适用性存疑）
+  # ⚠️ 两个前提都得满足，缺一个都测不到 SUSPECT：
+  #    ① 需求标题**不含** M1.2 的适用信号词（长度/范围/上限/下限/最多/至少/不超过/不少于/
+  #       位数/数量/阈值/到期/间隔）—— 之前用"密码长度 8-20 位"，那条**恰恰含边界信号**，
+  #       判的是"适用"而不是"存疑"。
+  #    ② **必需产出必须齐备**（3 条 boundary 用例、取值互不相同）—— 实现的判定顺序是
+  #       "产出缺失 → ERROR（更根本）→ 才轮到适用性存疑"（与 D26/D27 同一条原则）。
+  #       产出也缺时，报的是 missing_output，根本走不到 SUSPECT 分支。
+  SUSPECT_CASES="[ \
+$(mkcase TC-001 功能用例 functional "[ $(astep '输入账号' '$.code' 'equals' '"E001"') ]"), \
+$(mkcase TC-002 边界下界 boundary "[ $(astep '长度7' '$.len' 'equals' '7') ]"), \
+$(mkcase TC-003 边界上界 boundary "[ $(astep '长度8' '$.len' 'equals' '8') ]"), \
+$(mkcase TC-004 边界越界 boundary "[ $(astep '长度21' '$.len' 'equals' '21') ]") ]"
+  MATRIX_F='[ { "requirement": "R-1", "methods_applied": ["M1.2"], "skipped": [], "dimensions": ["functional","boundary"] } ]'
+  printf '{\n  "schema_version": 2,\n  "meta": { "source": "qa-005", "generated_at": "2026-11-11T19:00:00+08:00", "case_count": 4 },\n  "requirements": [ { "id": "R-1", "title": "用户登录", "source_ref": "x", "testable": true } ],\n  "open_questions": [],\n  "coverage_matrix": %s,\n  "cases": %s\n}\n' "$MATRIX_F" "$SUSPECT_CASES" > "$WORK/f.json"
+  OUT_F="$(node "$CM" "$WORK/f.json" --methods "$MTH" 2>&1)"; RC_F=$?
+  E1=0; E2=0
+  printf '%s' "$OUT_E2" | grep -q "DIMENSION_MISSING" && E1=1
+  printf '%s' "$OUT_F" | grep -q "METHOD_SUSPECT" && E2=1
+  if [ $E1 -eq 1 ] && [ $E2 -eq 1 ]; then
+    ok "AC-015 维度适用性检查能被测出（DIMENSION_MISSING / METHOD_SUSPECT）"
+  else
+    bad "AC-015 维度适用性检查能被测出" \
+        "DIMENSION_MISSING=$E1(期望1,rc=$RC_E2) METHOD_SUSPECT=$E2(期望1,rc=$RC_F) out1=$OUT_E2 out2=$OUT_F"
+  fi
 fi
 
 # ---------------------------------------------------------------- AC-012
