@@ -33,8 +33,13 @@ const PRIORITIES = ['P0', 'P1', 'P2', 'P3'];
 
 const CASE_ID_PATTERN = /^TC-\d{3}$/;
 const QUESTION_ID_PATTERN = /^Q\d+$/;
-// 方法编号格式，如 M0.1 / M4.5。本阶段只校验格式，不校验方法库中是否真的存在该编号
+// 方法编号格式，如 M1.1 / M1.2。本阶段只校验格式，不校验方法库中是否真的存在该编号
 const METHOD_PATTERN = /^M\d+\.\d+$/;
+// 维度跳过前缀（D11）：coverage_matrix[].skipped[].method 允许写成 "dimension:<维度名>"。
+// 向后兼容：写成方法编号的旧写法行为完全不变（方法编号格式检查的结果一字不改）。
+// 注意：这只放宽 skipped[] 这一处 —— cases[].method[] 与 coverage_matrix[].methods_applied[]
+// 仍然只接受方法编号（它们记的是"用了哪些方法"，不是"跳过了什么"）。
+const DIMENSION_SKIP_PREFIX = 'dimension:';
 
 // 用例生命周期状态枚举
 const CASE_STATUSES = ['active', 'deprecated', 'modified', 'blocked'];
@@ -153,6 +158,19 @@ function isObject(value) {
 
 function isFilledString(value) {
   return typeof value === 'string' && value.trim() !== '';
+}
+
+// skipped[].method 的合法取值有两种形态（D11）：
+//   1) 方法编号（如 "M1.4"）—— 旧写法，行为完全不变
+//   2) 维度跳过标识（如 "dimension:concurrency"）—— 新增，见 references/case-schema.md
+// 维度名不在 8 个覆盖维度枚举内时只报 WARN：写法合法但很可能拼错了，
+// 报 ERROR 会把"名字不认识"和"格式非法"混为一谈，也会误伤合法的新维度扩展。
+function skipTargetKind(value) {
+  if (!isFilledString(value)) return 'empty';
+  const trimmed = value.trim();
+  if (METHOD_PATTERN.test(trimmed)) return 'method';
+  if (trimmed.startsWith(DIMENSION_SKIP_PREFIX)) return 'dimension';
+  return 'invalid';
 }
 
 // 问题清单同时写入 stdout 与 stderr：调用方无论捕获哪个流都能定位到缺陷类型
@@ -582,8 +600,27 @@ function validateCoverageMatrix(matrix, requirementIds) {
           }
           if (!isFilledString(skip.method)) {
             fail(`${sAt}.method 必须是非空字符串`);
-          } else if (!METHOD_PATTERN.test(skip.method)) {
-            fail(`${sAt}.method 方法编号格式非法: "${skip.method}"，必须匹配 ^M\\d+\\.\\d+$`);
+          } else {
+            const kind = skipTargetKind(skip.method);
+            if (kind === 'invalid') {
+              fail(
+                `${sAt}.method 方法编号格式非法: "${skip.method}"，必须匹配 ^M\\d+\\.\\d+$` +
+                  `（如 "M1.4"），或写成维度跳过 "dimension:<维度名>"（如 "dimension:concurrency"）`,
+              );
+            } else if (kind === 'dimension') {
+              const dimName = skip.method.trim().slice(DIMENSION_SKIP_PREFIX.length).trim();
+              if (dimName === '') {
+                fail(
+                  `${sAt}.method 维度跳过写法不完整: "${skip.method}"，` +
+                    '必须写成 "dimension:<维度名>"，<维度名> 不能为空',
+                );
+              } else if (!DIMENSIONS.includes(dimName)) {
+                warn(
+                  `${sAt}.method 维度名 "${dimName}" 不在覆盖维度枚举内（${DIMENSIONS.join(' / ')}），` +
+                    '该跳过声明不会生效，请检查是否拼错',
+                );
+              }
+            }
           }
           if (skip.reason === undefined) {
             fail(`${sAt} 缺少必填字段 reason（跳过方法必须留痕，不能空跳过）`);
@@ -739,7 +776,9 @@ function buildSkeleton() {
     coverage_matrix: [
       {
         requirement: 'R-1',
-        methods_applied: ['M0.1'],
+        // 方法编号取 M1.x 段（测试设计方法，见 references/methods.json）——
+        // 骨架给出的是**能直接用**的编号：照抄 M0.x 会被 check-methods.mjs 判"无法判定"。
+        methods_applied: ['M1.1'],
         skipped: [],
         dimensions: ['functional'],
       },
@@ -751,7 +790,7 @@ function buildSkeleton() {
         requirement_refs: ['R-1'],
         dimension: 'functional',
         priority: 'P0',
-        method: ['M0.1'],
+        method: ['M1.1'],
         status: 'active',
         preconditions: [],
         steps: [{ action: '<可执行的动作>', expected: '<可判定的预期结果>' }],

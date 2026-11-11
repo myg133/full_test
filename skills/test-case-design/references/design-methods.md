@@ -257,6 +257,8 @@
 - 跳过某个**覆盖维度**：`method` 写 `"dimension:<维度名>"`，如 `"dimension:concurrency"`（D7 裁决）。
   - 契约只承认这一种前缀写法。脚本对 `{ "dimension": "..." }` 形式**兼容**（读得懂、照样要求 reason），
     但那是历史写法，别再新增——`validate-cases.mjs` 只认 `method` 字段。
+  - `validate-cases.mjs` 对 `skipped[].method` 同时接受**方法编号**与 `dimension:<维度名>` 两种写法（D11）；
+    但 `cases[].method[]` 与 `coverage_matrix[].methods_applied[]` 仍然**只接受方法编号**。
 - 两种形式都必须带非空 `reason`；缺 `reason` 是 `ERROR`（跳过不留痕是用例变少却无人察觉的根因）。
 - 跳过**不等于**免检：被跳过的方法不再核验产出，被跳过的维度不再报"缺用例"，但跳过声明本身必须站得住。
 
@@ -276,8 +278,9 @@
 | `M0.x` / `M4.x` | **Layer 0 必选测试点**（测什么：正常路径 / 边界值 / 异常输入 / 非法迁移 / 幂等 / 服务端校验 / 数据质量） | 架构稿 `schema-v2-design.md` | 否 |
 
 - `coverage_matrix[].methods_applied[]` 与 `cases[].method[]` 里要写的是**本库的方法编号**（`M1.x`）。
-- 出现 `M0.x` / `M4.x`（例如照着 `references/case-schema.md` 的示例写 `method: ["M0.1","M4.5"]`）时，
+- 出现 `M0.x` / `M4.x`（例如照着架构稿 Layer 0 的编号写 `method: ["M0.1","M4.5"]`）时，
   脚本报**"无法判定"**（该编号不在设计方法库内），**不得默认通过**。
+  `references/case-schema.md` 的示例与 `validate-cases.mjs --init` 骨架已统一用 `M1.x`。
 - 编号格式仍满足 `^M\d+\.\d+$`，所以两段都用 `M` 前缀，靠**段位**区分而不是靠前缀字母。
 - 两段同号不同义（架构稿 `M0.5` = 幂等，本库 `M1.5` = 正交实验），混用会让核验结果错乱 —— 所以必须先看清自己在写哪一段。
 

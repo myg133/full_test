@@ -39,13 +39,16 @@
   "coverage_matrix": [
     {
       "requirement": "R-1",
-      "methods_applied": ["M0.1", "M0.2", "M0.5", "M4.5"],
-      "skipped": [{ "method": "M0.4", "reason": "该条目为纯计算无状态流转" }],
+      "methods_applied": ["M1.1", "M1.2", "M1.3", "M1.5"],
+      "skipped": [
+        { "method": "M1.4", "reason": "该条目为纯计算无状态流转" },
+        { "method": "dimension:concurrency", "reason": "该条目无共享资源，无并发语义" }
+      ],
       "dimensions": ["functional", "boundary", "data"]
     },
     {
       "requirement": "R-2",
-      "methods_applied": ["M0.1"],
+      "methods_applied": ["M1.1"],
       "skipped": [],
       "dimensions": ["functional"]
     }
@@ -57,7 +60,7 @@
       "requirement_refs": ["R-1"],
       "dimension": "functional",
       "priority": "P0",
-      "method": ["M0.1", "M4.5"],
+      "method": ["M1.1", "M1.2"],
       "status": "active",
       "preconditions": [],
       "steps": [{ "action": "操作", "expected": "预期结果" }],
@@ -70,7 +73,7 @@
       "requirement_refs": ["R-2"],
       "dimension": "functional",
       "priority": "P1",
-      "method": ["M0.1"],
+      "method": ["M1.1"],
       "status": "deprecated",
       "revision": {
         "previous_status": "active",
@@ -86,7 +89,7 @@
       "requirement_refs": ["R-1"],
       "dimension": "boundary",
       "priority": "P0",
-      "method": ["M0.2", "M0.5"],
+      "method": ["M1.2", "M1.3"],
       "status": "modified",
       "revision": {
         "previous_status": "active",
@@ -173,20 +176,31 @@
 |------|------|------|------|------|
 | `requirement` | string | 是 | 必须存在于 `requirements[].id`；全局唯一 | 需求条目 ID |
 | `methods_applied` | string[] | 是 | 非空数组，元素匹配 `^M\d+\.\d+$` | 该条目已应用的方法编号 |
-| `skipped` | object[] | 否 | 每项含合法 `method` 与**非空 `reason`** | 跳过的方法及原因 |
+| `skipped` | object[] | 否 | 每项含合法 `method` 与**非空 `reason`**；`method` 为方法编号或 `dimension:<维度名>` | 跳过的方法/维度及原因 |
 | `dimensions` | string[] | 否 | 数组 | 该条目覆盖到的维度 |
 
 ### `skipped[]`
 
+元素结构以 REQ-002A 为准：**只有 `method` + `reason` 两个字段**，不新增 `dimension` 字段。
+`method` 有两种合法写法：
+
 ```json
-{ "method": "M0.4", "reason": "该条目为纯计算无状态流转" }
+{ "method": "M1.4", "reason": "该条目为纯计算无状态流转" }
 ```
 
-- `method`：被跳过的方法编号，格式同 `methods_applied`。
-- `reason`：为什么跳过。必须是具体理由（"不适用"不算），否则等于没留痕。
+```json
+{ "method": "dimension:concurrency", "reason": "该条目无共享资源，无并发语义" }
+```
 
-> 方法编号格式 `^M\d+\.\d+$`（如 `M0.1`、`M4.5`）。当前阶段只校验格式，
+- `method`：被跳过的对象 —— **方法编号**（如 `M1.4`，格式同 `methods_applied`），
+  或**维度跳过标识** `"dimension:<维度名>"`（如 `dimension:concurrency`；维度名取
+  `references/coverage-dimensions.md` 的 8 个枚举值之一）。
+- `reason`：为什么跳过。必须是具体理由（"不适用"不算），否则等于没留痕。**两种写法都必须写 `reason`**。
+
+> 方法编号格式 `^M\d+\.\d+$`（如 `M1.1`、`M1.2`）。当前阶段只校验格式，
 > 不校验该编号是否真实存在于方法库中。
+> `dimension:` 前缀是**合法**的 `skipped[].method` 取值 —— 它只出现在 `skipped[]` 里；
+> `cases[].method[]` 与 `coverage_matrix[].methods_applied[]` 仍然只接受方法编号。
 
 ## `cases[]`（用例）
 
