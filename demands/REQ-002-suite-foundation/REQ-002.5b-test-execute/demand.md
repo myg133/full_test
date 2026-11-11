@@ -76,6 +76,18 @@ REQ-001 的实测也给了反面警示：模型会**自信地走人读路径**�
 - `cases_file` → 相对套件目录的用例集（REQ-002A 的 v2 格式）
 - `executor` 枚举 `api` / `ui` / `load` / `security`
 
+**mock 执行器的启用方式（2026-11-11 补充）**：REQ-002.5a 的验收发现 `executor` 枚举不含 `mock`，而离线可跑（见 F9）要求有它。两种改法：
+
+| 改法 | 做法 | 代价 |
+|---|---|---|
+| A | `executor` 枚举扩为 `api` / `ui` / `load` / `security` / `mock` | 要同步改 REQ-002B 的契约（`references/project-layout.md` §3.3 的枚举表 + `verify-layout.mjs` 的枚举基线） |
+| B | `suite.json` 的 `executor` 保持 REQ-002B 契约的四个值不变，mock 的启用由**环境配置**决定（如 `environments/mock.json` 声明 `"driver": "mock"`） | 要同步改 REQ-002B 的 `environments` 封闭字段集（`_schema.json` 模板 + 文档 + 校验器顶层基线） |
+| C | `suite.json` 完全不改，由命令行覆盖（`run-suite.mjs <suite.json> --executor mock`） | 零契约改动；但 mock 只存在于 CLI 入口，将来别的 skill 想复用就没有配置级的表达 |
+
+**倾向 B**：mock 是"环境"的固有属性（一个环境 = 一套驱动 + 一个地址），不是套件的属性。方案 C 虽然零改动，但把 mock 降级成命令行玩具 —— 而"离线可跑"是要长期存在的核心能力（每个新执行器都要能脱离真实系统被验证）。
+
+> 无论选哪个，**`suite.json` 的既有字段语义都不得改变** —— REQ-002B 已验收，动了就是回归。
+
 **凭证边界（硬规则）**：环境配置里只有 `*_env` 字段名，**执行器负责在运行时从进程环境变量读取真实值**。真实凭证值不得出现在任何配置文件、任何产物文件、任何日志里。执行器读不到环境变量时，该用例判为 `blocked`（不是 `failed`）—— 环境缺失和用例失败是两回事，混为一谈会让报告失真。
 
 ### F3 执行器接口
@@ -257,8 +269,24 @@ node scripts/cycle-state.mjs set-stage <轮次目录> --stage triage --status in
 
 执行器必须有**不依赖外网**的实现，否则这个 skill 无法被验证：
 
-- `mock` 执行器：内置一个本地 HTTP 服务（node 内置 `node:http`），按用例的 `expected` 决定返回什么，用它验证"证据链机制本身"是否成立
+- `mock` 执行器：内置一个本地 HTTP 服务（node 内置 `node:http`），由执行外壳自动启停，`base_url` 自动注入为 `http://127.0.0.1:<随机端口>`。调用方**不需要**配置地址 —— 否则"离线可跑"就变成了"还要自己先起服务"，谈不上拿过来就能跑。
 - `api` 执行器：真实 HTTP 调用（node 内置 `fetch`，零第三方依赖）
+
+**mock 服务的端点集固定**（验收要能确定性构造场景，所以这一组必须固定）：
+
+| 端点 | 响应 |
+|---|---|
+| `GET /ok` | 200 `{"status":"ok"}` |
+| `GET /created` | 201 `{"status":"created"}` |
+| `GET /notfound` | 404 `{"status":"not_found"}` |
+| `GET /error` | 500 `{"status":"error"}` |
+| `GET /echo` | 200 回显 `{method, path, query, body}`（**不回显敏感请求头**） |
+| `GET /token` | 200 `{"token":"secret-value","id":1}`（专用于测脱敏） |
+| `GET /slow?ms=N` | 延迟 N 毫秒后返回 200（用于测超时） |
+
+未列出的路径 → 404 `{"status":"not_found"}`。
+
+mock 的 `base_url` 要记进 `meta.json`（读者才知道这次打的是本地 mock 还是真实环境），但 `environment` 字段仍写环境名。
 
 **为什么必须有 mock**：证据链的验证不依赖被测系统。没有 mock 就没有"不接任何真实系统也能证明这套机制成立"的能力，也就没有回归测试。
 
