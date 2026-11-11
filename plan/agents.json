@@ -7,6 +7,14 @@
       "role": "ba",
       "host": "archlinux",
       "updated_at": "2026-11-09T16:05:05+08:00"
+    },
+    {
+      "id": "dev-002b",
+      "registered_at": "2026-11-11T16:49:01+08:00",
+      "status": "active",
+      "role": "dev",
+      "host": "archlinux",
+      "updated_at": "2026-11-11T16:49:01+08:00"
     }
   ]
 }
