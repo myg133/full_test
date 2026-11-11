@@ -1311,7 +1311,7 @@ else
 fi
 
 # ---------------------------------------------------------------- AC-032
-step "AC-032 `dimension:` 前缀的适用范围：文档必须与实现一致（D12 / D24）"
+step "AC-032 dimension: 前缀的适用范围：文档必须与实现一致（D12 / D24）"
 # 为什么要有这条：独立验收第三轮实测 —— 把 case-schema.md 里 D12 那句契约
 # （「`dimension:` 前缀只出现在 `skipped[]` 里」）改成「它可以出现在任何方法字段里」，
 # **验收脚本仍然 31 PASS / 0 FAIL** —— 这句契约**完全没有验收护栏**（002A 回归脚本也不查）。
@@ -1347,6 +1347,64 @@ else
   else
     bad "AC-032 dimension: 前缀适用范围文档与实现一致" \
         "文档有限定说明=$LIMIT_HIT(期望1) 放宽措辞=$LOOSE(期望空) 行为一致(skipped接受/cases.method拒绝)=$BEH_OK(期望1,rc_skipped=$RC_SKD rc_cases=$RC_SKC)"
+  fi
+fi
+
+# ---------------------------------------------------------------- AC-033
+step "AC-033 coverage-dimensions.md 必须声明「以 dimensions.json 为准」（D16 / D24）"
+# 为什么要有这条：独立验收第三轮实测 —— 把 coverage-dimensions.md 里 D16 那句契约
+# （「**以 references/dimensions.json 为准** —— 它是维度枚举的唯一来源 /
+#   本清单与它的一致性由脚本对照保证（不需要人工同步）」）
+# 改成「**以本清单为准** … 需要人工同步」，
+# **验收脚本在所有版本上都仍然全绿** —— 这句契约**完全没有验收护栏**
+# （AC-021 只比"md 表格的 id 集合"与"json 的 id 集合"，不看这句"以谁为准"的声明）。
+# 后果不是虚报通过，而是**契约与实现分叉**：SKILL.md 明让 agent 读这份清单当维度取值来源，
+# 清单若自称权威、而实现只认 json → agent 照清单写一个库里没有的维度 → 校验器报错，
+# agent 不知道自己该信哪个文件。这与 D16 要消灭的"三份副本"是同一个病根。
+if [ ! -f "$DIMDOC" ] || [ ! -f "$DIM" ]; then
+  bad "AC-033 维度清单声明以 dimensions.json 为准" "缺 coverage-dimensions.md 或 dimensions.json"
+else
+  # ① 必须声明 dimensions.json 是唯一来源
+  SRC_HIT=0
+  if grep -F "dimensions.json" "$DIMDOC" 2>/dev/null | grep -E "为准" | grep -E "唯一来源" >/dev/null; then SRC_HIT=1; fi
+  # ② 不得把本清单抬成真相源 / 不得要求人工同步
+  LOOSE=""
+  for P in "以本清单为准" "以清单为准"; do
+    if grep -F "$P" "$DIMDOC" >/dev/null 2>&1; then LOOSE="$LOOSE [$P]"; fi
+  done
+  # ⚠️ 「需要人工同步」必须用**负向后顾**判 —— 文档里正常写的是「**不需要**人工同步」，
+  #    朴素子串匹配会把那句正确表述也当成放宽措辞（BA 侧第一版就这么写错的，
+  #    第一次跑就被自己的判据误伤 —— 与 AC-017/AC-025 的"同行约束"同一个教训）。
+  if grep -P "(?<!不)需要(人工|手动)同步" "$DIMDOC" >/dev/null 2>&1; then LOOSE="$LOOSE [需要人工同步(非'不需要')]"; fi
+  # ③ 正反对消：清单与库不一致时**以库为准** —— 给副本的库加一个清单里没有的维度，
+  #    对照检查必须报错并点名那个维度（即"以库为准"在行为上的体现）
+  cp -r "$TCD" "$WORK/src-skill"
+  node -e '
+  const fs=require("fs"),f=process.argv[1];
+  const o=JSON.parse(fs.readFileSync(f,"utf8"));
+  o.dimensions.push({id:"audit",name:"审计",always_applies:false,applies_when:["审计"],skip_reason_required:true,skip_reason_hint:"无审计留痕要求",description:"审计留痕。"});
+  fs.writeFileSync(f,JSON.stringify(o,null,2));
+  ' "$WORK/src-skill/references/dimensions.json" 2>/dev/null
+  SRC_OUT=""; SRC_RC=2; SRC_OK=0
+  try_src() {
+    local o r
+    o="$(node "$WORK/src-skill/scripts/check-methods.mjs" "$@" 2>&1)"; r=$?
+    if [ $r -ne 2 ] && [ $r -ne 0 ] && printf '%s' "$o" | grep -q "audit"; then
+      SRC_OUT="$o"; SRC_RC=$r; SRC_OK=1; return 0
+    fi
+    return 1
+  }
+  try_src --methods "$WORK/src-skill/references/methods.json" --dimensions "$WORK/src-skill/references/dimensions.json" --dimensions-doc "$WORK/src-skill/references/coverage-dimensions.md" --check-dimensions-doc || \
+  try_src --methods "$WORK/src-skill/references/methods.json" --dimensions "$WORK/src-skill/references/dimensions.json" --dimensions-doc "$WORK/src-skill/references/coverage-dimensions.md" --check-doc || \
+  try_src --methods "$WORK/src-skill/references/methods.json" --dimensions "$WORK/src-skill/references/dimensions.json" --doc "$WORK/src-skill/references/coverage-dimensions.md" --check-doc || \
+  try_src --methods "$WORK/src-skill/references/methods.json" --dimensions "$WORK/src-skill/references/dimensions.json" --check-doc || \
+  try_src --methods "$WORK/src-skill/references/methods.json" --dimensions "$WORK/src-skill/references/dimensions.json" --dimensions-doc "$WORK/src-skill/references/coverage-dimensions.md" || \
+  try_src --check-dimensions-doc --dimensions-doc "$WORK/src-skill/references/coverage-dimensions.md" --dimensions "$WORK/src-skill/references/dimensions.json"
+  if [ $SRC_HIT -eq 1 ] && [ -z "$LOOSE" ] && [ $SRC_OK -eq 1 ]; then
+    ok "AC-033 维度清单声明以 dimensions.json 为唯一来源、无「以清单为准」措辞、且不一致时以库为准"
+  else
+    bad "AC-033 维度清单声明以 dimensions.json 为准" \
+        "声明唯一来源=$SRC_HIT(期望1) 放宽措辞=$LOOSE(期望空) 不一致时以库为准=$SRC_OK(期望1,rc=$SRC_RC) out=[$(printf '%s' "$SRC_OUT" | head -3 | tr '\n' ' ')]"
   fi
 fi
 
