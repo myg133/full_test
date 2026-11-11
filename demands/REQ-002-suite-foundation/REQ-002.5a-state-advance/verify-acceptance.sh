@@ -40,6 +40,15 @@ jget() { node -e '
 
 sha() { sha256sum "$1" 2>/dev/null | cut -d' ' -f1; }
 
+# 取数组最后一条（jget 不支持负数索引）
+jlast() { node -e '
+  const fs=require("fs");
+  const [file,key]=process.argv.slice(1);
+  let o; try{o=JSON.parse(fs.readFileSync(file,"utf8"));}catch(e){console.log("__PARSE_ERR__");process.exit(0);}
+  const a=Array.isArray(o[key])?o[key]:null;
+  console.log(!a||a.length===0?"__EMPTY__":JSON.stringify(a[a.length-1]));
+' "$@"; }
+
 # 构造一个满足 REQ-002B 契约的完整项目（供 verify-layout 使用）
 make_project() {
   local P="$1"
@@ -128,7 +137,7 @@ node "$CS" init "$D/R1-REQ-001" --cycle-id R1-REQ-001 --round R1 --round-type ne
   --requirement REQ-001 --scope functional --by dev >/dev/null 2>&1
 if node "$CS" advance "$D/R1-REQ-001" --to in_progress --by dev-agent-1 >/dev/null 2>&1; then
   ST="$(jget "$D/R1-REQ-001/cycle.json" status)"
-  LAST="$(jget "$D/R1-REQ-001/cycle.json" history -1 2>/dev/null)"
+  LAST="$(jlast "$D/R1-REQ-001/cycle.json" history)"
   N="$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).history.length)' "$D/R1-REQ-001/cycle.json")"
   if [ "$ST" = "in_progress" ] && echo "$LAST" | grep -q '"from":"planned"' && echo "$LAST" | grep -q '"to":"in_progress"' && [ "$N" = "2" ]; then
     ok "AC-002 合法推进同时更新 status 与 history"
@@ -160,7 +169,7 @@ node "$CS" advance "$D/R1-REQ-001" --to in_progress --by dev >/dev/null 2>&1
 node "$CS" advance "$D/R1-REQ-001" --to blocked --by dev >/dev/null 2>&1
 if node "$CS" advance "$D/R1-REQ-001" --to in_progress --by dev-agent-1 >/dev/null 2>&1; then
   ST="$(jget "$D/R1-REQ-001/cycle.json" status)"
-  LAST="$(jget "$D/R1-REQ-001/cycle.json" history -1 2>/dev/null)"
+  LAST="$(jlast "$D/R1-REQ-001/cycle.json" history)"
   if [ "$ST" = "in_progress" ] && echo "$LAST" | grep -q '"to":"in_progress"'; then
     ok "AC-004 blocked → in_progress 允许解除阻塞"
   else
@@ -347,8 +356,12 @@ EXT="$(grep -c -E "child_process|execSync|spawnSync|/tmp/" "$CS" 2>/dev/null)"
 BASHY="$(grep -c -E "python3|grep |sed " "$CS" 2>/dev/null)"
 JSONOK="$(node -e '
 const {execFileSync}=require("child_process");
+const cs=process.argv[1], dir=process.argv[2];
 try{
-  const o=execFileSync("node",[process.argv[1],"show",process.argv[2],"--json"],{encoding:"utf8",stdio:["ignore","pipe","ignore"]});
+  execFileSync("node",[cs,"init",dir,"--cycle-id","R1-REQ-001","--round","R1",
+    "--round-type","new-requirement","--requirement","REQ-001","--scope","functional","--by","dev"],
+    {encoding:"utf8",stdio:["ignore","pipe","ignore"]});
+  const o=execFileSync("node",[cs,"show",dir,"--json"],{encoding:"utf8",stdio:["ignore","pipe","ignore"]});
   JSON.parse(o);console.log("ok");
 }catch(e){console.log("fail");}
 ' "$CS" "$WORK/ac016c/R1-REQ-001" 2>/dev/null)"
@@ -391,12 +404,13 @@ for F in at from to by; do
     bad "AC-018 history 每条记录四个必填字段齐备" "缺 $F 时 rc=$RC（应为 1 且报错含字段名）out=$OUT"
   fi
 done
-# 不得回归: 空 history 与非法 from 仍须被拦
-T="$D/regress"; make_project "$T"
-node -e 'const fs=require("fs"),f=process.argv[1];const o=JSON.parse(fs.readFileSync(f,"utf8"));o.history=[];fs.writeFileSync(f,JSON.stringify(o,null,2))' "$T/test-assets/cycles/R1-REQ-001/cycle.json"
-R1=$?; node "$VL" "$T" >/dev/null 2>&1 || R1=0
-node -e 'const fs=require("fs"),f=process.argv[1];const o=JSON.parse(fs.readFileSync(f,"utf8"));o.history[0].from="bogus";fs.writeFileSync(f,JSON.stringify(o,null,2))' "$T/test-assets/cycles/R1-REQ-001/cycle.json"
-node "$VL" "$T" >/dev/null 2>&1; R2=$?
+# 不得回归: 空 history 与非法 from 仍须被拦（两例各用独立副本）
+T1="$D/regress-empty"; make_project "$T1"
+node -e 'const fs=require("fs"),f=process.argv[1];const o=JSON.parse(fs.readFileSync(f,"utf8"));o.history=[];fs.writeFileSync(f,JSON.stringify(o,null,2))' "$T1/test-assets/cycles/R1-REQ-001/cycle.json"
+node "$VL" "$T1" >/dev/null 2>&1; R1=$?
+T2="$D/regress-enum"; make_project "$T2"
+node -e 'const fs=require("fs"),f=process.argv[1];const o=JSON.parse(fs.readFileSync(f,"utf8"));o.history[0].from="bogus";fs.writeFileSync(f,JSON.stringify(o,null,2))' "$T2/test-assets/cycles/R1-REQ-001/cycle.json"
+node "$VL" "$T2" >/dev/null 2>&1; R2=$?
 if [ $FIELD_OK -eq 1 ] && [ $R1 -ne 0 ] && [ $R2 -ne 0 ]; then
   ok "AC-018 history 每条记录四个必填字段齐备"
 fi
