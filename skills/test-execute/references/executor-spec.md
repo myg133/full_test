@@ -138,12 +138,20 @@ F8 的"脱敏在写入前"；两者以本接口调和。
 - **用例级载体**：`case.request` 或 `case.data.request` —— 描述"这个用例要打哪个接口"
 - **step 级请求**：`step.request`，或 `step.action` 能解析成 `METHOD /path` —— 描述"这一步打哪个接口"
 
-两者**同时**存在时，先看用例级载体本身写全了没有：
+两者**同时**存在时，先看**每一个载体**本身写全了没有：
 
 | 情形 | 处理 |
 |---|---|
-| 用例级载体**没有写明 path** | 判 `blocked`（`error.type = incomplete_request_carrier`），**一个请求都不发** |
-| 用例级载体写全了（`method` 可省略，默认 `GET`） | 继续往下比对 |
+| **任何一类载体**（用例级或 step 级）**没有写明 path** | 判 `blocked`（`error.type = incomplete_request_carrier`），**一个请求都不发** |
+| 所有载体都写全了（`method` 可省略，默认 `GET`） | 继续往下比对 |
+
+**载体完整性对两类载体一视同仁**（需求 D25）：缺 path 是「补齐」，不是「二选一」——
+它自己没写全，就没法参与比对；硬拿默认值（`GET /`）去比，报出来的"冲突"是**误诊**
+（调用方会去找一个根本不存在的冲突，而真正的问题是"你没写路径"）。
+同一条规则只对一半载体生效等于没有规则：按文档写 step 级载体时会撞上一个文档里根本不存在的"冲突"。
+
+> 载体没写全时，它**不参与冲突比对**；被丢在一边的请求也不会被静默执行 ——
+> 整个用例显式判 `blocked`，一个请求都不发。
 
 写全了再比两边的 method + path：
 
@@ -160,7 +168,7 @@ method 缺省 `GET`（HTTP 的合理默认，不因此拒）；**path 不能缺*
 
 | 错误类型 | 修法 | 典型现场 |
 |---|---|---|
-| `incomplete_request_carrier` | **补齐**：把 path 写上 | `"request": {"query": {"a": "1"}}` —— 只写了 query，忘了 path |
+| `incomplete_request_carrier` | **补齐**：把 path 写上 | 用例级 `"request": {"query": {"a": "1"}}`（只写了 query，忘了 path）；或 step 级 `"request": {"method": "GET"}` |
 | `conflicting_request_carrier` | **二选一**：去掉用例级载体，或去掉 step 级请求 | 用例级 `GET /ok`，step 却指向 `GET /notfound` |
 
 混同会让调用方照着"冲突"去改（去掉载体 / 去掉 step），而真正要补的是 path —— 那是个不存在的冲突。
@@ -286,11 +294,16 @@ method 缺省 `GET`（HTTP 的合理默认，不因此拒）；**path 不能缺*
 | `no_mechanical_assertion` | `blocked` | 该用例没有可机械判定的断言 |
 | `assertion_without_response` | `blocked` | 断言所在 step 不可执行，没有可判的响应（见 §2.2） |
 | `conflicting_request_carrier` | `blocked` | 用例级载体与 step 级请求冲突，一次还是多次需需求方裁定（见 §2.3） |
-| `incomplete_request_carrier` | `blocked` | 用例级载体没有写明 path（见 §2.3） |
+| `incomplete_request_carrier` | `blocked` | 载体（用例级或 step 级）没有写明 path（见 §2.3） |
 | `timeout` | `failed` | 请求超时 |
 | `network_error` | `failed` | 网络错误 |
 | `assertion_failed` | `failed` | 有断言不成立 |
 | `executor_error` | `failed` | 执行器异常 |
+
+**多个问题并存时**：`error.type` 取**更根本**的那个（例如"没有可机械判定的断言"比"载体缺 path"更根本 ——
+补上 path 也不会让一条没有断言的用例变得可判定），
+但**信息不丢**：`message` 会把其它并存的问题一并点出（例如"另外：用例级载体没有写明 path，也需要一并补上"）。
+只报第一个问题会让调用方改完再撞第二个，白白多一轮返工。
 
 ---
 

@@ -101,6 +101,55 @@ export function bindAssertions(plan, execution) {
 }
 
 /**
+ * 把"没写全 path 的载体"列成一句话。
+ *
+ * 需求 D25：这条规则对用例级载体与 step 级载体**一视同仁** ——
+ * 缺 path 是「补齐」，与"载体冲突"的「二选一」是两种不同的修法。
+ *
+ * @param {object} incomplete 计划层的 incomplete 结构（{carriers: [...]}）
+ * @returns {string} 空串表示没有缺 path 的载体
+ */
+export function incompleteCarriersText(incomplete) {
+  const items = isObject(incomplete) && Array.isArray(incomplete.carriers) ? incomplete.carriers : [];
+  if (items.length === 0) return '';
+  return items
+    .map((item) => {
+      const isCase = isObject(item) && item.carrier === 'case';
+      const where = isCase
+        ? '用例级请求载体'
+        : `steps[${isObject(item) ? item.step_index : '?'}] 的请求载体`;
+      const method =
+        isObject(item) && typeof item.method === 'string' && item.method.trim() !== ''
+          ? item.method.trim()
+          : 'GET';
+      return `${where}没有写明 path（method 可省略，默认 GET；当前读到 method=${method}）`;
+    })
+    .join('；');
+}
+
+/**
+ * 把"载体冲突"列成一句话。
+ *
+ * @param {object} conflict 计划层的 conflict 结构
+ * @returns {string} 空串表示没有冲突
+ */
+export function conflictText(conflict) {
+  if (!isObject(conflict)) return '';
+  const caseLabel =
+    isObject(conflict.case_request) && typeof conflict.case_request.label === 'string'
+      ? conflict.case_request.label
+      : '（未知）';
+  const where = (Array.isArray(conflict.steps) ? conflict.steps : [])
+    .map((item) => {
+      const label =
+        isObject(item) && typeof item.label === 'string' && item.label !== '' ? item.label : '（未知）';
+      return `steps[${isObject(item) ? item.step_index : '?'}]（${label}）`;
+    })
+    .join('、');
+  return `用例级请求载体指向 ${caseLabel}，${where} 指向不同的端点`;
+}
+
+/**
  * 统一判定入口：给定用例与执行结果，得出 status。
  *
  * @param {object} spec 判定输入
@@ -123,6 +172,10 @@ export function decide(spec) {
     return { ...empty, status: STATUS.SKIPPED, reason: '用例自身被标记为 blocked（status: blocked），不执行' };
   }
   if (assertions.length === 0) {
+    // 需求 D26：判定类型取更根本的那个（没有断言 → 补上 path 也不会变得可判定），
+    // 但**信息不能丢**：载体问题一并点出，免得调用方改完再撞第二个，白白多一轮返工。
+    const carriers = incompleteCarriersText(plan.incomplete);
+    const extra = carriers !== '' ? `。另外：${carriers}，也需要一并补上` : '';
     return {
       ...empty,
       status: STATUS.BLOCKED,
@@ -130,7 +183,7 @@ export function decide(spec) {
         type: BLOCK_TYPES.NO_ASSERTION,
         message:
           '缺少可机械判定的断言：该用例所有 steps[].expected 都是普通字符串，' +
-          '无法机械判定，因此判 blocked（不得判 passed）',
+          `无法机械判定，因此判 blocked（不得判 passed）${extra}`,
       },
       reason: '缺少可机械判定的断言',
     };
@@ -154,26 +207,27 @@ export function decide(spec) {
     };
   }
 
-  // 载体不完整（需求 D23）：用例级载体没有写明 path。
+  // 载体不完整（需求 D23/D25）：**任何一类载体**（用例级 / step 级）没写明 path。
   // 缺 path 是「补齐」，冲突是「二选一」—— 两种修法不同，错误类型必须分开，
   // 否则调用方会照着"冲突"去改（去掉载体 / 去掉 step），而真正要补的是 path。
   const incomplete = isObject(plan.incomplete) ? plan.incomplete : null;
   if (incomplete) {
-    const method =
-      typeof incomplete.method === 'string' && incomplete.method.trim() !== ''
-        ? incomplete.method.trim()
-        : 'GET';
+    const carriers = incompleteCarriersText(incomplete);
+    const carriersText = carriers !== '' ? carriers : '请求载体没有写明 path';
+    // 多问题并存时（需求 D26）：类型取更根本的这个，但其它问题一并点出。
+    const conflictNote = conflictText(plan.conflict);
+    const extra =
+      conflictNote !== '' ? `。另外：${conflictNote}，也需要一并处理（去掉其中一边）` : '';
     return {
       ...empty,
       status: STATUS.BLOCKED,
       error: {
         type: BLOCK_TYPES.INCOMPLETE_REQUEST_CARRIER,
         message:
-          '用例级请求载体没有写明 path —— 请补上 path（method 可省略，默认 GET；' +
-          `当前读到 method=${method}）。` +
-          '若本意是由 step 提供路径，请去掉用例级载体。判 blocked（不得判 passed）',
+          `${carriersText} —— 请补上 path；若本意是由 step 提供路径，请去掉该载体。` +
+          `判 blocked（不得判 passed）${extra}`,
       },
-      reason: '用例级请求载体不完整（缺 path）',
+      reason: '请求载体不完整（缺 path）',
     };
   }
 
@@ -182,25 +236,14 @@ export function decide(spec) {
   // 所以既不静默丢掉哪一边，也不判 passed，直接判 blocked。
   const conflict = isObject(plan.conflict) ? plan.conflict : null;
   if (conflict) {
-    const caseLabel =
-      isObject(conflict.case_request) && typeof conflict.case_request.label === 'string'
-        ? conflict.case_request.label
-        : '（未知）';
-    const where = (Array.isArray(conflict.steps) ? conflict.steps : [])
-      .map((item) => {
-        const label =
-          isObject(item) && typeof item.label === 'string' && item.label !== '' ? item.label : '（未知）';
-        return `steps[${isObject(item) ? item.step_index : '?'}]（${label}）`;
-      })
-      .join('、');
     return {
       ...empty,
       status: STATUS.BLOCKED,
       error: {
         type: BLOCK_TYPES.CONFLICTING_REQUEST_CARRIER,
         message:
-          `用例级请求载体与 step 级请求冲突：用例级载体指向 ${caseLabel}，` +
-          `${where} 指向不同的端点。是同一次调用还是多次调用，需要需求方裁定 —— ` +
+          `载体冲突：${conflictText(conflict)}。` +
+          '是同一次调用还是多次调用，需要需求方裁定 —— ' +
           '实现不替需求方猜，所以该用例判 blocked（不得判 passed），' +
           '也不会静默丢掉其中一边的请求',
       },

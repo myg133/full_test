@@ -345,10 +345,11 @@ export function describeRequest(request) {
 /**
  * 解析一个用例的执行计划：跑哪些请求、每条断言绑到哪次响应。
  *
- * 规则（需求 F3 的多步语义 + D20 的载体冲突处理 + D23 的载体不完整处理）：
- *   1. 用例级载体**缺 path**时 → 显式拒（incomplete 非空）：缺 path 是「补齐」，
- *      与"载体冲突"的「二选一」是两种不同的修法，不能混成一个错误类型。
- *   2. 用例级载体与 step 级请求**不一致**时
+ * 规则（需求 F3 的多步语义 + D20 的载体冲突处理 + D23/D25 的载体不完整处理）：
+ *   1. **任何一类载体**（用例级 / step 级）缺 path 时 → 显式拒（incomplete 非空）：
+ *      缺 path 是「补齐」，与"载体冲突"的「二选一」是两种不同的修法，
+ *      不能混成一个错误类型，也不能只对一半载体生效。
+ *   2. 载体都写全、但用例级载体与 step 级请求**不一致**时
  *      → 显式拒（conflict 非空）：到底是"一次调用"还是"多次调用"是需求方的意图，
  *      实现不替需求方裁定，也不静默丢掉其中一边的请求。
  *   3. 用例级载体存在且与所有 step 级请求一致（method+path 相同）→ 整个用例只跑这一次请求，
@@ -362,7 +363,7 @@ export function describeRequest(request) {
  *            assertions: {assertion: object, stepIndex: number, action: string}[],
  *            unbound: {assertion: object, stepIndex: number, action: string}[],
  *            conflict: object|null,
- *            incomplete: object|null}}
+ *            incomplete: {carriers: object[]}|null}}
  */
 export function resolveExecutionPlan(caseObj) {
   const assertions = collectAssertions(caseObj);
@@ -386,22 +387,37 @@ export function resolveExecutionPlan(caseObj) {
     });
   });
 
+  // 载体完整性（需求 D25）：缺 path 这条规则对两类载体**一视同仁**。
+  // 缺 path 是「补齐」，不是「二选一」—— 它自己没写全，就没法参与比对；
+  // 硬拿默认值（GET /）去比，报出来的"冲突"是误诊。
+  const incompleteCarriers = [];
+  const completeStepRequests = [];
+  for (const item of stepRequests) {
+    if (hasRequestPath(item.request)) {
+      completeStepRequests.push(item);
+    } else {
+      incompleteCarriers.push({
+        carrier: 'step',
+        step_index: item.step_index,
+        missing: 'path',
+        method: requestSignature(item.request).method,
+      });
+    }
+  }
+
   const requests = [];
   let conflict = null;
-  let incomplete = null;
 
   if (caseLevel) {
     if (!hasRequestPath(caseLevel)) {
-      // 载体不完整（缺 path）：不参与冲突比对 —— 两边没法比，
-      // 硬比出来的"冲突"是误诊（会让人去找一个根本不存在的冲突）。
-      incomplete = {
+      incompleteCarriers.push({
         carrier: 'case',
         missing: 'path',
         method: requestSignature(caseLevel).method,
-      };
+      });
     } else {
       const caseSignature = requestSignature(caseLevel);
-      const mismatched = stepRequests.filter((item) => {
+      const mismatched = completeStepRequests.filter((item) => {
         const signature = requestSignature(item.request);
         return signature.method !== caseSignature.method || signature.path !== caseSignature.path;
       });
@@ -426,8 +442,13 @@ export function resolveExecutionPlan(caseObj) {
       }
     }
   } else {
-    requests.push(...stepRequests);
+    requests.push(...completeStepRequests);
   }
+
+  // 有载体没写全 → 显式拒（判 blocked / incomplete_request_carrier）：
+  // 一个请求都不发，也不把没写全的载体悄悄丢一边。
+  const incomplete = incompleteCarriers.length > 0 ? { carriers: incompleteCarriers } : null;
+  if (incomplete) requests.length = 0;
 
   let unbound = [];
   if (requests.length === 0) {

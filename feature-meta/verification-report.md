@@ -1,9 +1,22 @@
 # REQ-002.5b 验证报告
 
-- 需求：REQ-002.5b 执行 skill 与证据链（第四轮修复：载体缺 path 判 `incomplete_request_carrier`）
-- 分支：`feature/REQ-002.5B`｜基线 `880f32c`
-- 验收：BA 的 `verify-acceptance.sh` → **22 PASS / 0 FAIL**；REQ-002A 回归 → **19 PASS / 0 FAIL**
-- 自验：`/tmp/qa-0025b/qa-0025b.mjs` → **28 PASS / 0 FAIL**；`qa-round3.mjs` → **8 PASS / 0 FAIL**；`qa-round4.mjs`（D23 探针）→ **6 PASS / 0 FAIL**
+- 需求：REQ-002.5b 执行 skill 与证据链（第五轮修复：缺 path 规则对两类载体一视同仁 + 多问题并存时消息都点出）
+- 分支：`feature/REQ-002.5B`｜基线 `ba07dc2`
+- 验收：BA 的 `verify-acceptance.sh` → **23 PASS / 0 FAIL**；REQ-002A 回归 → **19 PASS / 0 FAIL**
+- BA 的 13 场景探针（改动前后逐行对比）→ **S1~S13 行为完全一致**（status / error.type / 证据份数 / 复现步骤数）
+- 自验：`qa-0025b.mjs` → **28 PASS**；`qa-round3.mjs` → **8 PASS**；`qa-round4.mjs` → **6 PASS**；`qa-round5.mjs`（本轮）→ **9 PASS / 0 FAIL**
+
+## 第五轮改了什么（D25 / D26）
+
+| 任务 | 落点 |
+|---|---|
+| D25 缺 path 规则对两类载体一视同仁 | `scripts/lib/suite-loader.mjs`（`resolveExecutionPlan()` 里对 `stepRequests` 也做 `hasRequestPath()` 检查；`incomplete` 结构改为 `carriers[]`，可同时列出多个缺 path 的载体；缺 path 的载体不参与冲突比对，也不被静默执行）、`scripts/lib/verdict.mjs`（新增 `incompleteCarriersText()`，消息点名是"用例级载体"还是"steps[i] 的请求载体"）、`scripts/run-suite.mjs`（沿用 `plan.incomplete` 分支：一个请求都不发） |
+| D26 多问题并存时消息都点出 | `scripts/lib/verdict.mjs`（`no_mechanical_assertion` 分支在 message 后补"另外：…缺 path，也需要一并补上"；`incomplete` 分支在有并存冲突时补一句；判定顺序未改） |
+| 文档同步 | `references/executor-spec.md`（§2.3 完整性检查改为两类载体都适用 + 一视同仁的说明、§6 补"多个问题并存时 type 取更根本的那个，message 会把其它问题一并点出"）、`SKILL.md`（硬约束第 5 条、可配置项段落、Failure handling 均补 step 级载体同样适用）、`executors/index.json`（`request_carrier` 同步） |
+
+**与第四轮的关系**：第四轮 D23 只把"缺 path"这条规则落在**用例级载体**上，step 级载体缺 path 时
+仍会带着默认的 `GET /` 参与冲突比对 —— 报出"steps[0]（GET /）与 GET /ok 冲突"，
+而它根本没有冲突，是它自己没写全。按 D25，这条规则对两类载体一视同仁。
 
 ## 第四轮改了什么（D23）
 
@@ -45,6 +58,9 @@ D23 把两者拆开：缺 path = **补齐**（`incomplete_request_carrier`），
 | **用例级载体 + 不同端点的 step** | `blocked`（`conflicting_request_carrier`），证据 0 份 —— 不判 passed，不静默丢请求 |
 | **用例级载体 + 同端点的 step** | 视为同一次请求 → `passed`，证据 1 份 == 复现步骤 1 步 |
 | **用例级载体缺 path**（只有 query） | `blocked`（`incomplete_request_carrier`），证据 0 份 —— 消息指向"补 path"，不说成冲突 |
+| **step 级载体缺 path**（`request:{method:GET}`） | `blocked`（`incomplete_request_carrier`），证据 0 份 —— 消息点名 `steps[0] 的请求载体` |
+| **两类载体都缺 path** | `blocked`（`incomplete_request_carrier`），消息把两处都点出 |
+| **无断言 + 载体缺 path** | `blocked`，type 仍 `no_mechanical_assertion`，message 补"另外：…缺 path，也需要一并补上" |
 | **用例级载体缺 method**（有 path） | 合法（默认 GET）→ `passed`，不因此拒 |
 | **复现信息与证据条数一致** | 多请求用例：证据 2 份 == 复现步骤 2 步；凭证缺失时回退到用例声明的步骤 |
 | 单请求 + 叙述性 step 带断言 | `passed`（规则 4 保留：叙述性 step 的断言绑到那一次响应） |
@@ -61,9 +77,9 @@ D23 把两者拆开：缺 path = **补齐**（`incomplete_request_carrier`），
 2. **`reproduction.steps` 谎称执行过没跑的步骤**（P0，D21）：执行器没给复现步骤时回退到用例声明的步骤，
    而"用例想跑什么"不等于"实际跑了什么"。现在按执行器回报的步骤推导；一个请求都没执行时才回退到声明。
 3. **用例级载体那一次请求在复现信息里丢失**（D21）：`action` 为空被过滤掉。现在用 `METHOD /path` 兜底描述。
-4. **缺 path 的载体被误诊为"载体冲突"**（D23）：把缺 path 的载体当成 `GET /` 去比对，
+4. **缺 path 的载体被误诊为"载体冲突"**（D23/D25）：把缺 path 的载体当成 `GET /` 去比对，
    报出"指向 GET / 与 GET /ok 冲突" —— 调用方会去找一个不存在的冲突。现在单独判
-   `blocked`（`incomplete_request_carrier`），消息指向"补 path"。
+   `blocked`（`incomplete_request_carrier`），消息指向"补 path"；**用例级与 step 级载体一视同仁**（D25）。
 
 ## 已知限制与待上游处理
 
