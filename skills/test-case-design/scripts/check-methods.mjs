@@ -177,6 +177,18 @@ function addVerdict(requirement, method, status, message) {
   findings.verdicts.push({ requirement, method, status, message });
 }
 
+/**
+ * 该 (requirement, method) 组合是否已经有结论了。
+ *
+ * 查重口径与验收脚本一致：两边都按 String(...) 拼键后比较。
+ */
+function hasVerdict(requirement, method) {
+  const key = `${String(requirement)}|${String(method)}`;
+  return findings.verdicts.some(
+    (item) => `${String(item.requirement)}|${String(item.method)}` === key,
+  );
+}
+
 // ------------------------------------------------------------------------ 参数解析
 
 function parseArgs(argv) {
@@ -904,6 +916,18 @@ function checkCases(doc, methodsLibrary, dimensionsLibrary) {
           methodId,
           `用例 ${testCase.id || '未标注'} 声明了方法 ${methodId}，但该编号未在方法库中登记${numberingHint(methodId)}，无法核验其必需产出`,
         );
+        // F5.1 硬约束 2 + 3：每条 undecidable 都必须有一条对应的 verdict，
+        // 且 status 只能是 "undecidable"（不得是 satisfied）。
+        // ⚠️ 查重：矩阵级路径可能已经为同一个 (requirement, method) 写过 verdict
+        //    （矩阵和用例都声明了同一个未登记编号）—— 补写前先查，避免重复 verdict。
+        if (!hasVerdict(requirementId, methodId)) {
+          addVerdict(
+            requirementId,
+            methodId,
+            'undecidable',
+            `用例 ${testCase.id || '未标注'} 声明的方法编号 ${methodId} 未在方法库中登记${numberingHint(methodId)}，无法核验其必需产出`,
+          );
+        }
       }
     }
   }
