@@ -203,11 +203,12 @@ D="$WORK/ac006"; mkdir -p "$D"
 node "$CS" init "$D/R1-REQ-001" --cycle-id R1-REQ-001 --round R1 --round-type new-requirement \
   --requirement REQ-001 --scope functional --by dev >/dev/null 2>&1
 BEFORE="$(sha "$D/R1-REQ-001/cycle.json")"
-node "$CS" skip-scope "$D/R1-REQ-001" --scope load >/dev/null 2>&1; RC1=$?
-node "$CS" skip-scope "$D/R1-REQ-001" --scope load --reason "" >/dev/null 2>&1; RC2=$?
+# 两例都带 --by：缺 --by 会以 exit 2（调用方式错误）退出，那测的是参数必填而非理由非空
+node "$CS" skip-scope "$D/R1-REQ-001" --scope load --by dev-agent-1 >/dev/null 2>&1; RC1=$?
+node "$CS" skip-scope "$D/R1-REQ-001" --scope load --reason "" --by dev-agent-1 >/dev/null 2>&1; RC2=$?
 AFTER="$(sha "$D/R1-REQ-001/cycle.json")"
 SKIPPED="$(jget "$D/R1-REQ-001/cycle.json" scopes_skipped)"
-if [ $RC1 -eq 1 ] && [ $RC2 -eq 1 ] && [ "$BEFORE" = "$AFTER" ] && [ "$SKIPPED" = "[]" ] || [ -z "$SKIPPED" ]; then
+if [ $RC1 -ne 0 ] && [ $RC2 -ne 0 ] && [ "$BEFORE" = "$AFTER" ] && { [ "$SKIPPED" = "[]" ] || [ -z "$SKIPPED" ]; }; then
   ok "AC-006 skip-scope 强制非空理由"
 else
   bad "AC-006 skip-scope 强制非空理由" "rc1=$RC1 rc2=$RC2 sha相同=$([ "$BEFORE" = "$AFTER" ] && echo yes || echo no) skipped=$SKIPPED"
@@ -217,7 +218,7 @@ fi
 D="$WORK/ac007"; mkdir -p "$D"
 node "$CS" init "$D/R1-REQ-001" --cycle-id R1-REQ-001 --round R1 --round-type new-requirement \
   --requirement REQ-001 --scope functional --by dev >/dev/null 2>&1
-if node "$CS" skip-scope "$D/R1-REQ-001" --scope load --reason "需求未给性能指标，无阈值可依" >/dev/null 2>&1; then
+if node "$CS" skip-scope "$D/R1-REQ-001" --scope load --reason "需求未给性能指标，无阈值可依" --by dev-agent-1 >/dev/null 2>&1; then
   SK="$(jget "$D/R1-REQ-001/cycle.json" scopes_skipped 0)"
   if echo "$SK" | grep -q '"scope":"load"' && echo "$SK" | grep -q '需求未给性能指标'; then
     ok "AC-007 skip-scope 正常写入"

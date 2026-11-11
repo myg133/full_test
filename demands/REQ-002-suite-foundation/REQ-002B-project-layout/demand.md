@@ -220,6 +220,11 @@ REQ-002A 解决"用例集本身长什么样"，本 REQ 解决"用例集放在哪
 
 **`scopes_skipped[].reason` 为空 → 校验失败**（与 REQ-002A 的 `coverage_matrix[].skipped[].reason` 同一原则："跳过"必须可被 review 发现）。
 
+> **后续修订（REQ-002.5a，2026-11-11）**：本 REQ 交付时 `scopes_skipped[]` 元素只有 `scope` 与 `reason` 两个字段。自 REQ-002.5a 起，每条跳过记录**增补 `at`（ISO8601 时间戳）与 `by`（执行者）两个审计字段**，四字段均为必填，校验器会拦缺失项。
+>
+> 也就是说，**照上面这段示例原样造出的 `cycle.json` 现在会被校验器判 FAIL**。历史示例保持原貌以备追溯；**活契约以 `skills/test-case-design/references/project-layout.md` §4.2 为准**。
+
+
 `cycles/index.json` 提供全局视图：
 
 ```json

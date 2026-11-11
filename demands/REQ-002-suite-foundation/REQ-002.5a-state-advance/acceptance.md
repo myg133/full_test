@@ -35,8 +35,8 @@
 
 ### AC-006: `skip-scope` 强制非空理由
 - **前置条件**: 合法轮次
-- **测试步骤**: 先 `skip-scope --scope load`（不带 `--reason`），再 `--reason ""`
-- **预期结果**: 两次均退出码 1，报错指出理由不能为空；`scopes_skipped` 未被写入；文件未修改
+- **测试步骤**: 先 `skip-scope --scope load --by dev-agent-1`（不带 `--reason`），再 `--reason "" --by dev-agent-1`
+- **预期结果**: 两次均退出码非 0（退出码 1 = 理由缺失/为空；退出码 2 = 调用方式错误）；报错指出理由不能为空；`scopes_skipped` 未被写入；文件未修改
 - **类型**: 功能
 
 ### AC-007: `skip-scope` 正常写入
