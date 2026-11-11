@@ -1169,6 +1169,26 @@ elif [ -n "$FM_MISSING" ]; then
   bad "AC-028 feature-meta 归属正确、demand_dir 存在" \
       "feature-meta/ 缺少文件：$FM_MISSING —— 四件套（status.md / traceability.md / verification-report.md / manifest.json）缺一即追溯链断裂"
 else
+  # 每份追溯文件必须**自证是本 REQ 的**（第五轮 A47 掏空 / A50 整份换成别的 REQ）
+  # 此前只查"有没有出现**别的** REQ 编号"（黑名单）→ 空白文件与"整份写成 REQ-002A"都能通过
+  FM_SELF=""
+  for F in status.md traceability.md verification-report.md; do
+    if [ ! -f "$FMETA/$F" ]; then continue; fi
+    if ! grep -q "REQ-005" "$FMETA/$F"; then FM_SELF="$FM_SELF $F(不含REQ-005)"; fi
+  done
+  # manifest.json 的 req 字段必须指向本 REQ（第五轮 A48：改成 REQ-004 此前无人查）
+  MREQ=""; MBR=""
+  if [ -f "$FMETA/manifest.json" ]; then
+    MREQ="$(node -e 'const fs=require("fs");let o;try{o=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));}catch(e){process.exit(0);}console.log(o.req||"");' "$FMETA/manifest.json" 2>/dev/null)"
+    MBR="$(node -e 'const fs=require("fs");let o;try{o=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));}catch(e){process.exit(0);}console.log(o.branch||"");' "$FMETA/manifest.json" 2>/dev/null)"
+  fi
+  if [ "$MREQ" != "REQ-005" ]; then FM_SELF="$FM_SELF manifest.json(req=${MREQ:-空})"; fi
+  # 分支名以 manifest.json 的 branch 为准（第五轮 F-5 附带发现：分支名此前从没被查过，
+  # 而追溯矩阵的 AC-028 行却声称查了 —— 契约与护栏分叉；现在要么查，要么别声称）
+  case "$MBR" in
+    *REQ-005*) : ;;
+    *) FM_SELF="$FM_SELF manifest.json(branch=${MBR:-空})" ;;
+  esac
   FM_OTHER=""
   for F in status.md traceability.md verification-report.md; do
     if [ -f "$FMETA/$F" ]; then
@@ -1205,10 +1225,10 @@ else
       if [ $FOUND -eq 0 ]; then DMISS="$DDIR"; fi
     fi
   fi
-  if [ -z "$FM_OTHER" ] && [ -z "$DMISS" ]; then
+  if [ -z "$FM_OTHER" ] && [ -z "$DMISS" ] && [ -z "$FM_SELF" ]; then
     ok "AC-028 feature-meta 归属正确、demand_dir 存在"
   else
-    bad "AC-028 feature-meta 归属正确、demand_dir 存在" "其它REQ编号:$FM_OTHER demand_dir不存在:$DMISS"
+    bad "AC-028 feature-meta 归属正确、demand_dir 存在" "其它REQ编号:$FM_OTHER demand_dir不存在:$DMISS 归属不对:$FM_SELF"
   fi
 fi
 
@@ -1446,6 +1466,7 @@ else
   M34="$(node -e '
   const fs=require("fs");
   const fmeta=process.argv[1], acc=process.argv[2], dec=process.argv[3];
+  const mth=process.argv[4], dim=process.argv[5];
   let prob=[];
   let accText=""; try{ accText=fs.readFileSync(acc,"utf8"); }catch(e){}
   const actual=(accText.match(/^### AC-/gm)||[]).length;
@@ -1454,23 +1475,56 @@ else
   const dmax=dnums.length?Math.max(...dnums):0;
   const files=["status.md","traceability.md","verification-report.md"];
   let nCount=0, dCount=0, repLine=null;
+  const perFile={};
   for(const F of files){
     const p=fmeta+"/"+F;
     let t=""; try{ t=fs.readFileSync(p,"utf8"); }catch(e){ continue; }
+    let fn=0, fd=0;
     for(const m of t.matchAll(/(\d+)\s*条判据/g)){
-      nCount++;
+      nCount++; fn++;
       if(Number(m[1])!==actual) prob.push(F+": 判据条数写 "+m[1]+"，实际 "+actual);
     }
     for(const m of t.matchAll(/D1~D(\d+)/g)){
-      dCount++;
+      dCount++; fd++;
       if(Number(m[1])!==dmax) prob.push(F+": 决策号写 D1~D"+m[1]+"，实际 D1~D"+dmax);
     }
+    // 第五轮 A46：掏空其中一份仍能过（此前只查**合计**）→ 每份都要自己写清判据条数与决策号
+    if(fn===0) prob.push(F+": 一处「N 条判据」都没有 —— 该文件自己的追溯链写空了");
+    if(fd===0) prob.push(F+": 一处「D1~D<n>」都没有 —— 该文件自己的追溯链写空了");
+    perFile[F]=t;
     if(F==="verification-report.md"){
       for(const ln of t.split(/\r?\n/)){
         if(ln.includes("主验收") && ln.includes("PASS")) { repLine=ln; break; }
       }
     }
   }
+  // ---- 追溯链声明的**实现形状数字**必须与实际一致（第五轮 A52：矩阵写 methods[6]，实现变成 7 个）
+  let mIds=[], dCount2=-1;
+  try{ const o=JSON.parse(fs.readFileSync(mth,"utf8")); mIds=(o.methods||[]).map(m=>m.id); }catch(e){}
+  const mN=mIds.length;
+  const tr=perFile["traceability.md"]||"";
+  const mTokens=[...tr.matchAll(/methods\[(\d+)\]/g)].map(m=>Number(m[1]));
+  if(mTokens.length===0) prob.push("traceability.md: 没有写 methods[N]（方法数）—— 追溯链没记实现的形状");
+  else if(mTokens.length>1) prob.push("traceability.md: methods[N] 写了 "+mTokens.length+" 处（应为恰好 1 处）");
+  else if(mTokens[0]!==mN) prob.push("traceability.md: 写 methods["+mTokens[0]+"]，实际方法数 "+mN+" —— 追溯链与实现脱同步");
+  // status.md 声明的方法 id 区间必须与实际方法 id 集合一致
+  const st=perFile["status.md"]||"";
+  const rg=[...st.matchAll(/M(\d+)\.(\d+)\s*~\s*M(\d+)\.(\d+)/g)];
+  if(rg.length===0) prob.push("status.md: 没有写方法 id 区间（M<a>.<b>~M<c>.<d>）—— 追溯链没记方法清单");
+  else{
+    const g=rg[0]; const maj="M"+g[1];
+    const lo=Number(g[2]), hi=Number(g[4]);
+    const implied=[]; for(let i=lo;i<=hi;i++) implied.push(maj+"."+i);
+    const same = implied.length===mIds.length && implied.every((x,i)=>x===mIds[i]);
+    if(!same) prob.push("status.md: 写的方法区间 "+maj+"."+lo+"~"+maj+"."+hi+"，实际方法 id 为 ["+mIds.join(",")+"] —— 追溯链与实现脱同步");
+  }
+  // status.md 声明的维度数必须与 dimensions.json 实际维度数一致
+  let dIds=[];
+  try{ const o=JSON.parse(fs.readFileSync(dim,"utf8")); dIds=(o.dimensions||[]).map(d=>d.id); }catch(e){}
+  const dN=dIds.length;
+  const dTok=[...st.matchAll(/(\d+)\s*个维度/g)].map(m=>Number(m[1]));
+  if(dTok.length===0) prob.push("status.md: 没有写维度数（「N 个维度」）—— 追溯链没记维度规模");
+  else for(const v of dTok){ if(v!==dN) prob.push("status.md: 写 "+v+" 个维度，实际 "+dN+" —— 追溯链与实现脱同步"); }
   // 主验收那一行的 PASS/FAIL 计数：P+F 必须等于判据条数，且 F 必须为 0（交付态必须全绿）
   if(!repLine){ prob.push("verification-report.md: 找不到含「主验收」与「PASS」的结果行"); }
   else{
@@ -1487,7 +1541,7 @@ else
   console.log("prob="+prob.length);
   console.log("actual="+actual+" dmax="+dmax+" nCount="+nCount+" dCount="+dCount);
   console.log("detail="+(prob.slice(0,4).join(" ; ")||"none"));
-  ' "$FMETA" "$SELF_DIR/acceptance.md" "$SELF_DIR/decisions.md" 2>/dev/null)"
+  ' "$FMETA" "$SELF_DIR/acceptance.md" "$SELF_DIR/decisions.md" "$TCD/references/methods.json" "$TCD/references/dimensions.json" 2>/dev/null)"
   P34="$(printf '%s\n' "$M34" | sed -n 's/^prob=//p')"
   D34="$(printf '%s\n' "$M34" | sed -n 's/^detail=//p')"
   # ---- 钉版自检：追溯链必须记下**当前验收脚本**的 sha256（D25 ⑤）
