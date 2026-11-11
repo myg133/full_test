@@ -118,8 +118,41 @@ node scripts/check-methods.mjs --methods <路径> --dimensions <路径>   # 换�
 ```
 
 - 退出码：`0` = 无 ERROR（可能有 WARN）；`1` = 有 ERROR；`2` = 用法错误
-- **`--json` 时 stdout 只有 JSON**（含用法错误场景），与 `validate-cases.mjs` 一致
+- **`--json` 时 stdout 只有 JSON**（含用法错误场景），风格与 `cycle-state.mjs` 一致
+  （注意：`validate-cases.mjs` **本身没有** `--json` 模式，别拿它当参照）
 - **零依赖**：纯 Node.js，不引第三方包
+
+#### F5.1 `--json` 输出契约（**字段名定死**，验收按此判）
+
+契约不写死，验收就写不稳 —— "判不了"到底算不算通过，双方只能各写各的理解。所以字段名在此定死：
+
+```jsonc
+{
+  "ok": true,                       // 无 ERROR 即为 true（WARN 与"无法判定"不影响它）
+  "command": "check-methods",
+  "exit_code": 0,                   // 0 = 无 ERROR；1 = 有 ERROR；2 = 用法错误
+  "summary": { "errors": 0, "warnings": 1, "undecidable": 1 },
+  "errors":   [ { "type": "...", "requirement": "R-1", "method": "M0.2", "message": "..." } ],
+  "warnings": [ { "type": "...", "requirement": "R-1", "method": "M0.2", "message": "..." } ],
+  "undecidable": [ { "requirement": "R-1", "method": "M0.2", "reason": "..." } ],
+  "verdicts": [
+    { "requirement": "R-1", "method": "M0.2",
+      "status": "satisfied" | "missing_output" | "undecidable" | "suspect" | "not_applicable",
+      "message": "..." }
+  ]
+}
+```
+
+三条硬约束：
+
+1. **三分类互斥** —— 同一条 `(requirement, method)` 不得同时出现在 `errors` 与 `warnings`；
+   `summary` 的三个计数必须分别等于对应数组的长度
+2. **`undecidable` 不算满足** —— 对应的 `verdicts[].status` 必须是 `"undecidable"`，
+   **不得**是 `"satisfied"`。"判不了"既不算通过也不算失败，但**绝不等于通过**
+3. **`verdicts` 必须覆盖每一条 (需求条目 × 方法) 组合** —— 没有结论的组合等于漏判
+
+> 这条与 D2 一致：**没有证据的"通过"比失败更危险**。若实现方觉得某条 JSON 字段不合适，
+> **先来改需求**，不要在实现里自行发挥 —— 契约与实现分叉，本套件会立刻失效。
 
 ### F6 `test-case-design` SKILL.md 重写
 
@@ -132,7 +165,7 @@ node scripts/check-methods.mjs --methods <路径> --dimensions <路径>   # 换�
 
 ---
 
-验收标准见同目录 `acceptance.md`（AC-001 ~ AC-012）。
+验收标准见同目录 `acceptance.md`（AC-001 ~ AC-013）。
 
 ## 4. 不做什么（明确排除）
 

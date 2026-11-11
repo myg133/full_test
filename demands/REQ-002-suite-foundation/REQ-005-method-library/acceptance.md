@@ -90,3 +90,14 @@
 
 ---
 
+
+### AC-013: `--json` 输出结构自洽（三分类互斥 + 计数一致 + 判不了不等于通过）
+- **前置条件**: 按 F5.1 定的 JSON 输出契约，跑一个**同时含 ERROR 与"无法判定"**的用例集
+- **测试步骤**: `node scripts/check-methods.mjs cases.json --json`，检查输出 JSON 的结构自洽性
+- **预期结果**:
+  1. `summary.errors` / `summary.warnings` / `summary.undecidable` **分别等于**对应数组的长度
+  2. **三分类互斥** —— 同一条 `(requirement, method)` 不得同时出现在 `errors` 与 `warnings`
+  3. 落在 `undecidable` 的组合，其 `verdicts[].status` **不得是 `satisfied`**（判不了 ≠ 通过）
+  4. `verdicts[].status` 只能取约定的五个值；同一条 `(requirement, method)` 只能有一个 `verdict`
+- **类型**: 功能
+- **说明**: F5.1 把字段名定死就是为了让这条可判。契约不写死，"判不了到底算不算通过"就会变成实现方与验收方各写各的理解 —— 那正是这套 skill 要消灭的分叉

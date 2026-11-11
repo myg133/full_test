@@ -182,10 +182,31 @@ $(mkcase TC-003 边界上界 boundary '[ { "action": "长度8", "expected": "长
 $(mkcase TC-004 边界越界 boundary '[ { "action": "长度21", "expected": "超出应拒绝" } ]') ]"
 mkcases "$WORK/e.json" "$CASES_E" "$MATRIX_B"
 OUT_E="$(node "$CM" "$WORK/e.json" --methods "$MTH" 2>&1)"; RC_E=$?
-if printf '%s' "$OUT_E" | grep -qE "无法判定|UNDECIDABLE|undeterminable"; then
-  ok "AC-008 判不了就说「判不了」"
+# 机器可读复核（F5.1 契约）：判不了的组合必须落在 undecidable，
+# 且**不得**同时被判成 satisfied —— "判不了"绝不等于"通过"
+node "$CM" "$WORK/e.json" --methods "$MTH" --json > "$WORK/e.json.out" 2>/dev/null
+V8="$(node -e '
+const fs=require("fs");
+let o; try{o=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));}catch(e){console.log("parse_err");process.exit(0);}
+const und=Array.isArray(o.undecidable)?o.undecidable:[];
+const vd=Array.isArray(o.verdicts)?o.verdicts:[];
+let leak=0;
+for(const u of und){
+  const hit=vd.find(x=>x&&x.requirement===u.requirement&&x.method===u.method);
+  if(hit&&hit.status==="satisfied") leak++;
+}
+console.log("undecidable="+und.length);
+console.log("verdict_undecidable="+vd.filter(x=>x&&x.status==="undecidable").length);
+console.log("leak="+leak);
+' "$WORK/e.json.out")"
+U8="$(printf '%s\n' "$V8" | sed -n 's/^undecidable=//p')"
+VU8="$(printf '%s\n' "$V8" | sed -n 's/^verdict_undecidable=//p')"
+LK8="$(printf '%s\n' "$V8" | sed -n 's/^leak=//p')"
+if printf '%s' "$OUT_E" | grep -qE "无法判定|UNDECIDABLE|undeterminable" \
+   && [ "${U8:-0}" -ge 1 ] 2>/dev/null && [ "${VU8:-0}" -ge 1 ] 2>/dev/null && [ "${LK8:-1}" -eq 0 ] 2>/dev/null; then
+  ok "AC-008 判不了就说「判不了」（且不得被判成通过）"
 else
-  bad "AC-008 判不了就说「判不了」" "rc=$RC_E out=$OUT_E"
+  bad "AC-008 判不了就说「判不了」" "rc=$RC_E undecidable=$U8 verdict_undecidable=$VU8 判成通过的泄漏=$LK8 out=$OUT_E"
 fi
 
 # ---------------------------------------------------------------- AC-009
@@ -317,6 +338,52 @@ else
     bad "AC-011 本脚本自身要被验收" \
         "检出差异 $DET/3（要求 3/3）基线A rc=$RC_RA 基线B2 rc=$RC_RB2 v1=$RC_V1 v2=$RC_V2 v3=$RC_V3 还原后 rc=$RC_RB"
   fi
+fi
+
+# ---------------------------------------------------------------- AC-013
+step "AC-013 --json 输出结构自洽（三分类互斥 + 计数一致 + 判不了不等于通过）"
+if [ ! -f "$CM" ]; then
+  bad "AC-013 --json 输出结构自洽" "缺 check-methods.mjs"
+else
+  node "$CM" "$WORK/a.json" --methods "$MTH" --json > "$WORK/aj.json" 2>/dev/null
+  V13="$(node -e '
+const fs=require("fs");
+let o; try{o=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));}catch(e){console.log("parse_err=1");process.exit(0);}
+const arr=(k)=>Array.isArray(o[k])?o[k]:null;
+const E=arr("errors"),W=arr("warnings"),U=arr("undecidable"),V=arr("verdicts"),S=o.summary||{};
+let prob=[];
+if(!E||!W||!U||!V) prob.push("缺数组字段");
+else {
+  // 1) summary 计数必须与数组长度一致
+  if(Number(S.errors)!==E.length) prob.push("summary.errors≠errors.length");
+  if(Number(S.warnings)!==W.length) prob.push("summary.warnings≠warnings.length");
+  if(Number(S.undecidable)!==U.length) prob.push("summary.undecidable≠undecidable.length");
+  // 2) 三分类互斥：同一条 (requirement, method) 不得同时在 errors 与 warnings
+  const key=(x)=>String(x.requirement)+"|"+String(x.method);
+  const ek=new Set(E.map(key)),wk=new Set(W.map(key));
+  for(const k of ek) if(wk.has(k)) prob.push("errors/warnings 互斥被破: "+k);
+  // 3) 判不了的不许同时被判成通过
+  for(const u of U){
+    const hit=V.find(x=>x&&key(x)===key(u));
+    if(hit&&hit.status==="satisfied") prob.push("undecidable 被判成 satisfied: "+key(u));
+  }
+  // 4) verdicts 的 status 只能是约定的五个取值
+  const allow=new Set(["satisfied","missing_output","undecidable","suspect","not_applicable"]);
+  for(const v of V) if(v&&!allow.has(v.status)) prob.push("verdict.status 越界: "+v.status);
+  // 5) 每个 (requirement, method) 组合只能有一个 verdict
+  const seen=new Set();
+  for(const v of V){ const k=key(v); if(seen.has(k)) prob.push("verdict 重复: "+k); seen.add(k); }
+}
+console.log("problems="+prob.length);
+console.log("detail="+(prob.slice(0,4).join(" ; ")||"none"));
+' "$WORK/aj.json")"
+P13="$(printf '%s\n' "$V13" | sed -n 's/^problems=//p')"
+D13="$(printf '%s\n' "$V13" | sed -n 's/^detail=//p')"
+if [ "${P13:-1}" -eq 0 ] 2>/dev/null; then
+  ok "AC-013 --json 输出结构自洽"
+else
+  bad "AC-013 --json 输出结构自洽" "问题数=$P13 明细=$D13"
+fi
 fi
 
 # ---------------------------------------------------------------- AC-012
