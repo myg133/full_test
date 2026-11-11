@@ -10,15 +10,21 @@
 
 ## 1. 验收结论
 
-**通过**（第 5 节的 P0 缺陷 4 修复完成后）。
+**通过。**
 
 | 项 | 结果 |
 |---|---|
-| AC 验收脚本 | 22 PASS / 0 FAIL（`verify-acceptance.sh`，AC-001~021） |
-| REQ-002B 契约↔实现变异回归 | 41 PASS / 0 FAIL（`verify-regression-002b.sh`） |
-| 独立 QA 子 agent | 见第 4 节 |
-| 既有需求回归（REQ-002A / REQ-002B） | 无回归 |
-| 分发链路 | 新文件已进 npm 包 |
+| AC 验收脚本 | **28 PASS / 0 FAIL**（`verify-acceptance.sh`，AC-001~027） |
+| REQ-002B 契约↔实现变异回归 | **41 PASS / 0 FAIL**（`verify-regression-002b.sh`） |
+| 独立 QA 子 agent | 判定 PARTIAL，挖出 P1~P6 —— 全部已修并复验（见第 4 节） |
+| 既有需求回归（REQ-002A / REQ-002B） | 无回归。`validate-cases.mjs` 改动为纯增量，Dev 做了改前/改后**逐字节对拍**（5 例 stdout+stderr+退出码完全一致） |
+| 分发链路 | `npm pack` 15 个文件，三个新文件（`cycle-state.mjs` / `lib/state-machine.mjs` / `state-machine.md`）齐全 |
+| 已安装副本 | `~/.agents/skills/test-case-design/` 11 个文件到位，**28 PASS / 0 FAIL** |
+| 合并 | `dc175e4`（`--no-ff`） |
+| 工作区巡检 | `aw.py verify` 0 FAIL / 0 WARN；`doctor` 0 FAIL / 1 WARN（watcher 未装，环境限制）；`audit` 干净 |
+
+**已装副本与包根两种形态的验收结果一致（均 28 PASS）** —— 验收脚本据此修正了 AC-016 的判据（已装副本下没有 `package.json`，依赖检查改由 import 检查覆盖）。
+
 
 ## 2. 交付清单
 
@@ -62,16 +68,30 @@ QA 独立于我的验收脚本，自建 fixture、转移表 5×5 穷举 25/25、
 
 ### QA 发现的缺陷与裁决
 
-| # | 级别 | 缺陷 | BA 裁决 |
-|---|---|---|---|
-| P1 | 高 | `index.json` 与 `cycle.json` 非原子更新；index 写失败时 cycle 已改，**重试走幂等分支不补同步 → 永久脱同步，校验器还完全不报警** | **本 REQ 必修**。采纳 QA 三条修法：失败回滚 cycle + 幂等分支也同步 index + 校验器加 index↔cycle 一致性检查（兜底） |
-| P2 | 中 | 推进器与校验器对同一份坏文件报告不一致 —— `show`/`advance` 只调 `checkCycleState`，漏 `checkScopesSkipped`；推进器还会把坏文件继续写下去 | **本 REQ 必修**。这正是 AC-011 的判据。单一来源不只是"规则写在一处"，还包括"用哪套规则做准入判断"也一致 |
-| P3 | 中 | 契约文档写"必须/类型"，校验器不拦 —— 9 处逃逸（`stages.<name>.status` 缺失/类型错、artifacts/scopes/scopes_skipped/trigger/round 类型错、suite.json 多余字段） | **本 REQ 修**。根因是 `typeof body.status === 'string' &&` 这种写法只在已是字符串时才检查 |
-| P4 | 中 | `SKILL.md` 未覆盖 `init` 与 `skip-scope` 两个最常用入口 —— agent 只读 SKILL.md 答不出"我要开始一轮测试该敲什么" | **本 REQ 修**。约 5 行改动，与缺陷 4 的 SKILL.md 修改合并 |
-| P5 | 低 | `--json` 在 usage 错误时 stdout 不是合法 JSON（`parseArgs` 在 `context.json` 赋值前执行） | **本 REQ 修**。成本极低 |
-| P6 | 低 | `project-layout.md` 标题写"14 项"实际 16 行 | **本 REQ 修**。纯文档 |
+| # | 级别 | 缺陷 | BA 裁决 | 复验 |
+|---|---|---|---|---|
+| P1 | 高 | `index.json` 与 `cycle.json` 非原子更新；index 写失败时 cycle 已改，**重试走幂等分支不补同步 → 永久脱同步，校验器还完全不报警** | **本 REQ 必修**。采纳 QA 三条修法：失败回滚 cycle + 幂等分支也同步 index + 校验器加 index↔cycle 一致性检查（兜底） | ✅ AC-022 PASS |
+| P2 | 中 | 推进器与校验器对同一份坏文件报告不一致 —— `show`/`advance` 只调 `checkCycleState`，漏 `checkScopesSkipped`；推进器还会把坏文件继续写下去 | **本 REQ 必修**。这正是 AC-011 的判据。单一来源不只是"规则写在一处"，还包括"用哪套规则做准入判断"也一致 | ✅ AC-023 PASS |
+| P3 | 中 | 契约文档写"必须/类型"，校验器不拦 —— 9 处逃逸（`stages.<name>.status` 缺失/类型错、artifacts/scopes/scopes_skipped/trigger/round 类型错、suite.json 多余字段） | **本 REQ 修**。根因是 `typeof body.status === 'string' &&` 这种写法只在已是字符串时才检查 | ✅ AC-024 / AC-025 PASS |
+| P4 | 中 | `SKILL.md` 未覆盖 `init` 与 `skip-scope` 两个最常用入口 —— agent 只读 SKILL.md 答不出"我要开始一轮测试该敲什么" | **本 REQ 修**。约 5 行改动，与缺陷 4 的 SKILL.md 修改合并 | ✅ AC-026 PASS |
+| P5 | 低 | `--json` 在 usage 错误时 stdout 不是合法 JSON（`parseArgs` 在 `context.json` 赋值前执行） | **本 REQ 修**。成本极低 | ✅ AC-027 PASS |
+| P6 | 低 | `project-layout.md` 标题写"14 项"实际 22 行 | **本 REQ 修**。纯文档 | ✅ 已改为 22 项 |
 
 对应新增 AC-022 ~ AC-027。
+
+### BA 侧验收脚本自身的三次修正（记录在案）
+
+本轮 BA 的验收脚本自身出过 **4 个 bug**，都曾造成假失败或假通过 —— 与 Dev 的实现无关：
+
+| # | Bug | 后果 | 修正 |
+|---|---|---|---|
+| 1 | `V2MISS` 初值写成字符串 `"0"` 而非空串 | `[ -z "$V2MISS" ]` 恒假 → **AC-020 恒 FAIL** | 改为 `V2MISS=""` |
+| 2 | AC-023/024 用 `\|\|` 判断校验器结果 | 把"校验器拦住了"当成失败 → **8 例真实拦截被报成逃逸** | 改 `&&`（退出码 0 = 放行 = 逃逸） |
+| 3 | AC-023 把轮次建在 `test-assets/cycles/` 之外 | 校验器只报「test-assets/ 缺失」，**fail 原因不是注入的缺陷**，信号无效 | 改用 `make_project` 造合法项目 |
+| 4 | AC-016 假设 `<skill-dir>/../..` 有 `package.json` | **已装副本形态下恒 FAIL** | 区分包根/已装副本两种形态；已装副本改由 import 检查覆盖依赖 |
+
+第 2、3 条是 Dev 发现的（它把自己的实现放到 BA 脚本的副本上跑，发现"8 例全被拦下但脚本报逃逸"，进而定位到我的判据取反）。**这说明验收脚本本身也需要被验收** —— 它的失败不能直接当成交付不合格。
+
 
 ### QA 指出的 BA 侧盲区（已修正）
 
@@ -91,7 +111,8 @@ QA 指出：**"本 REQ 已经建了验收脚本，但它目前只覆盖 AC 明�
 |---|---|---|---|
 | 主体 | `e7cef81` | 状态推进器 + 共享状态机模块 + 契约文档修复 + 缺陷 1/2/3 | BA 首轮派单 + 追加缺陷 2/3 |
 | 追加 | `5ce4c51` | `skip-scope` 记录补 `at`/`by`（审计链完整性） | BA 裁决 D13 |
-| 补丁 | 待填 | 缺陷 4 修复：SKILL.md v2 输出契约 + 校验器 v2 骨架生成 | BA 独立发现（P0） |
+| 补丁 | `7179d6d` | 缺陷 4（P0：SKILL.md 同步 v2 + 校验器 `--init` 骨架生成）+ P1~P6 | BA 独立发现缺陷 4 + 独立 QA 的 P1~P6 |
+| 合并 | `dc175e4` | `--no-ff` 合入 develop | — |
 
 ## 6. 本 REQ 建立的两道防线（长期资产）
 

@@ -350,9 +350,20 @@ else
 fi
 
 # ---------------------------------------------------------------- AC-016
+# 零依赖 + 可移植 + agent 友好
+# 注意: <skill-dir> 可能指向 npm 包根内的 skill 目录（有 package.json），
+#       也可能指向已安装副本 ~/.agents/skills/<name>（没有 package.json）。
+#       两种形态都要能判。
 PKG="$(cd "$SKILL_DIR" && cd ../.. && pwd)/package.json"
-DEPS="n/a"
-[ -f "$PKG" ] && DEPS="$(node -e 'const p=require(process.argv[1]);console.log(Object.keys(p.dependencies||{}).length)' "$PKG" 2>/dev/null)"
+if [ -f "$PKG" ]; then
+  DEPS="$(node -e 'const p=require(process.argv[1]);console.log(Object.keys(p.dependencies||{}).length)' "$PKG" 2>/dev/null)"
+  [ -z "$DEPS" ] && DEPS="0"
+else
+  DEPS="0"   # 已装副本形态：没有 package.json，依赖检查由下面的 import 检查覆盖
+fi
+# import 必须是 node: 内置模块或相对路径（不得引第三方包）
+BADIMPORT="$(grep -h -E "^\s*import .*from ['\"]" "$CS" "$SCRIPTS/lib/"*.mjs 2>/dev/null \
+  | grep -v -E "from ['\"]node:" | grep -v -E "from ['\"]\./" | grep -v -E "from ['\"]\.\./" | wc -l)"
 EXT="$(grep -c -E "child_process|execSync|spawnSync|/tmp/" "$CS" 2>/dev/null)"
 BASHY="$(grep -c -E "python3|grep |sed " "$CS" 2>/dev/null)"
 JSONOK="$(node -e '
@@ -366,10 +377,10 @@ try{
   JSON.parse(o);console.log("ok");
 }catch(e){console.log("fail");}
 ' "$CS" "$WORK/ac016c/R1-REQ-001" 2>/dev/null)"
-if [ "$DEPS" = "0" ] && [ "$EXT" = "0" ] && [ "$BASHY" = "0" ] && [ "$JSONOK" = "ok" ]; then
+if [ "$DEPS" = "0" ] && [ "$BADIMPORT" = "0" ] && [ "$EXT" = "0" ] && [ "$BASHY" = "0" ] && [ "$JSONOK" = "ok" ]; then
   ok "AC-016 零依赖 + 可移植 + agent 友好"
 else
-  bad "AC-016 零依赖 + 可移植 + agent 友好" "deps=$DEPS 外部调用行=$EXT bash式行=$BASHY json=$JSONOK"
+  bad "AC-016 零依赖 + 可移植 + agent 友好" "deps=$DEPS 非内置import=$BADIMPORT 外部调用行=$EXT bash式行=$BASHY json=$JSONOK"
 fi
 
 # ---------------------------------------------------------------- AC-017
