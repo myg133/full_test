@@ -849,6 +849,75 @@ fi
 kill "$CNT_PID" 2>/dev/null || true
 wait "$CNT_PID" 2>/dev/null || true
 
+# ---------------------------------------------------------------- AC-025b
+step "AC-025b 两种「不执行」生命周期的处理必须一致（不能一个跳一个不跳）"
+# 独立验收实测：把生命周期清单里的 "blocked" 去掉（deprecated 与 blocked 分叉处理），
+# BA 的验收脚本**测不出来** —— AC-025 只判"判 skipped 的不许发请求"这个不变式，
+# 而分叉处理仍然满足这个不变式。
+# 这里补一条更根本的约束：**同一类语义的不同载体，处理规则不许分叉**
+# （延续 D25「同一条规则只对一半载体生效等于没有规则」）。
+#
+# ⚠️ 本条**不裁决** blocked 该不该执行 —— 只要求两个的处理**一致**。
+D25B="$WORK/ac025b"; make_project "$D25B"
+cp "$WORK/count-server.mjs" "$WORK/count-server-b.mjs" 2>/dev/null
+node "$WORK/count-server-b.mjs" "$WORK/port25b" >/dev/null 2>&1 &
+CNT_PID=$!
+CNT_WAIT=0
+while [ ! -s "$WORK/port25b" ] && [ "$CNT_WAIT" -lt 100 ]; do sleep 0.1; CNT_WAIT=$((CNT_WAIT+1)); done
+PORT25B="$(cat "$WORK/port25b" 2>/dev/null || true)"
+if [ -z "$PORT25B" ]; then
+  bad "AC-025b 两种「不执行」生命周期的处理必须一致" "计数服务器没起来"
+else
+  node -e '
+  const fs=require("fs");const f=process.argv[1];const o=JSON.parse(fs.readFileSync(f,"utf8"));
+  o.base_url="http://127.0.0.1:"+process.argv[2];
+  fs.writeFileSync(f,JSON.stringify(o,null,2));
+  ' "$D25B/test-assets/environments/local.json" "$PORT25B"
+  CASE_DEP25B='{ "id":"TC-DEP","title":"废弃用例","requirement_refs":["R-1"],"dimension":"functional","priority":"P0","method":["M0.1"],"status":"deprecated","revision":{ "previous_status":"active","change":"需求变更，用例废弃" },"steps":[ { "action":"GET /notfound","expected":{ "path":"$.status","op":"equals","expected":"ok" } } ] }'
+  CASE_BLK25B='{ "id":"TC-BLK","title":"阻塞用例","requirement_refs":["R-1"],"dimension":"functional","priority":"P0","method":["M0.1"],"status":"blocked","revision":{ "previous_status":"active","change":"环境未就绪，标记阻塞" },"steps":[ { "action":"GET /created","expected":{ "path":"$.status","op":"equals","expected":"ok" } } ] }'
+  make_cases "$D25B/test-assets/suites/REQ-001-coupon/cases.json" "[ $CASE_DEP25B, $CASE_BLK25B ]"
+  if run_suite "$D25B" >/dev/null 2>&1 && [ -n "$RUN_DIR" ]; then
+    curl -s "http://127.0.0.1:$PORT25B/__stats" > "$WORK/stats25b.json" 2>/dev/null
+    V25B="$(node -e '
+    const fs=require("fs");
+    const [resFile,statsFile]=process.argv.slice(1);
+    let results=[],hits=[];
+    try{ results=JSON.parse(fs.readFileSync(resFile,"utf8")); }catch(e){}
+    try{ hits=(JSON.parse(fs.readFileSync(statsFile,"utf8")).hits)||[]; }catch(e){}
+    const own=(id)=>hits.filter(h=>h.endsWith(" /notfound")||h.endsWith(" /created")).length;
+    const dep=results.find(r=>r.case_id==="TC-DEP");
+    const blk=results.find(r=>r.case_id==="TC-BLK");
+    // 判了不执行的条数（= 不该发请求的条数）
+    const skipped=[dep,blk].filter(r=>r&&r.status==="skipped").length;
+    const executed=[dep,blk].filter(r=>r&&r.status!=="skipped").length;
+    console.log("requests="+own());
+    console.log("skipped="+skipped);
+    console.log("executed="+executed);
+    console.log("dep="+(dep?dep.status:"__MISSING__"));
+    console.log("blk="+(blk?blk.status:"__MISSING__"));
+    ' "$RUN_DIR/results.json" "$WORK/stats25b.json")"
+    RQ="$(printf '%s\n' "$V25B" | sed -n 's/^requests=//p')"
+    SK25B="$(printf '%s\n' "$V25B" | sed -n 's/^skipped=//p')"
+    EX25B="$(printf '%s\n' "$V25B" | sed -n 's/^executed=//p')"
+    # ⚠️ 分叉的判据不是「请求数 == 执行数」—— 分叉时（一条跳一条执行）请求数也正好等于
+    #    执行数（1 == 1），那条检查抓不住分叉。
+    #    真正的判据是 **skipped 只能是 0 或 2**（要么都跳，要么都不跳），1 就是分叉。
+    #    再叠加「请求数 == 被判为要执行的条数」，确保"说不跳就真没发"。
+    if { [ "${SK25B:-0}" -eq 0 ] || [ "${SK25B:-0}" -eq 2 ]; } 2>/dev/null \
+       && [ "${EX25B:-0}" -eq $((2 - ${SK25B:-0})) ] 2>/dev/null \
+       && [ "$RQ" -eq "${EX25B:-0}" ] 2>/dev/null; then
+      ok "AC-025b 两种「不执行」生命周期的处理必须一致"
+    else
+      bad "AC-025b 两种「不执行」生命周期的处理必须一致" \
+          "实际发出请求=$RQ 条，但被判为要执行的只有=$EX25B 条（skipped=$SK25B）—— 一个跳一个不跳 = 处理规则分叉"
+    fi
+  else
+    bad "AC-025b 两种「不执行」生命周期的处理必须一致" "套件未跑通"
+  fi
+fi
+kill "$CNT_PID" 2>/dev/null || true
+wait "$CNT_PID" 2>/dev/null || true
+
 # ---------------------------------------------------------------- AC-026
 step "AC-026 传输层错误时，已执行步骤的证据必须保留"
 D26="$WORK/ac026"; make_project "$D26"
@@ -882,6 +951,47 @@ if run_suite "$D26" >/dev/null 2>&1 && [ -n "$RUN_DIR" ]; then
   else
     bad "AC-026 传输层错误时，已执行步骤的证据必须保留" \
         "status=$S26(期望failed) error=$E26(期望timeout) 证据条数=$N26(期望≥1) 复现步骤数=$P26(期望=证据条数且≥1)"
+  fi
+  # ---- AC-026b：复现步骤的**路径序列**必须与证据里的请求路径序列一致
+  # 条数对但内容错位（证据是第 1 步的响应，复现步骤却写第 2 步）也必须被测出 ——
+  # 只查条数查不出这种错位（独立验收实测：条数对但内容指向别的步骤，验收脚本测不出）。
+  V26B="$(node -e '
+  const fs=require("fs"),path=require("path");
+  const [runDir,resFile]=process.argv.slice(1);
+  let results=[];
+  try{ results=JSON.parse(fs.readFileSync(resFile,"utf8")); }catch(e){}
+  const r=results.find(x=>x&&x.case_id==="TC-ERR");
+  if(!r){console.log("missing=1");process.exit(0);}
+  const repro=(r.reproduction&&Array.isArray(r.reproduction.steps)?r.reproduction.steps:[])
+    .map(s=>{const m=String(s).match(/^[A-Z]+\s+(\S+)/);return m?m[1]:null;}).filter(Boolean);
+  const dir=path.join(runDir,"evidence","TC-ERR");
+  let files=[];
+  try{ files=fs.readdirSync(dir).filter(f=>f.endsWith(".json")).sort(); }catch(e){}
+  const evid=[];
+  for(const f of files){
+    let p=null;
+    try{
+      const o=JSON.parse(fs.readFileSync(path.join(dir,f),"utf8"));
+      if(o&&o.request&&typeof o.request.path==="string") p=o.request.path;
+    }catch(e){
+      const m=fs.readFileSync(path.join(dir,f),"utf8").match(/"path"\s*:\s*"([^"]+)"/);
+      if(m) p=m[1];
+    }
+    evid.push(p);
+  }
+  console.log("missing=0");
+  console.log("repro_paths="+repro.join(","));
+  console.log("evidence_paths="+evid.join(","));
+  console.log("same="+(repro.length===evid.length&&repro.every((v,i)=>v===evid[i])?"yes":"no"));
+  ' "$RUN_DIR" "$RUN_DIR/results.json")"
+  SAME26B="$(printf '%s\n' "$V26B" | sed -n 's/^same=//p')"
+  RP26B="$(printf '%s\n' "$V26B" | sed -n 's/^repro_paths=//p')"
+  EP26B="$(printf '%s\n' "$V26B" | sed -n 's/^evidence_paths=//p')"
+  if [ "$SAME26B" = "yes" ]; then
+    ok "AC-026b 复现步骤的路径序列与证据的请求路径序列一致"
+  else
+    bad "AC-026b 复现步骤的路径序列与证据的请求路径序列一致" \
+        "复现步骤路径=[$RP26B] 证据路径=[$EP26B] —— 条数对但内容错位，证据链说的与实际做的不一致"
   fi
 else
   bad "AC-026 传输层错误时，已执行步骤的证据必须保留" "套件未跑通（无产物目录）"
