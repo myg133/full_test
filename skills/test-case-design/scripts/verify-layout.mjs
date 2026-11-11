@@ -2,6 +2,8 @@
 // verify-layout.mjs — 项目级测试资产目录契约校验器
 //
 // 用法: node scripts/verify-layout.mjs [project-root]
+//   上面这个路径相对本 skill 目录（skills/test-case-design/scripts/verify-layout.mjs）。
+//   在本仓库内等价于: node skills/test-case-design/scripts/verify-layout.mjs [project-root]
 // 退出码: 0 = 契约通过, 1 = 存在违规, 2 = 调用方式错误
 //
 // 纯 Node.js 实现，只依赖 node: 内置模块。
@@ -782,7 +784,10 @@ function runChecks(root) {
 function main() {
   const args = process.argv.slice(2);
   if (args.length > 1) {
-    process.stdout.write('用法: node scripts/verify-layout.mjs [project-root]\n');
+    process.stdout.write(
+      '用法: node scripts/verify-layout.mjs [project-root]\n' +
+        '      （路径相对 skill 目录；仓库内为 skills/test-case-design/scripts/verify-layout.mjs）\n',
+    );
     process.exit(2);
   }
 

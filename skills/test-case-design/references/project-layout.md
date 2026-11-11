@@ -1,8 +1,8 @@
 # 测试资产目录契约（project-layout）
 
-本文件是**契约**，不是说明材料。读者是要在本项目里摆放测试资产的执行者：你按这里的规则摆放文件，校验脚本 `scripts/verify-layout.mjs` 按这里的规则判定通过与否。凡是本文件没写的自由项，校验器一律不拦；凡是本文件写了"必须"的，校验器一定会拦。
+本文件是**契约**，不是说明材料。读者是要在本项目里摆放测试资产的执行者：你按这里的规则摆放文件，校验脚本 `scripts/verify-layout.mjs`（本 skill 目录内）按这里的规则判定通过与否。凡是本文件没写的自由项，校验器一律不拦；凡是本文件写了"必须"的，校验器一定会拦。
 
-校验器在本包根目录：`node scripts/verify-layout.mjs [project-root]`。`project-root` 缺省取当前工作目录。退出码 `0` = 全部通过，`1` = 存在违规，`2` = 调用方式错误。
+校验器在本 skill 目录内：`node scripts/verify-layout.mjs [project-root]`，其中 `scripts/` 相对 skill 目录；在本仓库内等价于 `node skills/test-case-design/scripts/verify-layout.mjs [project-root]`。`project-root` 指向**被校验的项目根**，缺省取当前工作目录。退出码 `0` = 全部通过，`1` = 存在违规，`2` = 调用方式错误。
 
 ---
 
@@ -281,7 +281,7 @@ planned ──▶ in_progress ──▶ completed
 
 ### 6.2 自检流程
 
-1. 摆好资产后运行：`node scripts/verify-layout.mjs <project-root>`
+1. 摆好资产后运行：`node scripts/verify-layout.mjs <project-root>`（`scripts/` 相对 skill 目录；仓库内为 `node skills/test-case-design/scripts/verify-layout.mjs <project-root>`）
 2. 输出逐条列出 `[OK]` 与 `[FAIL]`；`[FAIL]` 行带**文件路径 + 字段路径 + 问题说明**，据此逐条修。
 3. 结尾 `结论: N FAIL / M OK`；`N > 0` 表示退出码 1，必须修到 `N = 0` 才算交付。
 4. 重复运行结果必须一致——校验器只读不写，不会改动你的文件。
