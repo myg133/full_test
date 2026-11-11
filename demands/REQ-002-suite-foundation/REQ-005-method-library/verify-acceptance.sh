@@ -1042,7 +1042,7 @@ else
   # ---- 13 validate-cases 删掉 dimension: 前缀放宽 ----
   run_mut "VC删掉dimension前缀放宽" "$MV" 'const fs=require("fs"),f=process.argv[1];let s=fs.readFileSync(f,"utf8");const from="if (trimmed.startsWith(DIMENSION_SKIP_PREFIX)) return \x27dimension\x27;";if(!s.includes(from))process.exit(3);fs.writeFileSync(f,s.split(from).join("if (trimmed.startsWith(DIMENSION_SKIP_PREFIX)) return \x27invalid\x27;"));' vc
   # ---- 14 validate-cases 拼错维度名 ERROR 降回 WARN ----
-  run_mut "VC拼错维度名ERROR降WARN" "$MV" 'const fs=require("fs"),f=process.argv[1];let s=fs.readFileSync(f,"utf8");const i=s.indexOf("不在覆盖维度枚举内");if(i<0)process.exit(3);const head=s.slice(0,i);const j=head.lastIndexOf("fail(");if(j<0)process.exit(3);fs.writeFileSync(f,head.slice(0,j)+"warn("+s.slice(j+5));' vc
+  run_mut "VC拼错维度名ERROR降WARN" "$MV" 'const fs=require("fs"),f=process.argv[1];let s=fs.readFileSync(f,"utf8");const i=s.indexOf("DIMENSIONS.includes(dimName)");if(i<0)process.exit(3);const j=s.indexOf("fail(",i);if(j<0)process.exit(3);fs.writeFileSync(f,s.slice(0,j)+"warn("+s.slice(j+5));' vc
   # ---- 15 validate-cases 读不到 dimensions.json 改成静默降级到内置列表 ----
   run_mut "VC读不到库静默降级内置列表" "$MV" 'const fs=require("fs"),f=process.argv[1];let s=fs.readFileSync(f,"utf8");const from="  } catch (err) {\n    fatal(`无法读取 ${DIMENSIONS_PATH}（${err.message}）`);\n  }";if(!s.includes(from))process.exit(3);fs.writeFileSync(f,s.split(from).join("  } catch (err) {\n    return [\x27functional\x27,\x27boundary\x27,\x27exception\x27,\x27permission\x27,\x27data\x27,\x27concurrency\x27,\x27performance\x27,\x27compatibility\x27];\n  }"));' vc
   # ---- 16 validate-cases 文案统一回"跳过方法" ----
@@ -1076,13 +1076,16 @@ else
   IMPL_IS_FAIL="$(node -e '
   const fs=require("fs");
   let s; try{ s=fs.readFileSync(process.argv[1],"utf8"); }catch(e){ console.log("0"); process.exit(0); }
-  // 定位"不在覆盖维度枚举内"那段，看它前面的 fail/warn
-  const i=s.indexOf("不在覆盖维度枚举内");
+  // ⚠️ 定位必须用**代码唯一**的字面量，不能用注释散文（如"不在覆盖维度枚举内"）——
+  //    注释一旦被改写（这正是本条要防的事），定位就会漂到别处，判据跟着失真。
+  //    "DIMENSIONS.includes(dimName)" 只可能出现在代码里。
+  const i=s.indexOf("DIMENSIONS.includes(dimName)");
   if(i<0){ console.log("0"); process.exit(0); }
-  const head=s.slice(Math.max(0,i-600),i);
-  const f=head.lastIndexOf("fail(");
-  const w=head.lastIndexOf("warn(");
-  console.log(f>w?1:0);
+  // 该分支里**第一个**严重级别调用就是实现本身
+  const tail=s.slice(i,i+600);
+  const f=tail.indexOf("fail(");
+  const w=tail.indexOf("warn(");
+  console.log((f>=0 && (w<0 || f<w))?1:0);
   ' "$VC" 2>/dev/null)"
   N27_OK=0
   if [ "${NOTE_SAYS_WARN:-0}" -eq 0 ] || [ "${IMPL_IS_FAIL:-0}" -eq 0 ]; then N27_OK=1; fi
