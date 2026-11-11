@@ -63,10 +63,31 @@ if [ ! -f "$MTH" ]; then
 else
   OUT="$(node "$CM" --methods "$MTH" --selftest 2>&1)"; RC=$?
   N="$(jget "$MTH" methods | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const a=JSON.parse(s);console.log(Array.isArray(a)?a.length:0)}catch(e){console.log(0)}})')"
-  if [ $RC -eq 0 ] && [ "${N:-0}" -ge 6 ]; then
-    ok "AC-001 methods.json 存在且结构合法（$N 种方法）"
+  # ⚠️ 不能只信实现的 --selftest（那是实现自己验自己）—— BA 侧独立查每条方法的必填字段
+  FIELDS="$(node -e '
+  const fs=require("fs");
+  let o; try{ o=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); }catch(e){ console.log("0 99"); process.exit(0); }
+  const ms=Array.isArray(o.methods)?o.methods:[];
+  const need=["id","name","applies_when","required_outputs"];
+  let bad=0, emptyOut=0, noId=0;
+  for(const m of ms){
+    if(!m){ bad++; continue; }
+    if(!need.every(k=>m[k]!==undefined)) bad++;
+    if(!Array.isArray(m.required_outputs)||m.required_outputs.length===0) emptyOut++;
+    if(typeof m.id!=="string"||m.id==="") noId++;
+  }
+  console.log(ms.length+" "+bad+" "+emptyOut+" "+noId);
+  ' "$MTH" 2>/dev/null)"
+  FN="$(printf '%s' "$FIELDS" | cut -d" " -f1)"
+  FB="$(printf '%s' "$FIELDS" | cut -d" " -f2)"
+  FE="$(printf '%s' "$FIELDS" | cut -d" " -f3)"
+  FI="$(printf '%s' "$FIELDS" | cut -d" " -f4)"
+  if [ $RC -eq 0 ] && [ "${N:-0}" -ge 6 ] && [ "${FN:-0}" -eq "${N:-0}" ] \
+     && [ "${FB:-99}" -eq 0 ] && [ "${FE:-99}" -eq 0 ] && [ "${FI:-99}" -eq 0 ]; then
+    ok "AC-001 methods.json 存在且结构合法（$N 种方法，字段与必填产出齐全）"
   else
-    bad "AC-001 methods.json 存在且结构合法" "rc=$RC 方法数=$N out=$OUT"
+    bad "AC-001 methods.json 存在且结构合法" \
+        "rc=$RC 方法数=$N 字段缺失=$FB(方法数$FN) 空产出=$FE 无id=$FI out=$OUT"
   fi
 fi
 
@@ -77,10 +98,20 @@ if [ ! -f "$MTH" ] || [ ! -f "$DOC" ]; then
   bad "AC-002 方法库与说明文档一致" "缺 methods.json 或 design-methods.md"
 else
   OUT="$(node "$CM" --methods "$MTH" --doc "$DOC" --check-doc 2>&1)"; RC=$?
-  if [ $RC -eq 0 ]; then
+  # ⚠️ --check-doc 是实现自己比自己 —— BA 侧再独立查一遍：
+  #    说明文档里必须**提到每个方法的 id**（这是"文档跟着数据走"的可判形式）
+  MISSING_DOC="$(node -e '
+  const fs=require("fs");
+  let o; try{ o=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); }catch(e){ console.log("__PARSE_ERR__"); process.exit(0); }
+  const doc=fs.readFileSync(process.argv[2],"utf8");
+  const ms=Array.isArray(o.methods)?o.methods:[];
+  const miss=ms.filter(m=>m&&typeof m.id==="string"&&m.id!==""&&!doc.includes(m.id)).map(m=>m.id);
+  console.log(miss.join(","));
+  ' "$MTH" "$DOC" 2>/dev/null)"
+  if [ $RC -eq 0 ] && [ -z "$MISSING_DOC" ]; then
     ok "AC-002 方法库与说明文档一致"
   else
-    bad "AC-002 方法库与说明文档一致" "rc=$RC out=$OUT"
+    bad "AC-002 方法库与说明文档一致" "rc=$RC 文档未提及的方法id=[$MISSING_DOC] out=$OUT"
   fi
 fi
 
@@ -111,7 +142,8 @@ OUT_B2="$(node "$CM" "$WORK/b2.json" --methods "$MTH" 2>&1)"; RC_B2=$?
 
 A3=0; A4=0
 # 判据：脚本必须**点名**那条方法与那条需求条目，而不是泛泛说"有问题"
-if [ $RC_A -ne 0 ] && printf '%s' "$OUT_A" | grep -q "M0.2" && printf '%s' "$OUT_A" | grep -q "R-1"; then A3=1; fi
+# ⚠️ 必须**同行**出现 —— 只查"输出里有两个词"可能命中的是别处的提及
+if [ $RC_A -ne 0 ] && printf '%s' "$OUT_A" | grep -qE "M0\.2.*R-1|R-1.*M0\.2"; then A3=1; fi
 if [ $RC_B -eq 0 ]; then A4=1; fi
 if [ $A3 -eq 1 ]; then
   ok "AC-003 声称用了方法但没有对应产出 → 被发现"
@@ -138,7 +170,8 @@ CASES_C="[ $(mkcase TC-001 功能用例 functional "[ $(astep '输入密码' '$.
 MATRIX_C='[ { "requirement": "R-1", "methods_applied": ["M0.1"], "skipped": [], "dimensions": ["functional"] } ]'
 mkcases "$WORK/c.json" "$CASES_C" "$MATRIX_C"
 OUT_C="$(node "$CM" "$WORK/c.json" --methods "$MTH" 2>&1)"; RC_C=$?
-if [ $RC_C -eq 0 ] && printf '%s' "$OUT_C" | grep -q "M0.2"; then
+# 必须点名类型 METHOD_MISSING（F3 定死的类型名）—— 只查 "M0.2" 可能命中别处的提及
+if [ $RC_C -eq 0 ] && printf '%s' "$OUT_C" | grep -q "METHOD_MISSING" && printf '%s' "$OUT_C" | grep -q "M0.2"; then
   ok "AC-005 适用性检查能发现漏用方法（WARN，退出码仍 0）"
 else
   bad "AC-005 适用性检查能发现漏用方法" "rc=$RC_C out=$OUT_C"
@@ -149,7 +182,8 @@ step "AC-006 跳过维度必须写理由"
 MATRIX_D='[ { "requirement": "R-1", "methods_applied": ["M0.1"], "skipped": [ { "dimension": "concurrency" } ], "dimensions": ["functional"] } ]'
 mkcases "$WORK/d.json" "$CASES_C" "$MATRIX_D"
 OUT_D="$(node "$CM" "$WORK/d.json" --methods "$MTH" 2>&1)"; RC_D=$?
-if [ $RC_D -ne 0 ] && printf '%s' "$OUT_D" | grep -q "concurrency"; then
+# 必须点名"缺 reason"这件事 —— 只查 "concurrency" 可能命中别处的提及
+if [ $RC_D -ne 0 ] && printf '%s' "$OUT_D" | grep -q "concurrency" && printf '%s' "$OUT_D" | grep -qi "reason"; then
   ok "AC-006 跳过维度必须写理由"
 else
   bad "AC-006 跳过维度必须写理由" "rc=$RC_D out=$OUT_D"
