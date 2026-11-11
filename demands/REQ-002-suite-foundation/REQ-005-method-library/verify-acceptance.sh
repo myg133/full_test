@@ -1554,7 +1554,7 @@ else
     if(extra.length) prob.push("traceability.md: 多出 acceptance.md 里没有的 AC 追溯行 "+extra.join(","));
     for(const l of trRows){
       const cells=l.split("|").slice(1,-1).map(s=>s.trim()).filter(s=>s.length>0);
-      if(cells.length<3){ prob.push("traceability.md: 有 AC 行不足 3 个非空单元（空壳行）"); break; }
+      if(cells.length!==4){ prob.push("traceability.md: 有 AC 行的非空单元数是 "+cells.length+"（应为恰好 4：AC / 交付位置 / 自验方式 / 结论）—— 单元里混进了裸竖线，或被删了列"); break; }
     }
   }
   // ---- 第⑦子判据：状态文件的实现清单必须非空，且列出的文件**真的存在**（第六轮 A59）
