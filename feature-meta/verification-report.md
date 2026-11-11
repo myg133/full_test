@@ -1,7 +1,7 @@
-# REQ-002.4 验证报告
+# REQ-003 验证报告
 
-- 需求：REQ-002.4「测试套件基座 — `.tools` 工具链自举机制」
-- 分支：`feature/REQ-002.4`（基线 `develop`）
+- 需求：REQ-003「测试套件基座 — `.tools` 工具链自举机制」
+- 分支：`feature/REQ-003`（基线 `develop`）
 - 实现：`bin/qa`（启动器）、`bin/qa-impl.mjs`（实现）、`skills/qa-toolchain/`（说明书 SKILL.md + 契约 references/tools-chain-contract.md）
 - 改动：`package.json` 仅新增 `bin.qa` 注册（`dependencies` 保持为空）
 
@@ -18,12 +18,12 @@ bash /tmp/qa-0024/acceptance.sh
 
 ### BA 独立交叉验证
 
-BA 侧另有一份独立验收脚本（`BA/demands/REQ-002-suite-foundation/REQ-002.4-tools-bootstrap/verify-acceptance.sh`），
+BA 侧另有一份独立验收脚本（`BA/demands/REQ-002-suite-foundation/REQ-003-tools-bootstrap/verify-acceptance.sh`），
 2026-11-11 在本分支上实测：
 
 ```bash
-bash BA/demands/REQ-002-suite-foundation/REQ-002.4-tools-bootstrap/verify-acceptance.sh \
-  <REPO_ROOT>/feature-REQ-002.4
+bash BA/demands/REQ-002-suite-foundation/REQ-003-tools-bootstrap/verify-acceptance.sh \
+  <REPO_ROOT>/feature-REQ-003
 ```
 
 结果：**18 PASS / 0 FAIL**（AC-001 ~ AC-018 全通过，含真实安装、隔离负向验证、

@@ -1,8 +1,8 @@
 # 工具链契约（`.tools/` 自举机制）
 
-> 归属：REQ-002.4「测试套件基座 — `.tools` 工具链自举机制」。
-> 需求文档：`BA/demands/REQ-002-suite-foundation/REQ-002.4-tools-bootstrap/demand.md`
-> 验收标准：`BA/demands/REQ-002-suite-foundation/REQ-002.4-tools-bootstrap/acceptance.md`
+> 归属：REQ-003「测试套件基座 — `.tools` 工具链自举机制」。
+> 需求文档：`BA/demands/REQ-002-suite-foundation/REQ-003-tools-bootstrap/demand.md`
+> 验收标准：`BA/demands/REQ-002-suite-foundation/REQ-003-tools-bootstrap/acceptance.md`
 >
 > **这份文档描述的是机制，不是测试用例。** 清单里具体装哪些工具由各能力域的 REQ 决定
 > （REQ-002.8 加安全工具，REQ-002.9 加压测工具）。

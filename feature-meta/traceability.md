@@ -1,8 +1,8 @@
-# REQ-002.4 追溯性矩阵
+# REQ-003 追溯性矩阵
 
-> 需求：`BA/demands/REQ-002-suite-foundation/REQ-002.4-tools-bootstrap/demand.md`
-> 验收：`BA/demands/REQ-002-suite-foundation/REQ-002.4-tools-bootstrap/acceptance.md`
-> 分支：`feature/REQ-002.4`　实现：`bin/qa`（启动器）+ `bin/qa-impl.mjs`（实现）+ `skills/qa-toolchain/`（说明书 + 契约文档）
+> 需求：`BA/demands/REQ-002-suite-foundation/REQ-003-tools-bootstrap/demand.md`
+> 验收：`BA/demands/REQ-002-suite-foundation/REQ-003-tools-bootstrap/acceptance.md`
+> 分支：`feature/REQ-003`　实现：`bin/qa`（启动器）+ `bin/qa-impl.mjs`（实现）+ `skills/qa-toolchain/`（说明书 + 契约文档）
 
 | AC | 需求条款 | 实现位置 | 验证方式 | 结论 |
 |---|---|---|---|---|

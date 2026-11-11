@@ -1,8 +1,8 @@
 /**
- * qa-impl —— `qa` 工具链自举机制的实现（REQ-002.4）
+ * qa-impl —— `qa` 工具链自举机制的实现（REQ-003）
  *
  * 机制契约见 `references/tools-chain-contract.md`；需求见
- * `BA/demands/REQ-002-suite-foundation/REQ-002.4-tools-bootstrap/demand.md`。
+ * `BA/demands/REQ-002-suite-foundation/REQ-003-tools-bootstrap/demand.md`。
  *
  * 核心约束（逐条对应需求的功能要求）：
  *   F1   `<project-root>/.tools/` 统一布局：manifest.json（进 Git）+ .venv/ node/ bin/ cache/ state.json（不进 Git）
@@ -1727,7 +1727,7 @@ function cmdInit(ctx) {
  * 输出帮助文本。
  */
 function printHelp() {
-  console.log(`qa —— 测试套件工具链自举入口（REQ-002.4）
+  console.log(`qa —— 测试套件工具链自举入口（REQ-003）
 
 用法：
   qa [--project <dir>] <子命令> [参数...]
