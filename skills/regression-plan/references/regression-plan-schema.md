@@ -3,12 +3,18 @@
 > 产出脚本：`scripts/plan-regression.mjs`；校验脚本：`scripts/check-plan.mjs`。
 > 产物落在**轮次目录内**（调用方给的 `--cycle-dir`，与 `cycle.json` 同级）。
 
+> ⚠️ **`cycle_id` 与轮次目录名的关系**：本文件的 `cycle_id` 由**输入**（变更日志标识）派生，
+> **与轮次目录名解耦** —— 同一份输入写到任何轮次目录都产出同一份计划
+> （幂等性要求「除 `generated_at` 外逐字相同」；若 `cycle_id` 取自输出路径，换个目录名就不成立）。
+> REQ-002 的目录契约（「轮次目录名 = `cycle.json` 的 `cycle_id`」）**只约束 `cycle.json`**，
+> 不适用于 `regression-plan.json`。
+
 ## 顶层结构
 
 ```jsonc
 {
   "schema_version": 1,                  // 固定 1
-  "cycle_id": "R2-CHANGELOG-2.3",       // 轮次标识 = 回归轮次(R2) + 变更集标识（变更日志文件名去扩展名），**由输入决定，不取输出目录名**
+  "cycle_id": "R2-CHANGELOG-2.3",       // 轮次标识 = 回归轮次(R2) + 变更集标识（变更日志文件名去扩展名）；**由输入决定，与轮次目录名解耦**
   "generated_at": "2026-11-13T00:00:00Z",// 生成时间戳（幂等自验时唯一允许变动的字段）
   "source": {
     "changelog": "CHANGELOG-2.3.md",    // 输入来源（命令行给的原样路径）
@@ -55,7 +61,7 @@
 | `change_id` | string | 变更条目 id |
 | `reason` | string | 非空，说明为什么判不了 |
 
-这类条目**不得**出现在任何 `selected` 条目的 `change_refs` 里。
+这类条目**不得**出现在任何 `selected` 或 `needs_review` 条目的 `change_refs` 里。
 
 ## `summary`
 

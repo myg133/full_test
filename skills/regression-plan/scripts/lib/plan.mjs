@@ -25,7 +25,7 @@ import { analyzeChanges, findUndecidable, selectCases } from './impact.mjs';
 export function buildPlan({ entries, cases, dimensions, methods, cycleId, source }) {
   const changes = analyzeChanges(entries, dimensions, methods);
   const { selected, needsReview } = selectCases(cases, changes);
-  const undecidable = findUndecidable(changes);
+  const undecidable = findUndecidable(changes, cases);
 
   return {
     schema_version: 1,

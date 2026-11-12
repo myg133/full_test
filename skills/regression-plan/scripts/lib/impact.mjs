@@ -205,26 +205,101 @@ export function selectCases(cases, changes) {
 }
 
 /**
- * 判定哪些变更条目「判不了」。
+ * 取一条变更条目「影响到的用例 id」集合（D45 / F5.1 的「影响用例(C)」）。
  *
- * 判不了的定义：既无显式引用（需求条目 / 用例 / 维度），正文也未命中任何维度信号词或方法短语。
- * 这类条目**不得**让任何用例进 selected，但必须显式列进 undecidable_changes。
+ * 三条命中路径（与 F3 公式一致）：需求路径 / 用例路径 / 维度路径
+ * （维度 = 显式 `@dim:` ∪ 正文命中的 `applies_when` 信号词，即 change.dimensions）。
+ *
+ * @param {object} change 变更条目影响面
+ * @param {object[]} cases 用例集
+ * @returns {string[]} 受该条目影响的用例 id
+ */
+function affectedCaseIds(change, cases) {
+  const ids = [];
+  const requirementRefs = Array.isArray(change.requirement_refs) ? change.requirement_refs : [];
+  const caseRefs = Array.isArray(change.case_refs) ? change.case_refs : [];
+  const dimensions = Array.isArray(change.dimensions) ? change.dimensions : [];
+  for (const caseObj of cases) {
+    const id = typeof caseObj.id === 'string' ? caseObj.id : '';
+    const refs = Array.isArray(caseObj.requirement_refs) ? caseObj.requirement_refs : [];
+    const dim = typeof caseObj.dimension === 'string' ? caseObj.dimension : '';
+    const hitRequirement = requirementRefs.some((ref) => refs.includes(ref));
+    const hitCase = caseRefs.includes(id);
+    const hitDimension = dimensions.includes(dim);
+    if (hitRequirement || hitCase || hitDimension) ids.push(id);
+  }
+  return ids;
+}
+
+/**
+ * 给「判不了」的变更条目写一条可核对的理由。
+ *
+ * 理由必须说清「为什么推不出用例级影响面」，且不得点名不存在的实体。
+ *
+ * @param {object} change 变更条目影响面
+ * @returns {string} 判不了的理由
+ */
+function undecidableReason(change) {
+  const hasRequirement = (Array.isArray(change.requirement_refs) ? change.requirement_refs : []).length > 0;
+  const hasCase = (Array.isArray(change.case_refs) ? change.case_refs : []).length > 0;
+  const hasExplicit = (Array.isArray(change.explicit_dimensions) ? change.explicit_dimensions : []).length > 0;
+  const hasSignal = (Array.isArray(change.signal_dimensions) ? change.signal_dimensions : []).length > 0;
+  const hasMethod = (Array.isArray(change.method_hits) ? change.method_hits : []).length > 0;
+  const hasExplicitRef = hasRequirement || hasCase || hasExplicit;
+  if (!hasExplicitRef && !hasSignal && !hasMethod) {
+    return '无显式引用，且正文未命中任何维度/方法信号，推不出用例级影响面';
+  }
+  if (!hasExplicitRef && !hasSignal) {
+    return '只命中方法短语（无显式引用、无维度命中），推不出用例级影响面';
+  }
+  return '推不出用例级影响面：显式引用与维度信号都落不到具体用例，也没有被方法短语挡住的用例';
+}
+
+/**
+ * 判定哪些变更条目「判不了」（D45 / F5.1 的可操作定义）。
+ *
+ *   影响用例(C)   = 需求路径 ∨ 用例路径 ∨ 维度路径 能落到**具体用例**的集合
+ *   全影响面       = 所有变更条目的 影响用例(C) 之并
+ *   挡住的用例(C)  = 全影响面里、用了被 C 的正文命中的 not_applies_when 短语所属方法的用例
+ *   C 判不了 ⟺ 影响用例(C) 为空 且 挡住的用例(C) 为空
+ *
+ * 推论（也是必须落地的那两种情形）：
+ *   - 只命中方法短语、且对应不到任何用例 → 判不了；
+ *   - 合法引用、但无任何用例覆盖 → 判不了。
+ * 这类条目**不得**让任何用例进 selected / needs_review，但必须显式列进 undecidable_changes，
+ * 且 `summary.impact_complete` 必须因此为 false。
  *
  * @param {object[]} changes 变更条目影响面
+ * @param {object[]} cases 用例集
  * @returns {{change_id: string, reason: string}[]} 判不了的变更条目
  */
-export function findUndecidable(changes) {
+export function findUndecidable(changes, cases) {
+  const list = Array.isArray(cases) ? cases : [];
+  const affectedByChange = new Map();
+  const universe = new Set();
+  for (const change of changes) {
+    const ids = affectedCaseIds(change, list);
+    affectedByChange.set(change.id, ids);
+    for (const id of ids) universe.add(id);
+  }
+
   const undecidable = [];
   for (const change of changes) {
-    const hasRequirement = (Array.isArray(change.requirement_refs) ? change.requirement_refs : []).length > 0;
-    const hasCase = (Array.isArray(change.case_refs) ? change.case_refs : []).length > 0;
-    const hasExplicit = (Array.isArray(change.explicit_dimensions) ? change.explicit_dimensions : []).length > 0;
-    const hasSignal = (Array.isArray(change.signal_dimensions) ? change.signal_dimensions : []).length > 0;
-    const hasMethod = (Array.isArray(change.method_hits) ? change.method_hits : []).length > 0;
-    if (hasRequirement || hasCase || hasExplicit || hasSignal || hasMethod) continue;
+    const affected = affectedByChange.get(change.id) || [];
+    if (affected.length > 0) continue;
+    // 挡住的用例(C)：全影响面里、用了被 C 命中的方法的用例
+    const methodHits = Array.isArray(change.method_hits) ? change.method_hits : [];
+    let blocked = 0;
+    for (const caseObj of list) {
+      const id = typeof caseObj.id === 'string' ? caseObj.id : '';
+      if (!universe.has(id)) continue;
+      const methods = Array.isArray(caseObj.method) ? caseObj.method : [];
+      if (methods.some((method) => methodHits.includes(method))) blocked += 1;
+    }
+    if (blocked > 0) continue;
     undecidable.push({
       change_id: change.id,
-      reason: '无显式引用，且正文未命中任何维度/方法信号',
+      reason: undecidableReason(change),
     });
   }
   return undecidable;

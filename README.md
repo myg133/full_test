@@ -145,6 +145,8 @@ node bin/test-agent-skills.mjs verify --root /tmp/verify-root
 - 不传 `--root` 时用**默认临时根**，跑完（含失败）自动清理；
 - 传 `--root <dir>` 时该目录是**调用方自己的持久根**，组合门只往里写、不清理它 ——
   同一个 `--root` 可以反复跑，每次结果都相同。
+- `verify` **故意不读** `TEST_AGENT_SKILLS_DIR`：它的契约是「装到临时根、不碰真实安装根」，
+  任何指向真实安装根的环境变量都不参与；要校验某个已装副本，用 `verify --root <该副本目录>`。
 
 ---
 
