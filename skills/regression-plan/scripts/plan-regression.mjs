@@ -70,6 +70,24 @@ function verifyReferences(entries, knownRequirements, knownCases, knownDimension
 }
 
 /**
+ * 从**输入**推导轮次标识（cycle_id）。
+ *
+ * 口径：cycle_id = 回归轮次（R2）+ 变更集标识（变更日志文件名去扩展名），
+ * **不取输出目录名** —— 否则同一份输入写到两个不同的轮次目录会产出两份不同的计划，
+ * 幂等性（除 `generated_at` 外逐字相同）就不成立。
+ *
+ * @param {string} changelogPath 变更日志路径
+ * @returns {string} 轮次标识
+ */
+function deriveCycleId(changelogPath) {
+  const base = path.basename(changelogPath, path.extname(changelogPath));
+  const slug = base.replace(/[^A-Za-z0-9._-]+/g, '-') || 'CHANGELOG';
+  // 变更日志文件名本身已带轮次号（如 R2-xxx.md）时不再重复加前缀
+  if (/^R[123]-/.test(slug)) return slug;
+  return `R2-${slug}`;
+}
+
+/**
  * 主流程。
  */
 function main() {
@@ -104,7 +122,7 @@ function main() {
     cases,
     dimensions,
     methods,
-    cycleId: path.basename(cycleDir),
+    cycleId: deriveCycleId(changelogPath),
     source: { changelog: args['--changelog'], cases: args['--cases'] },
   });
 

@@ -430,12 +430,71 @@ function parseArgs(argv) {
 }
 
 /**
+ * 找出命令行里的子命令（跳过 `--root` 的取值，避免把目录名当成子命令）。
+ * @param {string[]} argv 参数数组
+ * @returns {string} 子命令名（没有则空串）
+ */
+function findCommand(argv) {
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === '--root') {
+      i += 1;
+      continue;
+    }
+    if (arg.startsWith('-')) continue;
+    return arg;
+  }
+  return '';
+}
+
+/**
+ * `verify` 子命令的**独立**参数校验。
+ *
+ * 共享的 parseArgs 会**静默跳过**未知 flag（REQ-001 起的既有行为，改它会影响
+ * install / list / uninstall 等子命令的既有验收）→ 因此这里只在 verify 分支内
+ * 单独校验：未知参数、`--root` 缺值都是**用法错误**（退出码 2，契约 F7⑤）。
+ *
+ * @param {string[]} argv 参数数组
+ * @returns {string|null} 用法错误说明（null = 校验通过）
+ */
+function checkVerifyUsage(argv) {
+  if (findCommand(argv) !== 'verify') return null;
+  // 帮助 / 版本优先于参数校验（与 main() 里的处理顺序一致）
+  for (const arg of argv) {
+    if (arg === '-h' || arg === '--help' || arg === '-v' || arg === '--version') return null;
+  }
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === '--root') {
+      const value = argv[i + 1];
+      if (value === undefined || value.startsWith('-')) {
+        return '--root 需要一个目录参数';
+      }
+      i += 1;
+    } else if (arg.startsWith('--root=')) {
+      if (arg.slice('--root='.length) === '') return '--root 需要一个目录参数';
+    } else if (arg.startsWith('-')) {
+      return `未知参数: ${arg}（verify 支持的参数: --root <dir> / -h / --help / -v / --version）`;
+    }
+  }
+  return null;
+}
+
+/**
  * 入口。
  */
 async function main() {
+  const argv = process.argv.slice(2);
+  // 用法错误（verify 的未知参数 / --root 缺值）→ 退出码 2
+  const usageProblem = checkVerifyUsage(argv);
+  if (usageProblem) {
+    console.error(`[usage] ${usageProblem}`);
+    process.exitCode = 2;
+    return;
+  }
   let args;
   try {
-    args = parseArgs(process.argv.slice(2));
+    args = parseArgs(argv);
   } catch (err) {
     console.error(`[error] ${err.message}`);
     process.exitCode = 1;

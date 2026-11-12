@@ -1,14 +1,14 @@
 # `regression-plan.json` 字段契约
 
 > 产出脚本：`scripts/plan-regression.mjs`；校验脚本：`scripts/check-plan.mjs`。
-> 产物落在**轮次目录内**（`test-assets/cycles/<cycle_id>/regression-plan.json`，与 `cycle.json` 同级）。
+> 产物落在**轮次目录内**（调用方给的 `--cycle-dir`，与 `cycle.json` 同级）。
 
 ## 顶层结构
 
 ```jsonc
 {
   "schema_version": 1,                  // 固定 1
-  "cycle_id": "R2-CHANGELOG-2.3",       // 轮次目录名
+  "cycle_id": "R2-CHANGELOG-2.3",       // 轮次标识 = 回归轮次(R2) + 变更集标识（变更日志文件名去扩展名），**由输入决定，不取输出目录名**
   "generated_at": "2026-11-13T00:00:00Z",// 生成时间戳（幂等自验时唯一允许变动的字段）
   "source": {
     "changelog": "CHANGELOG-2.3.md",    // 输入来源（命令行给的原样路径）
@@ -45,6 +45,8 @@
 
 - `selected` = 确定重跑；`needs_review` = 需人工复核（方法在本次场景下不适用）。
 - 两个集合**互斥**：一条用例不会同时出现在两边。
+- `reason` 必须指向**该用例自己**的命中路径：`case_ref:` 指向本用例、`requirement_ref:` 只在
+  本用例确实引用该需求条目时给出、`dim_ref:` / `dim_signal:` 指向本用例所用的维度。
 
 ## `undecidable_changes[]` —— 判不了的变更条目
 
@@ -74,4 +76,4 @@
 3. `undecidable_changes` 与重算结果相等；
 4. `summary` 的每个数字与对应集合长度相等，`impact_complete` 与判不了条数不矛盾；
 5. `selected` ∩ `needs_review` = ∅；
-6. 同一输入两次跑，除 `generated_at` 外**逐字相同**。
+6. 同一输入两次跑，除 `generated_at` 外**逐字相同**（含写到不同轮次目录的情形 —— `cycle_id` 由输入决定）。

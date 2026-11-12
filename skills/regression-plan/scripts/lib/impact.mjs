@@ -133,23 +133,35 @@ function blockedBy(caseObj, changes) {
 }
 
 /**
- * 取该用例最靠前的一条来源标记（可解释的 reason）。
+ * 取该用例**自己**的命中路径标记（可解释的 reason）。
+ *
+ * 口径：标记必须指向**本用例自己**的实际命中路径 ——
+ *   - `requirement_ref:<r>` ：该用例自己引用了需求条目 r，且变更条目也引用了它；
+ *   - `case_ref:<id>`        ：变更条目显式引用了**本用例**；
+ *   - `dim_ref:<dim>` / `dim_signal:<dim>(<词>)`：变更条目命中了**本用例所用的**维度。
+ * 不得拿「变更条目里恰好有的第一个引用」冒充命中路径（那会把一条用例的 reason
+ * 指向另一条用例或另一条需求）。
+ *
+ * @param {object} caseObj 用例
  * @param {object[]} hit 命中该用例的变更条目
  * @returns {string} 来源标记
  */
-function firstMarker(hit) {
+function firstMarker(caseObj, hit) {
+  const caseId = typeof caseObj.id === 'string' ? caseObj.id : '';
+  const caseRequirements = Array.isArray(caseObj.requirement_refs) ? caseObj.requirement_refs : [];
+  const caseDimension = typeof caseObj.dimension === 'string' ? caseObj.dimension : '';
   for (const change of hit) {
     for (const ref of Array.isArray(change.requirement_refs) ? change.requirement_refs : []) {
-      return `requirement_ref:${ref}`;
+      if (caseRequirements.includes(ref)) return `requirement_ref:${ref}`;
     }
     for (const ref of Array.isArray(change.case_refs) ? change.case_refs : []) {
-      return `case_ref:${ref}`;
+      if (ref === caseId) return `case_ref:${ref}`;
     }
     for (const dim of Array.isArray(change.explicit_dimensions) ? change.explicit_dimensions : []) {
-      return `dim_ref:${dim}`;
+      if (dim === caseDimension) return `dim_ref:${dim}`;
     }
     for (const signal of Array.isArray(change.signal_dimensions) ? change.signal_dimensions : []) {
-      return `dim_signal:${signal.dimension}(${signal.signal})`;
+      if (signal.dimension === caseDimension) return `dim_signal:${signal.dimension}(${signal.signal})`;
     }
   }
   return 'affected';
@@ -184,7 +196,7 @@ export function selectCases(cases, changes) {
     if (caseObj.status === 'active') {
       selected.push({
         case_id: caseObj.id,
-        reason: firstMarker(hit),
+        reason: firstMarker(caseObj, hit),
         change_refs: changeRefs,
       });
     }

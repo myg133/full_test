@@ -44,6 +44,20 @@ function sanitize(text) {
 }
 
 /**
+ * 把子进程输出拼成可诊断的片段（内容已由 sanitize 净化过）。
+ * @param {{stdout: string, stderr: string}} run 子进程结果
+ * @returns {string} 多行片段（空串 = 下游没有任何输出）
+ */
+function runOutputDetail(run) {
+  const parts = [];
+  const stdout = String(run.stdout || '').trim();
+  const stderr = String(run.stderr || '').trim();
+  if (stdout !== '') parts.push(`stdout:\n${stdout}`);
+  if (stderr !== '') parts.push(`stderr:\n${stderr}`);
+  return parts.join('\n');
+}
+
+/**
  * 递归复制目录（只做文件复制，不执行被复制的任何脚本）。
  * @param {string} src 源目录
  * @param {string} dst 目标目录
@@ -197,13 +211,21 @@ function scenarioOffline(root, work) {
   const offlineDir = path.join(skillsDir, 'test-execute', 'examples', 'offline');
   const suite = path.join(offlineDir, 'test-assets', 'suites', 'REQ-DEMO-demo', 'suite.json');
   const runner = path.join(skillsDir, 'test-execute', 'scripts', 'run-suite.mjs');
-  if (!fs.existsSync(suite) || !fs.existsSync(runner)) {
-    return { ok: false, message: '临时根里没有 test-execute 的 offline 夹具' };
+  // 逐项点名缺哪个（不把三样东西并列成一句「缺 A / B / C」）
+  const missing = [];
+  if (!fs.existsSync(suite)) missing.push(path.relative(root, suite));
+  if (!fs.existsSync(runner)) missing.push(path.relative(root, runner));
+  if (missing.length > 0) {
+    return { ok: false, message: `临时根里缺这些必需文件: ${missing.join(' / ')}` };
   }
   const outputDir = path.join(work, 'exec-offline');
   const run = runNode(runner, [suite, '--project-root', offlineDir, '--output-dir', outputDir, '--run-id', 'verify-offline'], work);
   if (run.code !== 0) {
-    return { ok: false, message: `offline 夹具执行失败（退出码 ${run.code}）` };
+    const detail = runOutputDetail(run);
+    return {
+      ok: false,
+      message: `offline 夹具执行失败（退出码 ${run.code}）${detail === '' ? '' : `\n${detail}`}`,
+    };
   }
   const metaFile = path.join(outputDir, 'meta.json');
   if (!fs.existsSync(metaFile)) return { ok: false, message: 'offline 夹具没有产出 meta.json' };
@@ -232,8 +254,12 @@ function scenarioCycle(root, work) {
   const suite = path.join(offlineDir, 'test-assets', 'suites', 'REQ-DEMO-demo', 'suite.json');
   const runner = path.join(skillsDir, 'test-execute', 'scripts', 'run-suite.mjs');
   const stateScript = path.join(skillsDir, 'test-case-design', 'scripts', 'cycle-state.mjs');
-  if (!fs.existsSync(suite) || !fs.existsSync(runner) || !fs.existsSync(stateScript)) {
-    return { ok: false, message: '临时根里缺 cycle-state.mjs / run-suite.mjs / offline 夹具' };
+  const missing = [];
+  if (!fs.existsSync(suite)) missing.push(path.relative(root, suite));
+  if (!fs.existsSync(runner)) missing.push(path.relative(root, runner));
+  if (!fs.existsSync(stateScript)) missing.push(path.relative(root, stateScript));
+  if (missing.length > 0) {
+    return { ok: false, message: `临时根里缺这些必需文件: ${missing.join(' / ')}` };
   }
   const cycleDir = path.join(work, 'cycles', 'R2-VERIFY');
   fs.mkdirSync(cycleDir, { recursive: true });
@@ -257,7 +283,13 @@ function scenarioCycle(root, work) {
     ],
     work,
   );
-  if (init.code !== 0) return { ok: false, message: `轮次初始化失败（退出码 ${init.code}）` };
+  if (init.code !== 0) {
+    const detail = runOutputDetail(init);
+    return {
+      ok: false,
+      message: `轮次初始化失败（退出码 ${init.code}）${detail === '' ? '' : `\n${detail}`}`,
+    };
+  }
 
   const outputDir = path.join(work, 'exec-cycle');
   const run = runNode(
@@ -265,7 +297,13 @@ function scenarioCycle(root, work) {
     [suite, '--project-root', offlineDir, '--output-dir', outputDir, '--run-id', 'verify-cycle', '--cycle', cycleDir],
     work,
   );
-  if (run.code !== 0) return { ok: false, message: `带轮次推进的执行失败（退出码 ${run.code}）` };
+  if (run.code !== 0) {
+    const detail = runOutputDetail(run);
+    return {
+      ok: false,
+      message: `带轮次推进的执行失败（退出码 ${run.code}）${detail === '' ? '' : `\n${detail}`}`,
+    };
+  }
 
   const cycleFile = path.join(cycleDir, 'cycle.json');
   if (!fs.existsSync(cycleFile)) return { ok: false, message: '没有产出 cycle.json' };
@@ -292,14 +330,45 @@ function scenarioCycle(root, work) {
  * @returns {number} 退出码
  */
 export function runVerify(rootArg) {
-  const root =
-    typeof rootArg === 'string' && rootArg.trim() !== ''
-      ? path.resolve(rootArg)
-      : fs.mkdtempSync(path.join(os.tmpdir(), 'test-agent-skills-verify-'));
-  const work = path.join(root, '.verify-work');
+  const useTempRoot = !(typeof rootArg === 'string' && rootArg.trim() !== '');
+  const root = useTempRoot
+    ? fs.mkdtempSync(path.join(os.tmpdir(), 'test-agent-skills-verify-'))
+    : path.resolve(rootArg);
+  // 每次跑用**独立**的工作目录：cycle-state.mjs 的 init 不覆盖已有 cycle.json，
+  // 若沿用同一个固定工作目录，第二次跑就会撞上第一次留下的轮次而假失败。
+  const work = path.join(root, '.verify-work', `${process.pid}-${Date.now()}`);
 
   console.log(`[info] 组合门临时根: ${root}`);
 
+  try {
+    return runVerifyIn(root, work);
+  } finally {
+    // 只有**自己建的默认临时根**才清理；调用方给的 --root 是持久根，绝不清理。
+    if (useTempRoot) cleanupTempRoot(root);
+  }
+}
+
+/**
+ * 清理默认临时根（清理失败不影响退出码）。
+ * @param {string} root 临时根
+ */
+function cleanupTempRoot(root) {
+  try {
+    fs.rmSync(root, { recursive: true, force: true });
+    console.log(`[info] 默认临时根已清理: ${root}`);
+  } catch (err) {
+    const detail = err && err.message ? err.message : String(err);
+    console.warn(`[warn] 默认临时根清理失败（不影响退出码）: ${root}（${detail}）`);
+  }
+}
+
+/**
+ * 组合门主流程（根与工作目录已定）。
+ * @param {string} root 安装根
+ * @param {string} work 本次跑的工作目录
+ * @returns {number} 退出码
+ */
+function runVerifyIn(root, work) {
   if (!fs.existsSync(SKILLS_SRC)) {
     console.error(`[error] 包里没有 skills/ 目录: ${SKILLS_SRC}`);
     return 1;
