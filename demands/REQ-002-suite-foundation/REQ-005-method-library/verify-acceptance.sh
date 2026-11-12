@@ -1159,7 +1159,7 @@ else
     ok "AC-026 变异体 100% 被检出（$DET26/$TOT26，还原后回到基线）"
   else
     bad "AC-026 变异体 100% 被检出" \
-        "检出 $DET26/$TOT26（要求 19/19 且无注入异常）逃逸:$ESCAPED 注入异常:$INVALID 还原后回到基线=$RB_OK 基线失败项=[$(printf '%s' "$BASE_KEYS" | tr '\n' ' ')] 最后一次嵌套输出尾部=[$(printf '%s' "$LAST_OUT" | tail -5 | tr '\n' ' ')]"
+        "检出 $DET26/$TOT26（要求 $TOT26_MIN/$TOT26_MIN 且无注入异常）逃逸:$ESCAPED 注入异常:$INVALID 还原后回到基线=$RB_OK 基线失败项=[$(printf '%s' "$BASE_KEYS" | tr '\n' ' ')] 最后一次嵌套输出尾部=[$(printf '%s' "$LAST_OUT" | tail -5 | tr '\n' ' ')]"
   fi
 fi
 
