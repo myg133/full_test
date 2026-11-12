@@ -1198,14 +1198,27 @@ else
       TOT26_MIN=21
     fi
   fi
+  # ---- 22 追溯链护栏：主验收行被洗白成上游条数 + 另补一处正确的 35（= 第十轮 T3 探针本体）----
+  # 这条变异证明**验收脚本自己**能判红第 ⑯ 子判据的"洗白 + 诱饵"形态 ——
+  # 洗白行**完全不含主验收标记**（只写 `REQ-002A`），另补一处正确的 35 让 mainHit 仍然成立。
+  # D25 ⑬ 之后：层结论是结构位 → 同一层出现两处 / 主验收那处不在脚本行上 → 判红。
+  SKIP22=0
+  if [ -f "$MUTROOT/feature-meta/traceability.md" ]; then
+    if printf '%s\n' "$BASE_KEYS" | grep -q "^AC-034$"; then
+      SKIP22=1
+    else
+      run_mut_md "主验收行被洗白成上游条数并补诱饵行" "$MUTROOT/feature-meta/traceability.md" 'const fs=require("fs"),f=process.argv[1];let s=fs.readFileSync(f,"utf8");const lines=s.split(/\r?\n/);let hit=0;const out=[];for(const l of lines){if(hit===0 && l.indexOf("verify-acceptance.sh")>=0 && l.indexOf("35 PASS / 0 FAIL")>=0){hit++;out.push("`REQ-002A` 一并统计 → **19 PASS / 0 FAIL**");out.push("- 主验收结论：**35 PASS / 0 FAIL**");continue;}out.push(l);}if(!hit)process.exit(3);const t=out.join("\n");for(const tok of ["条判据","D1~D","M1.","个维度"]){if(!t.includes(tok))process.exit(3);}fs.writeFileSync(f,t);'
+      TOT26_MIN=22
+    fi
+  fi
   # 还原后必须回到基线（确认变异被还原干净）
   RB_OUT="$(QA005_NO_MUT=1 bash "$SELF" "$MUT" 2>&1)"
   RB_KEYS="$(failkeys "$RB_OUT")"
   RB_OK=0
   if [ "$RB_KEYS" = "$BASE_KEYS" ]; then RB_OK=1; fi
   if [ $DET26 -eq $TOT26 ] && [ $TOT26 -ge $TOT26_MIN ] && [ -z "$INVALID" ] && [ $RB_OK -eq 1 ]; then
-    if [ "${SKIP20:-0}" = "1" ] || [ "${SKIP21:-0}" = "1" ]; then
-      ok "AC-026 变异体 100% 被检出（$DET26/$TOT26，还原后回到基线；基线已在 AC-034 上判红 → 第 20/21 个追溯链护栏变异体不可检测，未计入）"
+    if [ "${SKIP20:-0}" = "1" ] || [ "${SKIP21:-0}" = "1" ] || [ "${SKIP22:-0}" = "1" ]; then
+      ok "AC-026 变异体 100% 被检出（$DET26/$TOT26，还原后回到基线；基线已在 AC-034 上判红 → 第 20/21/22 个追溯链护栏变异体不可检测，未计入）"
     else
       ok "AC-026 变异体 100% 被检出（$DET26/$TOT26，还原后回到基线）"
     fi
@@ -1761,26 +1774,50 @@ else
   // 追溯矩阵里"同一行并列写 19 与 41"的**合法**写法不能被误伤。
   const MAIN_MARK="verify-acceptance.sh";
   const MAIN_WORD="主验收";
-  const layerExpect=(ctx,whole)=>{
-    if(whole.indexOf(MAIN_MARK)>=0 || whole.indexOf(MAIN_WORD)>=0) return {v:actual,name:"主验收"};
-    if(ctx.indexOf("002A")>=0) return upA>=0?{v:upA,name:"REQ-002A"}:null;
-    if(ctx.indexOf("002B")>=0) return upB>=0?{v:upB,name:"REQ-002B"}:null;
-    return {v:actual,name:"主验收"};
+  // ⚠️ D25 ⑬：归属**按文本**判定（不依赖现场实跑真值）——
+  // 真值不可信时（第⑫子判据的「不可判定」）不能把"数出来的次数"也算成 0 而误报。
+  const layerName=(ctx,whole)=>{
+    if(whole.indexOf(MAIN_MARK)>=0 || whole.indexOf(MAIN_WORD)>=0) return "主验收";
+    if(ctx.indexOf("002A")>=0) return "REQ-002A";
+    if(ctx.indexOf("002B")>=0) return "REQ-002B";
+    return "主验收";
   };
+  const layerValue=(nm)=> nm==="主验收"?actual : (nm==="REQ-002A"?upA:upB);
   const mainHit={};
+  const layerCnt={};
+  const mainLines={};
   for(const F of files){
     const txt=perFile[F]||"";
+    layerCnt[F]={"主验收":0,"REQ-002A":0,"REQ-002B":0};
+    mainLines[F]=[];
     for(const line of txt.split(/\r?\n/)){
       let last=0; const re=/(\d+)\s*PASS\s*\/\s*(\d+)\s*FAIL/g; let m;
       while((m=re.exec(line))!==null){
         const ctx=line.slice(last,m.index+m[0].length);
         last=m.index+m[0].length;
-        const e=layerExpect(ctx,line);
-        if(!e) continue;               // 上游真值拿不到 → 已由第⑫子判据报过，不重复报
-        if(e.name==="主验收") mainHit[F]=(mainHit[F]||0)+1;
-        if(Number(m[1])!==e.v) prob.push(F+": 写着 "+m[1]+" PASS / "+m[2]+" FAIL，但这一处属于「"+e.name+"」层（该层真实条数 "+e.v+"）—— 追溯链里的验收数字与实际不符");
+        const nm=layerName(ctx,line);
+        const v=layerValue(nm);
+        layerCnt[F][nm]++;
+        if(nm==="主验收"){ mainHit[F]=(mainHit[F]||0)+1; mainLines[F].push(line); }
+        if(v>=0 && Number(m[1])!==v) prob.push(F+": 写着 "+m[1]+" PASS / "+m[2]+" FAIL，但这一处属于「"+nm+"」层（该层真实条数 "+v+"）—— 追溯链里的验收数字与实际不符");
         if(Number(m[2])!==0) prob.push(F+": 写着 "+m[2]+" 条 FAIL —— 交付态不应有 FAIL");
       }
+    }
+  }
+  // ---- 第⑯子判据（D25 ⑬）：层结论是**结构位**，不是可以随手复述的散文 ----
+  // 每份追溯件里三层结论**各恰好一处**；且归属为主验收的那一处**必须与主验收脚本同行**
+  // （要写主验收结论，就必须写明是哪份脚本跑出来的）。
+  // 动机：第十轮 T3（洗白行完全无主验收标记 + 诱饵行保住 mainHit）与 T8（同义标记 + 002A 同行）
+  // 都能让追溯件**并存一句与主验收相关的假话** —— 数字型造假已被 D25 ⑫ 堵死，
+  // 剩下的就是"同一层被写了两遍、且主验收那处没指向脚本"。
+  for(const F of files){
+    for(const L of ["REQ-002A","REQ-002B"]){
+      const c=layerCnt[F][L];
+      if(c!==1) prob.push(F+": 层结论「"+L+"」出现 "+c+" 处（必须恰好 1 处 —— 层结论是固定结构位，不是可以随手复述的散文）");
+    }
+    if(layerCnt[F]["主验收"]>1) prob.push(F+": 层结论「主验收」出现 "+layerCnt[F]["主验收"]+" 处（必须恰好 1 处 —— 层结论是固定结构位）");
+    for(const l of mainLines[F]){
+      if(l.indexOf(MAIN_MARK)<0) prob.push(F+": 归属为主验收的那处结论没有与主验收脚本（"+MAIN_MARK+"）同行 —— 主验收结论必须写明是哪份脚本跑出来的");
     }
   }
   for(const F of ["status.md","traceability.md"]){
