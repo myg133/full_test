@@ -39,7 +39,7 @@
 
 > **REQ-011 收口（进行中）**：R2 回归轮 —— 交付 `skills/regression-plan/`（第 4 个 skill）
 > + 套件层组合门（`bin/test-agent-skills.mjs` 的组合校验子命令 + 四个 skill 的 `skill-meta.json`）。
-> 判据集 **25 条**（AC-001~AC-025），决策 **D35~D40**。
+> 判据集 **26 条**（AC-001~AC-026），决策 **D35~D41**。
 > ⚠️ **本 REQ 不改 `test-case-design` 的任何文件** → REQ-006 的 42 条判据必须**原样继续全绿**，
 > 作为本 REQ 的上游回归；`code/feature-meta/` 根目录四件套**原地不动**，
 > 本 REQ 的追溯件写进 `code/feature-meta/regression-plan/` 子目录（D39 ③）。

@@ -1,6 +1,6 @@
 # 验收标准：REQ-011 —— R2 回归轮 `regression-plan` skill + 套件层组合门
 
-> 判据集：**25 条**（AC-001~AC-025），**自包含**于本文件。
+> 判据集：**26 条**（AC-001~AC-026），**自包含**于本文件。
 > 被验对象：`<package>/skills/regression-plan/`（skill 本体） + `<package>/bin/`（套件层组合门）。
 > 判据形式统一为「**可证伪 + 查绝对事实**」：每条都要能指出"改坏什么 → 本条判红"。
 > **不可判定时不判通过** —— 找不到被护对象、读不到输入、依赖缺失，一律判红，不许自我豁免。
@@ -262,7 +262,27 @@ node scripts/check-plan.mjs --plan <file> --cases <file> --changelog <file> \
 
 ---
 
-## 验收方式与门禁
+## H 组：交付侧追溯（AC-026）
+
+### AC-026: 本 REQ 的追溯件必须与实际一致，且不得改写 REQ-006 的追溯件
+- **前置条件**: 被验包目录 + `feature-meta/` 目录
+- **测试步骤**:
+  ① `feature-meta/regression-plan/` 下的四件套（`status.md` / `traceability.md` / `verification-report.md` / `manifest.json`）**存在且非空**，缺一即判红
+  ② `feature-meta/manifest.json`（**根目录**那一份）的 `req` 必须仍是 `REQ-006` —— 本 REQ **不得改写** REQ-006 的追溯件（若被改成 `REQ-011` 或缺失 → 判红）
+  ③ `feature-meta/regression-plan/traceability.md` 里以 `| AC-0` 开头的**追溯矩阵行数**必须 == 25，且其 AC 编号集合恰好等于 `AC-001`~`AC-025`（多一行、少一行、或出现集合外的编号 → 判红）
+  ④ 三份 md 追溯件里**恰好各有一处**「25 条判据」，且该数字 == `acceptance.md` 里 `### AC-` 的实际条数（**上游回归的数字写的是「N PASS / 0 FAIL」形态，不受影响**）
+  ⑤ 三份 md 追溯件里写明的**决策号范围**必须与本 REQ `decisions.md` 的实际 D 号集合一致（应为 `D35~D40`；集合不符 → 判红）
+  ⑥ `feature-meta/regression-plan/manifest.json` 的 `req` == `REQ-011`，且 `demand_dir` 指向的目录**真实存在**
+- **预期结果**: 六项全满足；任一不符 → 判红并点名是哪一项
+- **判据形式**: 查**绝对事实**（追溯件的实际内容 + `acceptance.md` / `decisions.md` 的实际条数与编号）；
+  探针：把追溯件里的判据条数改成 42 → 本条判红；把根目录 `manifest.json` 的 `req` 改成 `REQ-011` → 本条判红；删掉追溯矩阵的一行 → 本条判红
+- **类型**: 可用性
+- **说明**: 追溯链上的数字如果**没人核**，它就只是"看着像已验"——
+  这正是 REQ-005 的 D25 ⑬⑭ F-A 与 REQ-006 的 AC-034 要消灭的东西。
+  ② 是本 REQ 的**自我约束**：REQ-006 的四件套已被独立验收钉版，本 REQ 改写它就会断掉那条链（见 D39 ③）。
+
+---
+
 
 | 项 | 命令 |
 |---|---|
@@ -270,7 +290,7 @@ node scripts/check-plan.mjs --plan <file> --cases <file> --changelog <file> \
 | 上游回归（必须全绿） | REQ-006 主验收、REQ-002A 回归、REQ-002B 回归 |
 
 - 主验收退出码 `0` = 全通过；`1` = 有 FAIL
-- 判据条数：**25**（AC-001~AC-025）
+- 判据条数：**26**（AC-001~AC-026）
 - 任何"脚本全绿的结论"**必须钉版本**（记 `verify-acceptance.sh` 的 sha256）——
   同一批变异体在不同版本的脚本上结论可以不同（D34）。
 - **独立验收**由验收方自造探针攻击本判据集，不复用本脚本的结论。
