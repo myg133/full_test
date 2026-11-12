@@ -9,8 +9,14 @@
   - `references/design-methods.md` —— 方法说明文档（人读；校验依据只有 JSON）
   - `references/coverage-dimensions.md` —— 维度清单文档（由脚本对照保证与 JSON 一致）
   - `references/case-schema.md` —— 用例集结构契约（schema v2）
+  - `references/project-layout.md` —— 项目布局契约（REQ-002B）
+  - `references/state-machine.md` —— 轮次状态机说明（REQ-002.5a）
   - `scripts/check-methods.mjs` —— 方法使用与维度适用性核验器
   - `scripts/validate-cases.mjs` —— 用例集结构校验器
+  - `scripts/cycle-state.mjs` —— 轮次状态推进脚本
+  - `scripts/render-report.mjs` —— 报告渲染脚本
+  - `scripts/verify-layout.mjs` —— 目录契约校验脚本
+  - `scripts/lib/state-machine.mjs` —— 状态机公共库
   - `SKILL.md` —— skill 入口（方法选择与维度适用性一律走脚本）
 - 核心变更：`methods_applied[]` 从「字符串声明」变成「可核验事实」——
   声称用了某方法，必须能在用例集里找到该方法的必需产出，否则报 ERROR。
