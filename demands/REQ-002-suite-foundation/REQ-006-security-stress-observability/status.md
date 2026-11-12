@@ -29,6 +29,26 @@
 | 合并 commit | `9d95ad3`（develop，`--no-ff`） |
 | 合并物 vs 被验物 | `diff -r` 逐字节一致（skills + feature-meta） |
 | 独立验收探针 | 44 → 49 探针，检出 41 → 45，逃逸 3 → 4（逃逸均为已知限制，非真缺陷） |
+| 收尾复跑目标路径 | `code/skills/test-case-design`（合并后的 develop）——**已实际跑出 42/0、19/0、41/0** |
+
+### 路径与分支的时效说明
+
+`code/feature-meta/{status,traceability}.md` 里记录的命令路径是
+`feature-REQ-006/skills/test-case-design`、分支是 `feature/REQ-006` ——
+这是**验收当时的真实路径**（被验物当时就在那个 worktree 里）。
+收口时该 worktree 与分支已被回收（分支已并入 develop），所以那份记录里的路径**现已不存在**。
+
+当前**可复现的规范路径**是 `code/skills/test-case-design`（合并后的 develop 内容）：
+
+```bash
+bash BA/demands/REQ-002-suite-foundation/REQ-006-security-stress-observability/verify-acceptance.sh code/skills/test-case-design
+```
+
+已按此路径实跑复现 42 PASS / 0 FAIL（见上「收尾复跑目标路径」行）。
+
+**未改 `feature-meta` 里的旧路径**：那两份文件是独立验收钉版的被验对象的一部分，
+按「验收后不改被验文件」这条纪律，改它会断掉「合并物 == 被独立验收物」这条链 ——
+该链的价值高于记录里一个已失效的路径字符串。登记为遗留项（见下表 L-1）。
 
 ## 交付物
 
@@ -40,6 +60,7 @@
 
 | 编号 | 内容 |
 |---|---|
+| L-1 | `code/feature-meta/{status,traceability}.md` 里记录的运行路径 `feature-REQ-006/skills/test-case-design` 与分支 `feature/REQ-006` 在收口回收后已失效 —— 属**验收当时的真实路径**，非错误；当前规范路径为 `code/skills/test-case-design`（已实跑复现 42/0）。**不改动被验文件**以保「合并物 == 被独立验收物」链 |
 | P2-1 / 散文形态验收数字 | 连续两轮同根因，按 D25 ⑭ F-A 不再收窄一档 |
 | P2-2 | 文档 ↔ 方法库 `required_outputs` 分叉（与 D25 ⑭ F-C 同族） |
 | P2-3 | AC-036 只查非空不查实质（与 P2-1 同族） |
