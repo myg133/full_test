@@ -47,7 +47,7 @@
 | AC-023 四个谓词分支真的生效 | `references/methods.json`（`required_outputs` 四种 kind）、`scripts/check-methods.mjs`（`evaluateRequiredOutputs`） | 四份样本各只违反一个谓词 → 四份均退出码 1，报"缺少必需产出"且点名 `M1.4`/`M1.5`/`M1.3`/`M1.6` | PASS |
 | AC-024 M0.x/M4.x 判"无法判定" | `scripts/check-methods.mjs`（未登记编号 → `addUndecidable`，不判 satisfied）、`references/case-schema.md`（编号分段说明） | `--json` 输出里 `undecidable` 含 `M0.1`、其 verdict status 为 `undecidable`、`errors` 不含 `M0.1` | PASS |
 | AC-025 check-methods 侧跳过文案也区分方法/维度 | `scripts/check-methods.mjs`（`跳过的维度 X` / `跳过的方法 X` 标签） | 场景 A 含 `M1.4`+"方法"、场景 B 含 `concurrency`+"维度"（同行），且 B 不含"跳过方法" | PASS |
-| AC-026 变异体 100% 被检出 | `scripts/check-methods.mjs`、`scripts/validate-cases.mjs`（被 BA 脚本在副本上注入 20 个变异） | 20 个变异体逐个注入 → 全部被测出；变异后还原，失败项集合回到基线 | PASS |
+| AC-026 变异体 100% 被检出 | `scripts/check-methods.mjs`、`scripts/validate-cases.mjs`（被 BA 脚本在副本上注入 21 个变异） | 21 个变异体逐个注入 → 全部被测出；变异后还原，失败项集合回到基线 | PASS |
 | AC-027 实现里的注释不得与实现相反 | `scripts/validate-cases.mjs`（"维度名不在枚举内"分支的注释口径 = ERROR，与 `fail(...)` 实现一致） | 注释里不再出现"只报 WARN"字样；对应实现分支确为 `fail` | PASS |
 | AC-028 `feature-meta/` 不得张冠李戴 | `feature-meta/status.md`、`feature-meta/traceability.md`、`feature-meta/verification-report.md`、`feature-meta/manifest.json` | `feature-meta/` 目录与四件套齐全（缺一即 FAIL）；每份追溯文件的**首行**必须自证是 `REQ-005`，且 `REQ-005` 出现次数**多于**任何其它 REQ 编号（主体性：只留 token 的骨架、或整份改讲别的 REQ → FAIL）；`manifest.json` 的 `req` == `REQ-005` 且 `branch` 里有且只有一个 REQ 编号且为 `REQ-005`；`demand_dir` 非空且解析后与本 REQ 需求目录同一路径 | PASS |
 | AC-029 ERROR 必须真的标成 ERROR | `scripts/check-methods.mjs`（`SEVERITY_ERROR`、人读输出的"ERROR 明细"/"WARN 明细"两节与"结论:"行） | 人读输出含 `ERROR 明细` 标题 + "N 个 ERROR" + `WARN 明细` 标题，且错误条数 == `--json` 的 `summary.errors` | PASS |
