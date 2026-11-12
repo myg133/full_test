@@ -1,0 +1,7 @@
+{
+  "name": "test-execute",
+  "version": "0.1.0",
+  "requires": {
+    "test-case-design": ">=0.1.0"
+  }
+}
