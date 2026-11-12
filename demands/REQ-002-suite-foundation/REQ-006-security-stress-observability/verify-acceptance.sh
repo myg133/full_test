@@ -2070,7 +2070,13 @@ let o={};
 try{ o=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); }catch(e){ console.log("prob=1|"); console.log("detail=读不到方法库"); process.exit(0); }
 const methods=Array.isArray(o.methods)?o.methods:[];
 const m2=methods.filter((m)=>m && typeof m.id==="string" && /^M2\./.test(m.id));
-if(m2.length===0) prob.push("方法库里没有 M2. 段的方法");
+// ⚠️ 独立验收 P3-6 订正：原口径只看「M2. 段 ≥1 条」—— 把 M2.3 删掉本条仍绿
+// （只是被 AC-002「文档提到库里没有的 M2.3」**顺带**兜住，不是本条自己的护栏）。
+// 但 D27 ① 写死的就是这三个方法（威胁建模 STRIDE / 攻击面枚举 / 模糊测试），
+// 少一个 = 实现偏离决策。故改为：**该出现的三个必须都在**（不禁止将来新增 M2.4+）。
+const wantM2=["M2.1","M2.2","M2.3"];
+const gotM2=m2.map((m)=>String(m.id));
+for(const id of wantM2){ if(!gotM2.includes(id)) prob.push("方法库里缺少 D27 ① 指定的方法 "+id); }
 const need=["id","name","applies_when","not_applies_when","required_outputs","typical_dimensions","anti_patterns"];
 for(const m of m2){
   for(const f of need){
@@ -2113,6 +2119,11 @@ const dims=new Set((Array.isArray(lib.dimensions)?lib.dimensions:[]).map((d)=>St
 const KINDS=["min_cases_by_dimension","distinct_expected","has_dimension","min_assertions_per_case","min_cases_total","dimension_pair_present"];
 const m2=(Array.isArray(o.methods)?o.methods:[]).filter((m)=>m && typeof m.id==="string" && /^M2\./.test(m.id));
 if(m2.length===0) prob.push("方法库里没有 M2. 段的方法（无法核验其必需产出）");
+else{
+  const wantM2b=["M2.1","M2.2","M2.3"];
+  const gotM2b=m2.map((m)=>String(m.id));
+  for(const id of wantM2b){ if(!gotM2b.includes(id)) prob.push("方法库里缺少 D27 ① 指定的方法 "+id+"（其必需产出无从核验）"); }
+}
 for(const m of m2){
   const outs=Array.isArray(m.required_outputs)?m.required_outputs:[];
   if(outs.length===0){ prob.push("方法 "+m.id+" 的 required_outputs 为空"); continue; }
