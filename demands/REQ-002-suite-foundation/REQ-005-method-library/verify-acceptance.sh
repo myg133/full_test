@@ -42,10 +42,26 @@ step(){ printf '\n\033[36m— %s\033[0m\n' "$1"; }
 # 验收照样 35/0。只比对"文档与文档"仍然是 token 存在性检查；真值只能来自脚本自己跑出来的结论行。
 # 放在 AC-026 之前算一次并 export —— 嵌套运行复用外层的真值，不重复跑（否则每轮多花 ~2 分钟）。
 up_count() {
-  local s="$1" tcd="$2" out
+  local s="$1" tcd="$2" out p f attempt fixt
   if [ ! -f "$s" ]; then echo -1; return; fi
-  out="$(bash "$s" "$tcd" 2>/dev/null | sed -n 's/.*结论: *\([0-9][0-9]*\) PASS.*/\1/p' | tail -1)"
-  case "$out" in ''|*[!0-9]*) echo -1 ;; *) echo "$out" ;; esac
+  # ⚠️ D25 ⑪：上游回归的「结论行」被当真值用，但它**自己可能不稳**（夹具抖动）。
+  # 规则：① 干净（0 FAIL）→ 用它的 PASS 数；
+  #      ② 有 FAIL 且全是「夹具未生效」→ 夹具抖动 → 重试（最多 3 次）；
+  #      ③ 有真偏差 → 不重试，如实把真实计数交出去，让第⑫条判红（**不掩盖真缺陷**）；
+  #      ④ 连续 3 次都不可信 → 返回 -2 = 真值不可信 → 第⑫条判「不可判定」：
+  #         既不指控报告数字不符，也不放行。
+  for attempt in 1 2 3; do
+    out="$(bash "$s" "$tcd" 2>/dev/null)"
+    p="$(printf '%s\n' "$out" | sed -n 's/.*结论: *\([0-9][0-9]*\) PASS.*/\1/p' | tail -1)"
+    f="$(printf '%s\n' "$out" | sed -n 's/.*结论: [0-9][0-9]* PASS *\/ *\([0-9][0-9]*\) FAIL.*/\1/p' | tail -1)"
+    case "$p" in ''|*[!0-9]*) p=-1 ;; esac
+    case "$f" in ''|*[!0-9]*) f=-1 ;; esac
+    if [ "$f" = "0" ]; then echo "$p"; return; fi
+    fixt="$(printf '%s\n' "$out" | grep -c '夹具未生效' || true)"
+    case "$fixt" in ''|*[!0-9]*) fixt=0 ;; esac
+    if [ "$f" -gt 0 ] && [ "$fixt" -eq 0 ]; then echo "$p"; return; fi
+  done
+  echo -2
 }
 UP2A_SCRIPT="$DEMAND_ROOT/BA/demands/REQ-002-suite-foundation/REQ-002A-schema-v2/verify-regression-002a.sh"
 UP2B_SCRIPT="$DEMAND_ROOT/BA/demands/REQ-002-suite-foundation/REQ-002B-project-layout/verify-regression-002b.sh"
@@ -834,7 +850,17 @@ else
   if [ $RC_VS_VC -eq 0 ] && ! printf '%s' "$OUT_VS_VC" | grep -q "dimension"; then POS_OK=$((POS_OK+1)); fi
   # ---------- ② 数据级变异 1：删掉 dimensions.json → 不得静默降级 ----------
   cp -r "$TCD" "$WORK/nolib-skill"
-  rm -f "$WORK/nolib-skill/references/dimensions.json"
+  # ⚠️ D25 ⑪：删除型夹具改成「移开」（同盘 rename，不经宿主的可恢复删除运行时），
+  # 并**断言确实移走了**：那个运行时在高并发下会失败，删除没发生 → 变异没打上 →
+  # 本该失败的样本变成"通过"（假检出），且会把交付缺陷掩盖成环境问题。
+  NL_MOVED=0
+  for _nl_try in 1 2 3; do
+    if [ -f "$WORK/nolib-skill/references/dimensions.json" ]; then
+      mv "$WORK/nolib-skill/references/dimensions.json" "$WORK/dimensions.json.moved" 2>/dev/null
+    fi
+    if [ ! -f "$WORK/nolib-skill/references/dimensions.json" ]; then NL_MOVED=1; break; fi
+    sleep 0.2
+  done
   OUT_NL="$(node "$WORK/nolib-skill/scripts/validate-cases.mjs" "$WORK/valid_skip.json" 2>&1)"; RC_NL=$?
   M1_OK=0
   # 库缺失 → 必须**明确报错**（码 2 或输出点名 dimensions.json）；若 rc=0 照常通过 = 有硬编码兜底
@@ -871,7 +897,7 @@ else
     ok "AC-022 新增契约自身要被验收（正反对消 2/2 + 数据级变异 2/2）"
   else
     bad "AC-022 新增契约自身要被验收" \
-        "正反对消=$POS_OK/2(期望2) 删库变异=$M1_OK/1(期望1,rc=$RC_NL) 库文档漂移变异=$DR_OK/1(期望1,rc=$DR_RC) 漂移输出=$DR_OUT 删库输出=$OUT_NL 合法写法输出=$OUT_VS_CM"
+        "正反对消=$POS_OK/2(期望2) 删库变异=$M1_OK/1(期望1,rc=$RC_NL,夹具移走=$NL_MOVED) 库文档漂移变异=$DR_OK/1(期望1,rc=$DR_RC) 漂移输出=$DR_OUT 删库输出=$OUT_NL 合法写法输出=$OUT_VS_CM"
   fi
 fi
 
@@ -1689,9 +1715,13 @@ else
     }
   }
   // ---- 第⑫子判据：上游两层的 PASS 数必须等于**现场实跑**的结果（第七轮 X04：002A 层改成 0 仍判过）
-  if(upA<0) prob.push("verification-report.md: 无法核对 REQ-002A 层的 PASS 数（上游回归脚本缺失或执行失败）—— 不能因为「找不到被护对象」就放行");
+  // D25 ⑪：-2 = 上游现场实跑连续 3 次自身判红且全是夹具抖动 → **真值不可信 → 不可判定**：
+  // 既不能据此指控报告数字不符（那会把环境抖动误报成记账造假），也不得放行。
+  if(upA===-2) prob.push("verification-report.md: 无法核对 REQ-002A 层的 PASS 数（上游回归现场实跑连续 3 次自身判红且均为夹具抖动，真值不可信）—— 本条**不可判定**：既不指控报告数字不符，也不得放行");
+  else if(upA<0) prob.push("verification-report.md: 无法核对 REQ-002A 层的 PASS 数（上游回归脚本缺失或执行失败）—— 不能因为「找不到被护对象」就放行");
   else if(layerNum["REQ-002A"] && layerNum["REQ-002A"].P!==upA) prob.push("verification-report.md: REQ-002A 层写 "+layerNum["REQ-002A"].P+" PASS，现场实跑是 "+upA+" —— 报告数字与真实结果不符");
-  if(upB<0) prob.push("verification-report.md: 无法核对 REQ-002B 层的 PASS 数（上游回归脚本缺失或执行失败）—— 不能因为「找不到被护对象」就放行");
+  if(upB===-2) prob.push("verification-report.md: 无法核对 REQ-002B 层的 PASS 数（上游回归现场实跑连续 3 次自身判红且均为夹具抖动，真值不可信）—— 本条**不可判定**：既不指控报告数字不符，也不得放行");
+  else if(upB<0) prob.push("verification-report.md: 无法核对 REQ-002B 层的 PASS 数（上游回归脚本缺失或执行失败）—— 不能因为「找不到被护对象」就放行");
   else if(layerNum["REQ-002B"] && layerNum["REQ-002B"].P!==upB) prob.push("verification-report.md: REQ-002B 层写 "+layerNum["REQ-002B"].P+" PASS，现场实跑是 "+upB+" —— 报告数字与真实结果不符");
   // ---- 第⑬子判据：三份追溯文件里**每一处**「N PASS / M FAIL」都必须与它所属那层的真实条数一致（第七轮 X08/X09）
   // 归属判定：看该处数字**同一行内、它前面**的上下文提到的是哪一层（002A / 002B / 都不是 → 主验收）

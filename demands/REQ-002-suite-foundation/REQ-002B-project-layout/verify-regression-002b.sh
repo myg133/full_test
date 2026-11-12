@@ -65,17 +65,37 @@ EOF
 }
 
 mut() { # $1=用例名 $2=期望 $3=变异命令
-  local d="$WORK/$1"; mkdir -p "$WORK"; cp -r "$WORK/_base" "$d"
-  ( cd "$d" && eval "$3" ) 2>/dev/null
-  local out rc; out="$(node "$VL" "$d" 2>&1)"; rc=$?
-  local got="放行"; [ $rc -ne 0 ] && got="拦截"
-  if [ "$got" = "$2" ]; then
-    PASS=$((PASS+1)); printf '  \033[32mPASS\033[0m  %-42s %s\n' "$1" "$2"
-  else
-    FAIL=$((FAIL+1)); FAILED_LIST+=("$1")
-    printf '  \033[31mFAIL\033[0m  %-42s 期望=%s 实际=%s\n' "$1" "$2" "$got"
-    echo "$out" | sed 's/^/      ↳ /' | head -4
-  fi
+  # ⚠️ D25 ⑪：夹具必须**自证** —— 变异到底有没有真的打上。
+  # 背景：本机 rm 被宿主的「可恢复删除」运行时接管（rm → RECOVERABLE_DELETE_RUNTIME），该运行时在
+  # 高并发下会失败（RECOVERABLE_DELETE_RUNTIME: failed to trash ...）→ 删除没发生 → 变异没打上 →
+  # 校验器「放行」→ 用例被记成**交付缺陷**。实测 8 路并发下 8 次里有 7 次是这种假红。
+  # 修法：① 删除型变异改成「移开」（mv，同盘 rename，不经删除运行时）；
+  #      ② 施加变异后比对被测树与基线树：树没变 = 变异没生效 = 夹具问题 → 重试；
+  #         树变了还判错 = 真偏差 → 不再重试（**不掩盖真缺陷**）。
+  local expect="$2" cmd="$3" attempt d got out rc changed
+  for attempt in 1 2 3; do
+    d="$WORK/$1"
+    [ "$attempt" -gt 1 ] && d="$WORK/$1.r$attempt"
+    cp -r "$WORK/_base" "$d" || { sleep 0.2; continue; }
+    CASE_DIR_NAME="$(basename "$d")"; export CASE_DIR_NAME
+    ( cd "$d" && eval "$cmd" ) 2>/dev/null
+    if diff -r -q "$WORK/_base" "$d" >/dev/null 2>&1; then changed=0; else changed=1; fi
+    out="$(node "$VL" "$d" 2>&1)"; rc=$?
+    got="放行"; [ $rc -ne 0 ] && got="拦截"
+    if [ "$got" = "$expect" ]; then
+      PASS=$((PASS+1)); printf '  \033[32mPASS\033[0m  %-42s %s\n' "$1" "$expect"; return 0
+    fi
+    if [ "$changed" = "1" ]; then
+      FAIL=$((FAIL+1)); FAILED_LIST+=("$1")
+      printf '  \033[31mFAIL\033[0m  %-42s 期望=%s 实际=%s\n' "$1" "$expect" "$got"
+      echo "$out" | sed 's/^/      ↳ /' | head -4
+      return 1
+    fi
+    sleep 0.2
+  done
+  FAIL=$((FAIL+1)); FAILED_LIST+=("$1")
+  printf '  \033[31mFAIL\033[0m  %-42s 夹具未生效：变异命令没有改变被测树（已重试 3 次）\n' "$1"
+  return 1
 }
 
 make_project "$WORK/_base"
@@ -95,9 +115,9 @@ echo
 mut "00-基线-未变异" "放行" "true"
 
 # --- 目录与文档存在性 ---
-mut "01-缺 test-assets 目录" "拦截" "rm -rf test-assets"
-mut "02-缺 environments 目录" "拦截" "rm -rf test-assets/environments"
-mut "03-缺 _schema.json" "拦截" "rm -f test-assets/environments/_schema.json"
+mut "01-缺 test-assets 目录" "拦截" 'mv test-assets "../$CASE_DIR_NAME.gone"'  # D25 ⑪：移开而非删除
+mut "02-缺 environments 目录" "拦截" 'mv test-assets/environments "../$CASE_DIR_NAME.gone"'  # D25 ⑪：移开而非删除
+mut "03-缺 _schema.json" "拦截" 'mv test-assets/environments/_schema.json "../$CASE_DIR_NAME.gone"'  # D25 ⑪：移开而非删除
 mut "04-_schema.json 不可解析" "拦截" "printf 'not json' > test-assets/environments/_schema.json"
 
 # --- 环境配置 ---
