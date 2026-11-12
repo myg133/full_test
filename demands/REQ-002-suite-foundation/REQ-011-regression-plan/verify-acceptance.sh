@@ -1676,11 +1676,16 @@ if [ -z "$A19_PROBLEMS" ]; then ok "$A19"; else bad "$A19" "$A19_PROBLEMS"; fi
 step "AC-020 同一输入两次跑输出必须逐字相同（除时间戳）"
 A20="AC-020 同一输入两次跑输出必须逐字相同（除时间戳）"
 mkdir -p "$WORK/idem1/R2-CHANGELOG-2.3" "$WORK/idem2/R2-CHANGELOG-2.3"
-# D46（F-1）：两次跑各用**独立副本**（内容逐字相同）⇒ 真正满足「同一输入两次跑」；
-#   实现对输入的写回不会让第二次的输入与第一次不同（此前两次共用 $FX/cases.json）。
-input_copy "$WORK/in-idem1"; input_copy "$WORK/in-idem2"
-node "$RP/scripts/plan-regression.mjs" --changelog "$WORK/in-idem1/CHANGELOG.md" --cases "$WORK/in-idem1/cases.json" --cycle-dir "$WORK/idem1/R2-CHANGELOG-2.3" >/dev/null 2>&1
-node "$RP/scripts/plan-regression.mjs" --changelog "$WORK/in-idem2/CHANGELOG.md" --cases "$WORK/in-idem2/cases.json" --cycle-dir "$WORK/idem2/R2-CHANGELOG-2.3" >/dev/null 2>&1
+# D47：**「同一输入」= 同一个文件（同一路径）**，不是"内容相同的两份文件" ——
+#   被验实现把 source.cases / source.changelog 的**路径**写进计划输出，
+#   而 AC-020 比的是**输出逐字相同**（plan-diff.mjs 只豁免时间戳、**不归一化路径**）
+#   ⇒ 两次跑必须指向**同一个副本路径**；用两份不同路径的副本会**必然**判红（D46 的回归）。
+#   副本仍从 **pristine 快照**取 —— D46 的「不再依赖共享夹具」性质保持不变。
+#   语义后果：实现**幂等**写回输入 ⇒ 第二次输入已变但两次输出仍相同 ⇒ 绿；
+#             实现**非幂等**改写输入 ⇒ 两次输出不同 ⇒ 红（合理）。
+input_copy "$WORK/in-idem"
+node "$RP/scripts/plan-regression.mjs" --changelog "$WORK/in-idem/CHANGELOG.md" --cases "$WORK/in-idem/cases.json" --cycle-dir "$WORK/idem1/R2-CHANGELOG-2.3" >/dev/null 2>&1
+node "$RP/scripts/plan-regression.mjs" --changelog "$WORK/in-idem/CHANGELOG.md" --cases "$WORK/in-idem/cases.json" --cycle-dir "$WORK/idem2/R2-CHANGELOG-2.3" >/dev/null 2>&1
 P1F="$WORK/idem1/R2-CHANGELOG-2.3/regression-plan.json"
 P2F="$WORK/idem2/R2-CHANGELOG-2.3/regression-plan.json"
 if [ ! -s "$P1F" ] || [ ! -s "$P2F" ]; then
