@@ -35,6 +35,17 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/qa-006-XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 
 PASS=0; FAIL=0; FAILED_LIST=()
+
+# ---- 变异体套件的**绝对锚点**（D31 ⑧，独立验收 P3-1 实测）----
+# 为什么要有它：AC-026 的判定下限 `TOT26_MIN` 与变异体清单**写在同一段代码里** ——
+# 删掉一个变异体（连同它那一行 `TOT26_MIN=NN` 递增）时，下限跟着一起降 →
+# 门永远发现不了。独立验收实测：把变异体 23~28 共 6 个删掉（并同步改掉追溯件里的钉版 sha
+# 以消除 AC-034 的连带红），脚本自跑仍报「22/22，还原后回到基线」、整体仍 **42 PASS / 0 FAIL**。
+# 改法：条数与一个**写在本文件顶部**的绝对常量比对 —— 删变异体不会动这个常量 → 立刻判红；
+# 连常量一起删 → 取不到值 → 判红（**失败关闭**）。
+# ⚠️ 这个常量必须留在**离变异体清单远**的位置（文件顶部），否则连同清单一起被删就失效。
+EXPECT_MUTANTS=28
+
 ok()  { PASS=$((PASS+1)); printf '  \033[32mPASS\033[0m  %s\n' "$1"; }
 bad() { FAIL=$((FAIL+1)); FAILED_LIST+=("$1"); printf '  \033[31mFAIL\033[0m  %s\n     ↳ %s\n' "$1" "${2:-}"; }
 step(){ printf '\n\033[36m— %s\033[0m\n' "$1"; }
@@ -1300,7 +1311,13 @@ else
   RB_KEYS="$(failkeys "$RB_OUT")"
   RB_OK=0
   if [ "$RB_KEYS" = "$BASE_KEYS" ]; then RB_OK=1; fi
-  if [ $DET26 -eq $TOT26 ] && [ $TOT26 -ge $TOT26_MIN ] && [ -z "$INVALID" ] && [ $RB_OK -eq 1 ]; then
+  # ---- 绝对锚点自检（D31 ⑧）：源码里声明的变异体调用点数量必须 == 顶部常量 ----
+  # ⚠️ 用**源码里的调用点**做计数（而不是运行时数出来的 TOT26）——
+  #    运行时计数会随"删变异体"一起变，自证无效；源码计数不会。
+  DECLARED_MUT="$(grep -cE '^[[:space:]]*run_mut(_json|_md)?[[:space:]]+"' "$SELF" 2>/dev/null || echo 0)"
+  ANCHOR_OK=0
+  if [ "${DECLARED_MUT:-0}" = "${EXPECT_MUTANTS:-__MISSING__}" ] 2>/dev/null; then ANCHOR_OK=1; fi
+  if [ $DET26 -eq $TOT26 ] && [ $TOT26 -ge $TOT26_MIN ] && [ -z "$INVALID" ] && [ $RB_OK -eq 1 ] && [ $ANCHOR_OK -eq 1 ]; then
     if [ "${SKIP20:-0}" = "1" ] || [ "${SKIP21:-0}" = "1" ] || [ "${SKIP22:-0}" = "1" ] \
        || [ "${SKIP23:-0}" = "1" ] || [ "${SKIP24:-0}" = "1" ] || [ "${SKIP25:-0}" = "1" ] \
        || [ "${SKIP26:-0}" = "1" ] || [ "${SKIP27:-0}" = "1" ] || [ "${SKIP28:-0}" = "1" ]; then
@@ -1310,6 +1327,7 @@ else
     fi
   else
     bad "AC-026 变异体 100% 被检出" \
+        "检出=$DET26/$TOT26 下限=$TOT26_MIN 无效=[$INVALID] 还原回基线=$RB_OK 锚点(源码声明 $DECLARED_MUT 个 / 绝对锚点 $EXPECT_MUTANTS 个)=$ANCHOR_OK" \
         "检出 $DET26/$TOT26（要求 $TOT26_MIN/$TOT26_MIN 且无注入异常）逃逸:$ESCAPED 注入异常:$INVALID 还原后回到基线=$RB_OK 基线失败项=[$(printf '%s' "$BASE_KEYS" | tr '\n' ' ')] 最后一次嵌套输出尾部=[$(printf '%s' "$LAST_OUT" | tail -5 | tr '\n' ' ')]"
   fi
 fi
