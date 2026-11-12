@@ -19,7 +19,8 @@
 - 验收脚本（BA 的资产，本 REQ 未改动）：
   `BA/demands/REQ-002-suite-foundation/REQ-011-regression-plan/verify-acceptance.sh`
 - 需求文档（只读）：`BA/demands/REQ-002-suite-foundation/REQ-011-regression-plan/`
-  （`acceptance.md` 判据集 28 条 / `decisions.md` D35~D43）
+  （`acceptance.md` 判据集 28 条 / `decisions.md` D35~D44）
+- 验收脚本的 sha256 钉版值：`54efde3477e68f1aa70e9bdd4770873d0cd7a4216d8638f846c5daac69e5bd4a`
 
 > 本 REQ 的验收判据集共 28 条判据（AC-001~AC-028），下表逐条给出交付位置与自验方式。
 
@@ -38,7 +39,7 @@
 | AC-011 每条选样都必须有可解释的来源 | `skills/regression-plan/scripts/lib/impact.mjs` | 每条选样的 `reason` 非空、`change_refs` 非空且都存在于 `changes[].id`；来源标记逐个对上输入与库里的事实 | PASS |
 | AC-012 判不了的变更必须显式列出 | `skills/regression-plan/scripts/lib/impact.mjs`（`findUndecidable`） | 无显式引用且正文未命中任何维度/方法信号的条目须出现在 `undecidable_changes[]` 且 `reason` 非空 | PASS |
 | AC-013 判不了的变更不得让任何用例进 selected | `skills/regression-plan/scripts/lib/impact.mjs` | 断言没有任何 `selected` 条目的 `change_refs` 含判不了条目的 id | PASS |
-| AC-014 坏引用必须报错，不得静默 | `skills/regression-plan/scripts/plan-regression.mjs`（`verifyReferences`） | 两份坏 changelog（`@R-99` / `@TC-999`）实跑：退出码 1（非 0 非 2）且输出点名那个 id | PASS |
+| AC-014 坏引用必须报错，不得静默 | `skills/regression-plan/scripts/plan-regression.mjs`（`verifyReferences`） | 三份坏 changelog（`@R-99` / `@TC-999` / `@dim:not-a-real-dimension`）实跑：退出码 1（非 0 非 2）且输出点名那个 id 或维度名；三类坏引用是同一类（引用指向的实体在权威来源里不存在） | PASS |
 | AC-015 摘要数字与影响面完整声明 | `skills/regression-plan/scripts/lib/plan.mjs` | `summary` 的四个数字与对应集合长度逐字相等；`impact_complete` 与判不了条数不矛盾 | PASS |
 | AC-016 非 active 的用例不得进 selected | `skills/regression-plan/scripts/lib/impact.mjs` | 输入里 `status != active` 的用例 id 不得出现在 `selected` 的 id 集合中 | PASS |
 | AC-017 方法 not_applies_when 命中的用例必须进 needs_review | `skills/regression-plan/scripts/lib/impact.mjs`（`blockedBy`） | 用了被挡住方法且落在影响面内的用例须在 `needs_review`，且不在 `selected` | PASS |

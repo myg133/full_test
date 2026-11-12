@@ -4,7 +4,11 @@
 - 分支：`feature/REQ-011`
 - 交付物：`skills/regression-plan/`（skill）、`bin/verify-suite.mjs` + `bin/test-agent-skills.mjs`（组合门）、
   四个 skill 根级的 `skill-meta.json`、`README.md`、`feature-meta/regression-plan/`
-- 验收判据集共 28 条判据（AC-001~AC-028）；决策号范围 D35~D43。
+- 验收判据集共 28 条判据（AC-001~AC-028）；决策号范围 D35~D44。
+- 验收脚本（BA 的资产，本 REQ 未改动）：
+  `BA/demands/REQ-002-suite-foundation/REQ-011-regression-plan/verify-acceptance.sh`
+  的 sha256 钉版值：`54efde3477e68f1aa70e9bdd4770873d0cd7a4216d8638f846c5daac69e5bd4a`
+  —— 本报告的结论与该指纹绑定（同一批变异体在不同版本的脚本上结论可以不同）。
 
 ## 一、分层验收结论
 
