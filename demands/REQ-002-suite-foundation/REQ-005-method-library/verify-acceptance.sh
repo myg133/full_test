@@ -37,6 +37,26 @@ ok()  { PASS=$((PASS+1)); printf '  \033[32mPASS\033[0m  %s\n' "$1"; }
 bad() { FAIL=$((FAIL+1)); FAILED_LIST+=("$1"); printf '  \033[31mFAIL\033[0m  %s\n     ↳ %s\n' "$1" "${2:-}"; }
 step(){ printf '\n\033[36m— %s\033[0m\n' "$1"; }
 
+# ---- 上游两条回归的**真实**判据条数：现场跑一次取真值（不采信报告里的自报数字）----
+# 动机（第七轮 X04）：报告里的「19 PASS / 0 FAIL」是**自报**数字 —— 把 002A 层的 19 改成 0，
+# 验收照样 35/0。只比对"文档与文档"仍然是 token 存在性检查；真值只能来自脚本自己跑出来的结论行。
+# 放在 AC-026 之前算一次并 export —— 嵌套运行复用外层的真值，不重复跑（否则每轮多花 ~2 分钟）。
+up_count() {
+  local s="$1" tcd="$2" out
+  if [ ! -f "$s" ]; then echo -1; return; fi
+  out="$(bash "$s" "$tcd" 2>/dev/null | sed -n 's/.*结论: *\([0-9][0-9]*\) PASS.*/\1/p' | tail -1)"
+  case "$out" in ''|*[!0-9]*) echo -1 ;; *) echo "$out" ;; esac
+}
+UP2A_SCRIPT="$DEMAND_ROOT/BA/demands/REQ-002-suite-foundation/REQ-002A-schema-v2/verify-regression-002a.sh"
+UP2B_SCRIPT="$DEMAND_ROOT/BA/demands/REQ-002-suite-foundation/REQ-002B-project-layout/verify-regression-002b.sh"
+if [ "${QA005_NO_MUT:-0}" = "1" ] && [ -n "${QA005_UP2A:-}" ] && [ -n "${QA005_UP2B:-}" ]; then
+  UP2A="$QA005_UP2A"; UP2B="$QA005_UP2B"
+else
+  UP2A="$(up_count "$UP2A_SCRIPT" "$TCD")"
+  UP2B="$(up_count "$UP2B_SCRIPT" "$TCD")"
+  export QA005_UP2A="$UP2A" QA005_UP2B="$UP2B"
+fi
+
 jget() { node -e '
   const fs=require("fs");
   const [file,...path]=process.argv.slice(1);
@@ -1070,6 +1090,24 @@ else
       ESCAPED="$ESCAPED [$1]"
     fi
   }
+  # 非 JS 目标（markdown 追溯件）：不适用 node --check 与"崩溃"两关 —— 它们是给 .mjs 设计的。
+  # 纪律仍然成立：注入必须成功（否则计入 INVALID 不算检出），且失败项集合必须真的多出一条。
+  run_mut_md() {
+    TOT26=$((TOT26+1))
+    cp "$2" "$WORK/m26.bak"
+    if ! node -e "$3" "$2" >/dev/null 2>&1; then
+      cp "$WORK/m26.bak" "$2"; INVALID="$INVALID [$1:注入失败]"; return
+    fi
+    LAST_OUT="$(QA005_NO_MUT=1 bash "$SELF" "$MUT" 2>&1)"
+    K26="$(failkeys "$LAST_OUT")"
+    cp "$WORK/m26.bak" "$2"
+    NEW26="$(comm -3 <(printf '%s\n' "$BASE_KEYS" | grep -v '^$') <(printf '%s\n' "$K26" | grep -v '^$'))"
+    if [ -n "$NEW26" ]; then
+      DET26=$((DET26+1))
+    else
+      ESCAPED="$ESCAPED [$1]"
+    fi
+  }
   # ---- 1 min_cases_by_dimension 判定失效（kind 字符串保留，只让分支永不命中）----
   run_mut "min_cases_by_dimension判定失效" "$MM" 'const fs=require("fs"),f=process.argv[1];let s=fs.readFileSync(f,"utf8");const from="kind === \x27min_cases_by_dimension\x27";if(!s.includes(from))process.exit(3);fs.writeFileSync(f,s.split(from).join("kind === \x27min_cases_by_dimension_NEVER\x27"));' cm
   # ---- 2 ERROR 不再阻断（退出码恒 0）----
@@ -1105,12 +1143,19 @@ else
   run_mut "VC放宽methods_applied接受dimension前缀" "$MV" 'const fs=require("fs"),f=process.argv[1];let s=fs.readFileSync(f,"utf8");const from="if (!METHOD_PATTERN.test(method)) {";const i=s.indexOf(from);if(i<0)process.exit(3);const j=s.indexOf(from,i+from.length);if(j<0)process.exit(3);fs.writeFileSync(f,s.slice(0,j)+"if (!(METHOD_PATTERN.test(method) || method.startsWith(DIMENSION_SKIP_PREFIX))) {"+s.slice(j+from.length));' vc
   # ---- 19 ERROR 的严重级别标签被改成 WARN ----
   run_mut "ERROR严重级别标签改成WARN" "$MM" 'const fs=require("fs"),f=process.argv[1];let s=fs.readFileSync(f,"utf8");const from="const SEVERITY_ERROR = \x27ERROR\x27;";if(!s.includes(from))process.exit(3);fs.writeFileSync(f,s.split(from).join("const SEVERITY_ERROR = \x27WARN\x27;"));' cm
+  # ---- 20 追溯链护栏：status.md 的实现清单被砍到只剩 2 条（= 第七轮 A59 探针本体）----
+  # 这条变异证明**验收脚本自己**能判红第 ⑨ 子判据 —— 新判据不靠下一轮人工探针证明自己有效。
+  TOT26_MIN=19
+  if [ -f "$MUTROOT/feature-meta/status.md" ]; then
+    run_mut_md "status.md实现清单被砍到只剩2条" "$MUTROOT/feature-meta/status.md" 'const fs=require("fs"),f=process.argv[1];let s=fs.readFileSync(f,"utf8");const lines=s.split(/\r?\n/);let seen=0;const out=[];for(const l of lines){  if(/^\s*[-*]\s+`(?:(?:references|scripts)\/[A-Za-z0-9._\-\/]+|SKILL\.md)`/.test(l)){seen++;if(seen>2){continue;}}  out.push(l);}const t=out.join("\n");for(const tok of ["条判据","D1~D","M1.","个维度"]){if(!t.includes(tok))process.exit(3);}fs.writeFileSync(f,t);'
+    TOT26_MIN=20
+  fi
   # 还原后必须回到基线（确认变异被还原干净）
   RB_OUT="$(QA005_NO_MUT=1 bash "$SELF" "$MUT" 2>&1)"
   RB_KEYS="$(failkeys "$RB_OUT")"
   RB_OK=0
   if [ "$RB_KEYS" = "$BASE_KEYS" ]; then RB_OK=1; fi
-  if [ $DET26 -eq $TOT26 ] && [ $TOT26 -ge 19 ] && [ -z "$INVALID" ] && [ $RB_OK -eq 1 ]; then
+  if [ $DET26 -eq $TOT26 ] && [ $TOT26 -ge $TOT26_MIN ] && [ -z "$INVALID" ] && [ $RB_OK -eq 1 ]; then
     ok "AC-026 变异体 100% 被检出（$DET26/$TOT26，还原后回到基线）"
   else
     bad "AC-026 变异体 100% 被检出" \
@@ -1483,6 +1528,8 @@ else
   const fs=require("fs");
   const fmeta=process.argv[1], acc=process.argv[2], dec=process.argv[3];
   const mth=process.argv[4], dim=process.argv[5], tcd=process.argv[6];
+  // 第⑫子判据要用：上游两条回归**现场实跑**出来的真实 PASS 数（由 bash 侧算出后传进来）
+  const upA=Number(process.argv[7]), upB=Number(process.argv[8]);
   let prob=[];
   let accText=""; try{ accText=fs.readFileSync(acc,"utf8"); }catch(e){}
   const actual=(accText.match(/^### AC-/gm)||[]).length;
@@ -1561,24 +1608,100 @@ else
   const paths=[...st.matchAll(/`((?:references|scripts)\/[A-Za-z0-9._\-\/]+|SKILL\.md)`/g)].map(m=>m[1]);
   if(paths.length===0) prob.push("status.md: 实现清单为空（一个交付文件路径都没列）—— 状态文件写空了");
   else for(const p of paths){ if(!fs.existsSync(tcd+"/"+p)) prob.push("status.md: 清单里列的交付文件不存在："+p); }
+  // ---- 第⑨子判据：status.md 的实现清单必须**覆盖**追溯矩阵声明的每个交付文件（第七轮 A59：只剩 2 条也判过）
+  const trPaths=[...new Set([...tr.matchAll(/`((?:references|scripts)\/[A-Za-z0-9._\-\/]+|SKILL\.md)`/g)].map(m=>m[1]))];
+  // status.md 的「实现清单」= **列表项行首**的路径 —— 不是正文里提到过的路径
+  // （否则"在自验说明里顺口提一句"就能冒充清单项 —— 那又是 token 存在性检查）
+  const stList=[...new Set([...st.matchAll(/^\s*[-*]\s+`((?:references|scripts)\/[A-Za-z0-9._\-\/]+|SKILL\.md)`/gm)].map(m=>m[1]))];
+  const uncovered=trPaths.filter(p=>stList.indexOf(p)<0);
+  if(uncovered.length) prob.push("status.md: 实现清单漏列了交付文件 "+uncovered.join(",")+" —— 状态文件的实现清单与追溯矩阵声明不一致");
+  // ---- 第⑭子判据：追溯矩阵「交付位置」列声明的路径必须**非空且都真实存在**（第七轮 X10/X11）
+  // ⚠️ 必须取**矩阵行**里的声明，不能取整份文件里的 —— 整份文件头部还有一份清单，
+  // 矩阵被掏空成占位符时那份头部声明还在（第七轮 X10 就是这样逃过去的）。
+  const trRowPaths=[...new Set(trRows.flatMap(l=>{
+    const cells=l.split("|").slice(1,-1);
+    const col=cells[1]||"";
+    return [...col.matchAll(/`((?:references|scripts)\/[A-Za-z0-9._\-\/]+|SKILL\.md)`/g)].map(m=>m[1]);
+  }))];
+  if(trRowPaths.length===0) prob.push("traceability.md: 追溯矩阵的「交付位置」列一个交付文件都没声明 —— 矩阵的实质被掏空了");
+  else for(const p of trRowPaths){
+    let isFile=false;
+    try{ isFile=fs.statSync(tcd+"/"+p).isFile(); }catch(e){}
+    if(!isFile) prob.push("traceability.md: 交付位置声明的文件不存在或不是文件："+p);
+  }
+  // ---- 第⑩子判据：实现清单的每一项都必须是**合法的交付路径**（第七轮 X05：路径被写成 `references`）
+  const listItems=[...st.matchAll(/^\s*[-*]\s+`([^`]+)`/gm)].map(m=>m[1]);
+  const validPath=p=>/^(?:references|scripts)\/[A-Za-z0-9._\-\/]+$/.test(p)||p==="SKILL.md";
+  for(const it of listItems){
+    if(/^(?:references|scripts)/.test(it) && !validPath(it)) prob.push("status.md: 实现清单项「"+it+"」不是合法的交付路径（应为 references/* / scripts/* / SKILL.md）");
+  }
+  // 清单项指向的必须是**文件**：fs.existsSync 对**目录**也返回 true（第七轮 X05 的形态）
+  for(const p of stList){
+    try{ if(!fs.statSync(tcd+"/"+p).isFile()) prob.push("status.md: 实现清单项「"+p+"」不是文件（是目录）—— 存在性检查会被目录蒙混过关"); }catch(e){}
+  }
   // ---- 第⑧子判据：验证报告必须有**逐层结论**与**能力结论表**（第六轮 A60）
   const vr=perFile["verification-report.md"]||"";
   const vrLines=vr.split(/\r?\n/);
   const layerDefs=[["主验收",/^\|\s*主验收/],["REQ-002A",/^\|\s*上游基线回归（REQ-002A）/],["REQ-002B",/^\|\s*上游基线回归（REQ-002B）/]];
+  const layerNum={};
   for(const pair of layerDefs){
     const rows=vrLines.filter(l=>pair[1].test(l));
     if(rows.length!==1) prob.push("verification-report.md: 验收层次「"+pair[0]+"」有 "+rows.length+" 行（应为恰好 1 行）");
-    else if(!/\d+\s*PASS\s*\/\s*0\s*FAIL/.test(rows[0])) prob.push("verification-report.md: 验收层次「"+pair[0]+"」的结论不是「N PASS / 0 FAIL」");
+    else{
+      const mm=rows[0].match(/(\d+)\s*PASS\s*\/\s*(\d+)\s*FAIL/);
+      if(!mm) prob.push("verification-report.md: 验收层次「"+pair[0]+"」的结论不是「N PASS / 0 FAIL」");
+      else{
+        layerNum[pair[0]]={P:Number(mm[1]),F:Number(mm[2])};
+        if(Number(mm[2])!==0) prob.push("verification-report.md: 验收层次「"+pair[0]+"」写着 "+mm[2]+" 条 FAIL —— 交付态不应有 FAIL");
+      }
+    }
   }
-  let capRows=0, inCap=false;
+  // ---- 第⑫子判据：上游两层的 PASS 数必须等于**现场实跑**的结果（第七轮 X04：002A 层改成 0 仍判过）
+  if(upA<0) prob.push("verification-report.md: 无法核对 REQ-002A 层的 PASS 数（上游回归脚本缺失或执行失败）—— 不能因为「找不到被护对象」就放行");
+  else if(layerNum["REQ-002A"] && layerNum["REQ-002A"].P!==upA) prob.push("verification-report.md: REQ-002A 层写 "+layerNum["REQ-002A"].P+" PASS，现场实跑是 "+upA+" —— 报告数字与真实结果不符");
+  if(upB<0) prob.push("verification-report.md: 无法核对 REQ-002B 层的 PASS 数（上游回归脚本缺失或执行失败）—— 不能因为「找不到被护对象」就放行");
+  else if(layerNum["REQ-002B"] && layerNum["REQ-002B"].P!==upB) prob.push("verification-report.md: REQ-002B 层写 "+layerNum["REQ-002B"].P+" PASS，现场实跑是 "+upB+" —— 报告数字与真实结果不符");
+  // ---- 第⑬子判据：三份追溯文件里**每一处**「N PASS / M FAIL」都必须与它所属那层的真实条数一致（第七轮 X08/X09）
+  // 归属判定：看该处数字**同一行内、它前面**的上下文提到的是哪一层（002A / 002B / 都不是 → 主验收）
+  const layerExpect=(ctx)=>{
+    if(ctx.indexOf("002A")>=0) return upA>=0?{v:upA,name:"REQ-002A"}:null;
+    if(ctx.indexOf("002B")>=0) return upB>=0?{v:upB,name:"REQ-002B"}:null;
+    return {v:actual,name:"主验收"};
+  };
+  const mainHit={};
+  for(const F of files){
+    const txt=perFile[F]||"";
+    for(const line of txt.split(/\r?\n/)){
+      let last=0; const re=/(\d+)\s*PASS\s*\/\s*(\d+)\s*FAIL/g; let m;
+      while((m=re.exec(line))!==null){
+        const ctx=line.slice(last,m.index+m[0].length);
+        last=m.index+m[0].length;
+        const e=layerExpect(ctx);
+        if(!e) continue;               // 上游真值拿不到 → 已由第⑫子判据报过，不重复报
+        if(e.name==="主验收") mainHit[F]=(mainHit[F]||0)+1;
+        if(Number(m[1])!==e.v) prob.push(F+": 写着 "+m[1]+" PASS / "+m[2]+" FAIL，但这一处属于「"+e.name+"」层（该层真实条数 "+e.v+"）—— 追溯链里的验收数字与实际不符");
+        if(Number(m[2])!==0) prob.push(F+": 写着 "+m[2]+" 条 FAIL —— 交付态不应有 FAIL");
+      }
+    }
+  }
+  for(const F of ["status.md","traceability.md"]){
+    if(!mainHit[F]) prob.push(F+": 没写主验收的结论（N PASS / 0 FAIL）—— 追溯件没记录验收结果");
+  }
+  let capRows=0, inCap=false, capEmpty=0;
   for(const l of vrLines){
     if(/^\|\s*能力\s*\|/.test(l)){ inCap=true; continue; }
     if(!inCap) continue;
     if(/^\|\s*-{2,}/.test(l)) continue;
-    if(/^\|/.test(l)){ capRows++; continue; }
+    if(/^\|/.test(l)){
+      capRows++;
+      const cs=l.split("|").slice(1,-1).map(s=>s.trim()).filter(s=>s.length>0);
+      if(cs.length<2) capEmpty++;
+      continue;
+    }
     break;
   }
   if(capRows<3) prob.push("verification-report.md: 能力结论表只有 "+capRows+" 行（应 ≥3）—— 报告的实质被掏空了");
+  if(capEmpty>0) prob.push("verification-report.md: 能力结论表有 "+capEmpty+" 行内容为空 —— 报告的实质被掏空了（行数够、实质没了）");
   // 主验收那一行的 PASS/FAIL 计数：P+F 必须等于判据条数，且 F 必须为 0（交付态必须全绿）
   if(!repLine){ prob.push("verification-report.md: 找不到含「主验收」与「PASS」的结果行"); }
   else{
@@ -1595,7 +1718,7 @@ else
   console.log("prob="+prob.length);
   console.log("actual="+actual+" dmax="+dmax+" nCount="+nCount+" dCount="+dCount);
   console.log("detail="+(prob.slice(0,4).join(" ; ")||"none"));
-  ' "$FMETA" "$SELF_DIR/acceptance.md" "$SELF_DIR/decisions.md" "$TCD/references/methods.json" "$TCD/references/dimensions.json" "$TCD" 2>/dev/null)"
+  ' "$FMETA" "$SELF_DIR/acceptance.md" "$SELF_DIR/decisions.md" "$TCD/references/methods.json" "$TCD/references/dimensions.json" "$TCD" "$UP2A" "$UP2B" 2>/dev/null)"
   P34="$(printf '%s\n' "$M34" | sed -n 's/^prob=//p')"
   D34="$(printf '%s\n' "$M34" | sed -n 's/^detail=//p')"
   # ---- 钉版自检：追溯链必须记下**当前验收脚本**的 sha256（D25 ⑤）
