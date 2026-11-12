@@ -84,15 +84,30 @@ README="$PKG/README.md"
 
 PASS=0
 FAIL=0
+UNDEC=0
 FAILED_LIST=()
+UNDEC_LIST=()
 
 ok()  { PASS=$((PASS+1)); printf 'PASS  %s\n' "$1"; }
 bad() { FAIL=$((FAIL+1)); FAILED_LIST+=("$1"); printf 'FAIL  %s  %s\n' "$1" "${2:-}"; }
+# 不可判定 —— 既不判红也不判绿（AC-025 的「有效变异不足」用）
+# 但**不计入通过**：结论行与退出码都会体现「不可判定不等于通过」。
+undec() { UNDEC=$((UNDEC+1)); UNDEC_LIST+=("$1"); printf 'UNDEC %s  %s\n' "$1" "${2:-}"; }
 step(){ printf '\n— %s\n' "$1"; }
 
 # 抽出「失败的 AC 键集合」—— 变异体判定完全建立在它上面
 failkeys() {
   printf '%s\n' "$1" | sed 's/\x1b\[[0-9;]*m//g' | grep -E '^[[:space:]]*FAIL' | grep -oE 'AC-[0-9]+' | sort -u
+}
+
+# 抽出「失败行」的**归一化集合**（变异检测用；D45 / G-8）
+#   - 归一化掉被验包路径与临时目录路径（否则两次跑必然不同 → 假检出）
+#   - 保留**整行**（含判红原因）→ 基线本来就红的判据，变异把它改得更红时也能看出来
+failsig() {
+  printf '%s\n' "$1" \
+    | sed -e "s#$2#<PKG>#g" -e "s#$PKG#<PKG>#g" -e 's/qa-011-[A-Za-z0-9]*/<WORK>/g' \
+    | sed -e 's/^[[:space:]]*//' \
+    | grep -E '^FAIL' | sort
 }
 
 # ---------------------------------------------------------------- 夹具
@@ -309,14 +324,38 @@ for (const caseObj of cases) {
   else if (caseObj.status === 'active') basisSelected.push(caseObj.id);
 }
 
-// --- 判不了条目（独立口径）---
+// --- 判不了条目（D45 口径：推不出任何**用例级**影响面）---
+//   影响用例(C) = 需求路径 ∨ 用例路径 ∨ 维度路径（显式 @dim: ∪ 信号词命中的维度）
+//   全影响面     = 所有变更条目的影响用例之并
+//   挡住的用例(C) = 全影响面里、用了被 C 的正文命中的 not_applies_when 方法的用例
+//   C 判不了 ⟺ 影响用例(C) 为空 且 挡住的用例(C) 为空
+//   （推论：只命中方法短语但对应不到任何用例、合法引用但无任何用例覆盖 → 都判不了）
+const affectedByChange = {};
+for (const entry of entries) {
+  const dims = new Set([...entry.dim_refs, ...(entrySignalDims[entry.id] || [])]);
+  affectedByChange[entry.id] = cases
+    .filter((caseObj) => {
+      const reqs = Array.isArray(caseObj.requirement_refs) ? caseObj.requirement_refs : [];
+      const dim = typeof caseObj.dimension === 'string' ? caseObj.dimension : '';
+      return entry.requirement_refs.some((ref) => reqs.includes(ref))
+        || entry.case_refs.includes(caseObj.id)
+        || dims.has(dim);
+    })
+    .map((caseObj) => caseObj.id);
+}
+const universe = [...new Set(Object.values(affectedByChange).flat())];
+const blockedByChange = {};
+for (const entry of entries) {
+  const hits = methodHits[entry.id] || [];
+  blockedByChange[entry.id] = cases
+    .filter((caseObj) => universe.includes(caseObj.id)
+      && (Array.isArray(caseObj.method) ? caseObj.method : []).some((m) => hits.includes(m)))
+    .map((caseObj) => caseObj.id);
+}
 const undecidableFromChangelog = entries
   .filter((entry) =>
-    entry.requirement_refs.length === 0 &&
-    entry.case_refs.length === 0 &&
-    entry.dim_refs.length === 0 &&
-    (entrySignalDims[entry.id] || []).length === 0 &&
-    (methodHits[entry.id] || []).length === 0)
+    (affectedByChange[entry.id] || []).length === 0 &&
+    (blockedByChange[entry.id] || []).length === 0)
   .map((entry) => entry.id);
 
 const out = {
@@ -335,6 +374,9 @@ const out = {
   affected: affectedFromChangelog,
   not_affected: notAffected,
   undecidable_from_changelog: undecidableFromChangelog,
+  affected_by_change: affectedByChange,
+  blocked_by_change: blockedByChange,
+  impact_universe: universe,
   basis_selected: basisSelected,
   basis_needs_review: basisReview,
   plan_change_count: planChanges.length,
@@ -394,6 +436,16 @@ for (const item of items) {
   for (const ref of refs) {
     if (!changeById.has(ref)) problems.push(`${label} 的 change_refs 指向不存在的变更条目 ${ref}`);
   }
+  // D45（P-4）：来源标记必须指向**本用例自己的命中路径** ——
+  // 实体存在还不够，它得是"这条用例为什么被选中"的那条路径。
+  const caseObj = caseById.get(caseId);
+  if (!caseObj) {
+    problems.push(`${label} 的用例 ${caseId} 不在输入用例集里`);
+    continue;
+  }
+  const caseReqs = Array.isArray(caseObj.requirement_refs) ? caseObj.requirement_refs : [];
+  const caseDim = typeof caseObj.dimension === 'string' ? caseObj.dimension : '';
+  const caseMethods = Array.isArray(caseObj.method) ? caseObj.method : [];
   // 来源标记逐个核对
   let markerCount = 0;
   const reqTokens = uniqueTokens(reason, /\bR-\d+\b/g);
@@ -401,6 +453,10 @@ for (const item of items) {
     markerCount += 1;
     if (!rc.requirement_ids.includes(token)) {
       problems.push(`${label} 的 reason 提到需求条目 ${token}，但输入用例集里没有这个需求条目`);
+      continue;
+    }
+    if (!caseReqs.includes(token)) {
+      problems.push(`${label} 的 reason 提到需求条目 ${token}，但这条用例本身并不引用它（来源标记必须指向本用例自己的命中路径）`);
       continue;
     }
     if (!refs.some((ref) => {
@@ -418,6 +474,10 @@ for (const item of items) {
       problems.push(`${label} 的 reason 提到用例 ${token}，但输入用例集里没有这个用例`);
       continue;
     }
+    if (token !== caseId) {
+      problems.push(`${label} 的 reason 提到用例 ${token}，但这不是本用例（来源标记必须指向本用例自己的命中路径）`);
+      continue;
+    }
     if (!refs.some((ref) => {
       const change = changeById.get(ref);
       const text = changeText.get(ref) || '';
@@ -431,6 +491,10 @@ for (const item of items) {
     const method = methodById.get(token);
     if (!method) {
       problems.push(`${label} 的 reason 提到方法 ${token}，但方法库里没有这个方法`);
+      continue;
+    }
+    if (!caseMethods.includes(token)) {
+      problems.push(`${label} 的 reason 提到方法 ${token}，但这条用例没有用这个方法（来源标记必须指向本用例自己的命中路径）`);
       continue;
     }
     const hit = refs.some((ref) => {
@@ -447,6 +511,10 @@ for (const item of items) {
       problems.push(`${label} 的 reason 提到维度 ${dimId}，但维度库里没有这个维度`);
       continue;
     }
+    if (caseDim !== dimId) {
+      problems.push(`${label} 的 reason 提到维度 ${dimId}，但这条用例的维度是 ${caseDim}（来源标记必须指向本用例自己的命中路径）`);
+      continue;
+    }
     const hit = refs.some((ref) => {
       const change = changeById.get(ref);
       const text = changeText.get(ref) || '';
@@ -455,10 +523,16 @@ for (const item of items) {
     });
     if (!hit) problems.push(`${label} 的 reason 提到维度 ${dimId}，但它不对应 change_refs 里的任何变更条目`);
   }
+  const caseDimEntry = rc.dim_lib.find((d) => String(d.id) === caseDim);
+  const caseDimSignals = Array.isArray(caseDimEntry?.applies_when) ? caseDimEntry.applies_when : [];
   for (const dim of rc.dim_lib) {
     for (const word of dim.applies_when) {
       if (!word || !reason.includes(word)) continue;
       markerCount += 1;
+      if (!caseDimSignals.includes(word)) {
+        problems.push(`${label} 的 reason 提到信号词「${word}」，但它不是本用例所属维度（${caseDim}）的信号词（来源标记必须指向本用例自己的命中路径）`);
+        continue;
+      }
       const hit = refs.some((ref) => {
         const text = changeText.get(ref) || '';
         return text.includes(word);
@@ -482,6 +556,10 @@ FIXREASON
 cat > "$WORK/scan.mjs" <<'FIXSCAN'
 // scan.mjs —— AC-027：零第三方依赖 + 不联网
 // 用法: node scan.mjs <dir> [<dir> ...]
+//
+// D45（G-3）：扫描必须覆盖**动态 import 表达式** ——
+//   import('x') / import("x") / import(`x`)（含 await 前缀）。
+//   此前只匹配静态 from '...' 与 require('...') → 动态 import 整个漏掉。
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -496,7 +574,31 @@ const walk = (dir) => {
     else if (/\.(mjs|js|cjs)$/.test(entry.name)) files.push(full);
   }
 };
-for (const root of roots) walk(root);
+for (const root of roots) {
+  // 以 '[' 开头 → 直接给文件清单（JSON 数组），避免路径带空格时被拆开
+  if (root.startsWith('[')) {
+    try {
+      for (const item of JSON.parse(root)) if (typeof item === 'string') files.push(item);
+    } catch { /* 忽略 */ }
+    continue;
+  }
+  walk(root);
+}
+
+// 内置模块 / 本地路径 —— 这些不算第三方依赖
+const isBuiltinOrLocal = (spec) => {
+  if (typeof spec !== 'string') return false;
+  const s = spec.trim();
+  if (s === '') return false;
+  if (s.startsWith('node:')) return true;                                  // node: 内置
+  if (s.startsWith('./') || s.startsWith('../') || s.startsWith('/')) return true;  // 本地路径
+  if (s.includes('${')) {
+    // 模板串带插值：只有前缀是本地路径才算本地，否则**无法静态判定归属** → 判红
+    const prefix = s.split('${')[0];
+    return prefix.startsWith('./') || prefix.startsWith('../') || prefix.startsWith('/');
+  }
+  return false;
+};
 
 const thirdParty = [];
 const network = [];
@@ -504,12 +606,19 @@ for (const file of files) {
   const raw = fs.readFileSync(file, 'utf8');
   const src = raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
   src.split(/\r?\n/).forEach((line, index) => {
-    const importMatch = line.match(/from\s+['"]([^'"]+)['"]/) || line.match(/require\(\s*['"]([^'"]+)['"]\s*\)/);
-    if (importMatch) {
-      const spec = importMatch[1];
-      if (!spec.startsWith('node:') && !spec.startsWith('./') && !spec.startsWith('../') && !spec.startsWith('/')) {
-        thirdParty.push(`${file}:${index + 1}: ${spec}`);
-      }
+    const specs = [];
+    const staticImport = line.match(/from\s+['"]([^'"]+)['"]/);
+    if (staticImport) specs.push(staticImport[1]);
+    const requireCall = line.match(/require\(\s*['"]([^'"]+)['"]\s*\)/);
+    if (requireCall) specs.push(requireCall[1]);
+    // 动态 import：import('x') / import("x") / import(`x`)
+    const dynamicImport = line.match(/\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/);
+    if (dynamicImport) specs.push(dynamicImport[1]);
+    const dynamicTemplate = line.match(/\bimport\s*\(\s*`([^`]*)`\s*\)/);
+    if (dynamicTemplate) specs.push(dynamicTemplate[1]);
+    for (const spec of specs) {
+      if (isBuiltinOrLocal(spec)) continue;
+      thirdParty.push(`${file}:${index + 1}: ${spec}`);
     }
     if (/node:https?['"]/.test(line)) network.push(`${file}:${index + 1}: ${line.trim()}`);
     else if (/\bfetch\s*\(/.test(line)) network.push(`${file}:${index + 1}: ${line.trim()}`);
@@ -519,6 +628,201 @@ for (const file of files) {
 }
 process.stdout.write(`${JSON.stringify({ files: files.length, thirdParty, network })}\n`);
 FIXSCAN
+
+cat > "$WORK/gate-files.mjs" <<'FIXGATE'
+// gate-files.mjs —— AC-027 ③：识别 bin/ 下的「**组合门实现文件**」
+// 用法: node gate-files.mjs <dir>
+// 输出: JSON 数组（文件绝对路径）
+//
+// D45（G-5 / P-16）：识别规则**写死**为 —— 文件文本里同时出现
+//   ① 「skill 标记」：/skill/i
+//   ② 「skill-meta / meta.json 标记」：/meta\.json/i 或 /skill[-_]?meta/i
+// 该规则覆盖等价写法（如 ['skill','meta.json'].join('-') —— 只要 meta.json 片段在文本里可见），
+// 且**不会**把 bin/qa-impl.mjs（既无 skill 也无 meta.json）误认成组合门实现文件。
+import fs from 'node:fs';
+import path from 'node:path';
+
+const dir = process.argv[2];
+const out = [];
+let entries = [];
+try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { entries = []; }
+for (const entry of entries) {
+  if (!entry.isFile()) continue;
+  if (!/\.(mjs|js|cjs)$/.test(entry.name)) continue;
+  const full = path.join(dir, entry.name);
+  let text = '';
+  try { text = fs.readFileSync(full, 'utf8'); } catch { continue; }
+  const hasSkill = /skill/i.test(text);
+  const hasMeta = /meta\.json/i.test(text) || /skill[-_]?meta/i.test(text);
+  if (hasSkill && hasMeta) out.push(full);
+}
+process.stdout.write(`${JSON.stringify(out)}\n`);
+FIXGATE
+
+cat > "$WORK/skill-mentions.mjs" <<'FIXMENTION'
+// skill-mentions.mjs —— AC-028 ①/②：区分「**文件提及**」与「**可执行调用**」
+// 用法: node skill-mentions.mjs <file> <script1> <script2> ...
+// 输出: JSON { "<script>": { mentions, calls, callsWithArgs } }
+//
+// D45（G-10）：① 与 ② 的检查串此前互为子串 → 删掉任一处两条原因同时出现（不可分别证伪）。
+// 现在两者**互斥**：
+//   mentions      = 该脚本名出现在**非命令语境**的行里（同一逻辑行里没有 `node … <脚本名>`）
+//   calls         = 该脚本名以 `node … <脚本名>` 形式出现（逻辑行，含续行拼接）
+//   callsWithArgs = 上述调用里**带至少一个 `--参数`**的（照着能跑）
+import fs from 'node:fs';
+
+const [file, ...scripts] = process.argv.slice(2);
+let text = '';
+try { text = fs.readFileSync(file, 'utf8'); } catch { text = ''; }
+const lines = text.split(/\r?\n/);
+
+// 逻辑行：行尾带续行符 `\` 的行与下一行合并（命令常写成多行）
+const logical = [];
+let buffer = '';
+for (const line of lines) {
+  const piece = buffer === '' ? line : `${buffer}\n${line}`;
+  if (/\\\s*$/.test(line)) { buffer = piece; continue; }
+  logical.push(piece);
+  buffer = '';
+}
+if (buffer !== '') logical.push(buffer);
+
+const out = {};
+for (const script of scripts) {
+  const escaped = String(script).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const callRe = new RegExp(`node\\s+(?:\\S*/)?${escaped}(?![A-Za-z0-9_.-])`);
+  let mentions = 0;
+  let calls = 0;
+  let callsWithArgs = 0;
+  for (const block of logical) {
+    if (!block.includes(script)) continue;
+    if (callRe.test(block)) {
+      calls += 1;
+      if (/--[A-Za-z]/.test(block)) callsWithArgs += 1;
+    } else {
+      mentions += 1;
+    }
+  }
+  out[script] = { mentions, calls, callsWithArgs };
+}
+process.stdout.write(`${JSON.stringify(out)}\n`);
+FIXMENTION
+
+cat > "$WORK/frontmatter.mjs" <<'FIXFM'
+// frontmatter.mjs —— 取 YAML frontmatter 里某个 key 的**值**（AC-001 的「非空 description」）
+// 用法: node frontmatter.mjs <file> <key>
+// 输出: JSON { found, raw, value, empty }
+//
+// D45（G-1）：判空必须判到**值**上 ——
+//   块标量（| / |- / > / >-）→ 取其后的缩进块内容，块为空即判空；
+//   普通标量 → 剥掉首尾引号后判非空（"" / '' 判空）。
+//   不得用"该行有没有非空白字符"这种近似判定。
+import fs from 'node:fs';
+
+const [file, key] = process.argv.slice(2);
+const out = { found: false, raw: '', value: '', empty: true };
+const emit = () => { process.stdout.write(`${JSON.stringify(out)}\n`); };
+
+let text = '';
+try { text = fs.readFileSync(file, 'utf8'); } catch { emit(); process.exit(0); }
+
+const lines = text.split(/\r?\n/);
+let start = -1;
+for (let i = 0; i < lines.length; i += 1) {
+  if (/^---\s*$/.test(lines[i])) { start = i; break; }
+}
+if (start < 0) { emit(); process.exit(0); }
+let end = -1;
+for (let i = start + 1; i < lines.length; i += 1) {
+  if (/^---\s*$/.test(lines[i])) { end = i; break; }
+}
+if (end < 0) { emit(); process.exit(0); }
+const fm = lines.slice(start + 1, end);
+
+const escaped = String(key || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const keyRe = new RegExp(`^${escaped}\\s*:\\s*(.*)$`);
+let idx = -1;
+for (let i = 0; i < fm.length; i += 1) {
+  const m = keyRe.exec(fm[i]);
+  if (m) { idx = i; out.found = true; out.raw = m[1].trim(); break; }
+}
+if (idx < 0) { emit(); process.exit(0); }
+
+if (/^[|>][+-]?\d*$/.test(out.raw)) {
+  // 块标量：其后所有缩进行都是它的内容
+  const parts = [];
+  for (let i = idx + 1; i < fm.length; i += 1) {
+    const line = fm[i];
+    if (line.trim() === '') { parts.push(''); continue; }
+    if (!/^[ \t]/.test(line)) break;
+    parts.push(line.trim());
+  }
+  out.value = parts.join('\n').trim();
+} else {
+  let value = out.raw;
+  if (/^".*"$/s.test(value) || /^'.*'$/s.test(value)) value = value.slice(1, -1);
+  out.value = value.trim();
+}
+out.empty = out.value === '';
+emit();
+FIXFM
+
+cat > "$WORK/plan-diff.mjs" <<'FIXDIFF'
+// plan-diff.mjs —— 两份 JSON 的语义比对（AC-020 / AC-025 复用）
+// 用法: node plan-diff.mjs <fileA> <fileB>
+// 输出: "SAME" 或 "DIFF: ..."
+//
+// D45（P-10）：豁免依据是**值的形态**，不是字段名 ——
+//   形似 ISO-8601 / epoch 秒（10 位） / epoch 毫秒（13 位）的值才当时间戳；
+//   名为 time 但值不是时间戳的字段**不得**豁免；名不叫时间戳但值形似时间戳的**必须**豁免。
+//   豁免必须**成对**（两份里都是时间戳形态）。
+import fs from 'node:fs';
+
+const [fileA, fileB] = process.argv.slice(2);
+
+const isIso = (v) => typeof v === 'string'
+  && /^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?(Z|[+-]\d{2}:?\d{2})?)?$/.test(v);
+const isEpochSec = (v) => (typeof v === 'number' && Number.isInteger(v) && v >= 1e9 && v < 1e11)
+  || (typeof v === 'string' && /^\d{10}$/.test(v));
+const isEpochMs = (v) => (typeof v === 'number' && Number.isInteger(v) && v >= 1e12 && v < 1e14)
+  || (typeof v === 'string' && /^\d{13}$/.test(v));
+const isTimestampLike = (v) => isIso(v) || isEpochSec(v) || isEpochMs(v);
+
+const diffs = [];
+const walk = (x, y, at) => {
+  if (diffs.length >= 6) return;
+  if (x === y) return;
+  const bothObjects = x && y && typeof x === 'object' && typeof y === 'object'
+    && Array.isArray(x) === Array.isArray(y);
+  if (!bothObjects) {
+    if (isTimestampLike(x) && isTimestampLike(y)) return;   // 时间戳差异：豁免
+    diffs.push(`${at}: [${JSON.stringify(x)}] vs [${JSON.stringify(y)}]`);
+    return;
+  }
+  if (Array.isArray(x)) {
+    if (x.length !== y.length) { diffs.push(`${at}: 数组长度 ${x.length} vs ${y.length}`); return; }
+    for (let i = 0; i < x.length; i += 1) walk(x[i], y[i], `${at}[${i}]`);
+    return;
+  }
+  const keys = [...new Set([...Object.keys(x), ...Object.keys(y)])].sort();
+  for (const k of keys) {
+    if (!(k in x)) { diffs.push(`${at}.${k}: 缺失 vs ${JSON.stringify(y[k])}`); continue; }
+    if (!(k in y)) { diffs.push(`${at}.${k}: ${JSON.stringify(x[k])} vs 缺失`); continue; }
+    walk(x[k], y[k], `${at}.${k}`);
+  }
+};
+
+let a; let b;
+try {
+  a = JSON.parse(fs.readFileSync(fileA, 'utf8'));
+  b = JSON.parse(fs.readFileSync(fileB, 'utf8'));
+} catch (err) {
+  process.stdout.write(`DIFF: 解析失败 ${err && err.message ? err.message : String(err)}\n`);
+  process.exit(0);
+}
+walk(a, b, '$');
+process.stdout.write(diffs.length === 0 ? 'SAME\n' : `DIFF: ${diffs.join(' ; ')}\n`);
+FIXDIFF
 
 cat > "$WORK/fingerprint.mjs" <<'FIXFP'
 // fingerprint.mjs —— 目录内容的 sha256 清单（目录名 + 相对路径 + 文件 sha256）
@@ -548,11 +852,12 @@ process.stdout.write(`${lines.join('\n')}\n`);
 FIXFP
 
 cat > "$WORK/readme-skills.mjs" <<'FIXREADME'
-// readme-skills.mjs —— AC-003：从 README 里抽"提到的 skill 名集合"
-// 口径（写死在此，避免"README 说了几个"这种自报口径）：
+// readme-skills.mjs —— AC-003：从 README 里抽「**skill 清单**集合」
+// 口径（写死在此，避免"README 说了几个"这种自报口径；D45：基准是**清单**，不是"提到的一切"）：
 //   ① 表头首格是 Skill 的表格 → 取其每一行的首格；
 //   ② 正文里的 skills/<name> 路径；
 //   ③ 安装树代码块里 skills/ 根之后的条目。
+//   三者取**并集** = README 的 skill 清单。
 import fs from 'node:fs';
 
 const text = fs.readFileSync(process.argv[2], 'utf8');
@@ -642,6 +947,9 @@ FIXKEYS
 # ---------------------------------------------------------------- 基线计划
 
 step "准备夹具与基线计划"
+# D45（G-9）：被验对象的指纹**起点**取在基线计划跑之前 —— 这样"整个验收过程中被改动"才是可触发的检查
+# （此前起点取在变异阶段中间，且 $RP 只被读取 → 该子项恒真）。
+RP_FP_START="$(node "$WORK/fingerprint.mjs" "$RP" 2>/dev/null)"
 BASE_CYC="$WORK/cyc/R2-CHANGELOG-2.3"
 mkdir -p "$BASE_CYC"
 PLAN="$BASE_CYC/regression-plan.json"
@@ -687,10 +995,18 @@ else
   for f in "SKILL.md" "references/regression-plan-schema.md" "references/impact-rules.md" "scripts/plan-regression.mjs" "scripts/check-plan.mjs"; do
     [ -s "$RP/$f" ] || MISSING="$MISSING $f"
   done
-  NAME_OK=0; DESC_OK=0
+  NAME_OK=0; DESC_OK=0; DESC_VAL=""
   if [ -s "$RP/SKILL.md" ]; then
-    head -20 "$RP/SKILL.md" | grep -qE '^name:[[:space:]]*regression-plan[[:space:]]*$' && NAME_OK=1
-    head -20 "$RP/SKILL.md" | grep -qE '^description:[[:space:]]*[^[:space:]]' && DESC_OK=1
+    # D45（G-1）：frontmatter 的 name / description 必须取**值**再判 ——
+    # 此前 `grep -qE '^description:[[:space:]]*[^[:space:]]'` 会把 `description: ""` 放行
+    # （`""` 的第一个引号就满足"非空白字符"）。
+    FM_NAME="$(node "$WORK/frontmatter.mjs" "$RP/SKILL.md" name 2>/dev/null)"
+    FM_DESC="$(node "$WORK/frontmatter.mjs" "$RP/SKILL.md" description 2>/dev/null)"
+    FM_NAME_VAL="$(node -e 'try{const o=JSON.parse(process.argv[1]);console.log(String(o.value||""))}catch(e){console.log("")}' "$FM_NAME")"
+    [ "$FM_NAME_VAL" = "regression-plan" ] && NAME_OK=1
+    DESC_EMPTY="$(node -e 'try{const o=JSON.parse(process.argv[1]);console.log(o.found&&!o.empty?"0":"1")}catch(e){console.log("1")}' "$FM_DESC")"
+    [ "$DESC_EMPTY" = "0" ] && DESC_OK=1
+    DESC_VAL="$(node -e 'try{const o=JSON.parse(process.argv[1]);console.log(String(o.value||"").replace(/\s+/g," ").slice(0,40))}catch(e){console.log("")}' "$FM_DESC")"
   fi
   SHEBANG_OK=0; NODECHK_OK=0
   for f in "scripts/plan-regression.mjs" "scripts/check-plan.mjs"; do
@@ -700,7 +1016,7 @@ else
   if [ -z "$MISSING" ] && [ "$NAME_OK" -eq 1 ] && [ "$DESC_OK" -eq 1 ] && { [ "$SHEBANG_OK" -eq 2 ] || [ "$NODECHK_OK" -eq 2 ]; }; then
     ok "$A1"
   else
-    bad "$A1" "缺失或空文件=[$MISSING] frontmatter name=$NAME_OK description=$DESC_OK shebang=$SHEBANG_OK/2 node --check=$NODECHK_OK/2"
+    bad "$A1" "缺失或空文件=[$MISSING] frontmatter name=$NAME_OK($FM_NAME_VAL) description=$DESC_OK(值=[$DESC_VAL]) shebang=$SHEBANG_OK/2 node --check=$NODECHK_OK/2"
   fi
 fi
 
@@ -772,7 +1088,7 @@ else
   elif [ "$R_SET" = "$DIR_NAMES" ]; then
     ok "$A3"
   else
-    bad "$A3" "README 提到的 skill 集合=[$R_SET] 与实际目录集合=[$DIR_NAMES] 不相等"
+    bad "$A3" "README 的 skill 清单集合=[$R_SET] 与实际目录集合=[$DIR_NAMES] 不相等"
   fi
 fi
 
@@ -833,8 +1149,29 @@ EOF
   VL_OUT="$(node "$VL" "$PROJ" 2>&1)"; VL_RC=$?
   VL_FAILS="$(printf '%s\n' "$VL_OUT" | grep -c '^\[FAIL\]' || true)"
   case "$VL_FAILS" in ''|*[!0-9]*) VL_FAILS=99 ;; esac
+  # D45（P-3）：**错误位置探针** —— 必须给出明确结论（二选一），不得两种结论都不给
+  A4_CONC="不可判定：错误位置探针没布置成功"
+  PROJ2="$WORK/proj-wrongpos"
+  cp -r "$PROJ" "$PROJ2" 2>/dev/null
+  if [ -f "$PROJ2/test-assets/cycles/R2-CHANGELOG-2.3/regression-plan.json" ]; then
+    mv "$PROJ2/test-assets/cycles/R2-CHANGELOG-2.3/regression-plan.json" "$PROJ2/test-assets/regression-plan.json" 2>/dev/null
+  fi
+  if [ -f "$PROJ2/test-assets/regression-plan.json" ]; then
+    VL2_OUT="$(node "$VL" "$PROJ2" 2>&1)"; VL2_RC=$?
+    VL2_FAILS="$(printf '%s\n' "$VL2_OUT" | grep -c '^\[FAIL\]' || true)"
+    case "$VL2_FAILS" in ''|*[!0-9]*) VL2_FAILS=99 ;; esac
+    if [ "$VL2_RC" -eq 0 ] && [ "$VL2_FAILS" -eq 0 ]; then
+      A4_CONC="位置不受约束（校验器不查该位置 → 本条判绿，不得要求实现去管它）"
+    else
+      A4_CONC="位置受约束（校验器判红：rc=$VL2_RC FAIL=$VL2_FAILS → 本条判红）"
+    fi
+  fi
+  printf '  · AC-004 错误位置探针结论: %s\n' "$A4_CONC"
   if [ "$VL_RC" -eq 0 ] && [ "$VL_FAILS" -eq 0 ]; then
-    ok "$A4"
+    case "$A4_CONC" in
+      位置不受约束*) ok "$A4" ;;
+      *) bad "$A4" "$A4_CONC" ;;
+    esac
   else
     bad "$A4" "verify-layout 退出码=$VL_RC FAIL 级问题数=$VL_FAILS 输出=$(printf '%s' "$VL_OUT" | grep '^\[FAIL\]' | head -3 | tr '\n' ' ')"
   fi
@@ -951,6 +1288,10 @@ const rev=(plan.needs_review||[]).map(x=>String(x.case_id)).sort();
 const es=[...rc.basis_selected].sort(), er=[...rc.basis_needs_review].sort();
 if(sel.join(",")!==es.join(",")) problems.push("selected 差集: 多["+sel.filter(x=>!es.includes(x)).join(",")+"] 少["+es.filter(x=>!sel.includes(x)).join(",")+"]");
 if(rev.join(",")!==er.join(",")) problems.push("needs_review 差集: 多["+rev.filter(x=>!er.includes(x)).join(",")+"] 少["+er.filter(x=>!rev.includes(x)).join(",")+"]");
+// D45（P-7）：undecidable_changes 也要与**同一个独立重算**比对 —— 凭空多报一个判不了条目不能全绿
+const und=(plan.undecidable_changes||[]).map(x=>String(x.change_id)).sort();
+const eu=[...(rc.undecidable_from_changelog||[])].sort();
+if(und.join(",")!==eu.join(",")) problems.push("undecidable_changes 差集: 多["+und.filter(x=>!eu.includes(x)).join(",")+"] 少["+eu.filter(x=>!und.includes(x)).join(",")+"]");
 console.log(problems.join(" ; "));
 ' "$PLAN" "$RC_FILE" 2>/dev/null)"
   if [ -z "$R10" ]; then ok "$A10"; else bad "$A10" "$R10"; fi
@@ -971,15 +1312,85 @@ const fs=require("fs");
 const plan=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));
 const rc=JSON.parse(fs.readFileSync(process.argv[2],"utf8"));
 const und=Array.isArray(plan.undecidable_changes)?plan.undecidable_changes:[];
-const expected=rc.undecidable_from_changelog||[];
+const expected=(rc.undecidable_from_changelog||[]).map(String);
+const actual=und.map(x=>String(x.change_id));
 const problems=[];
-for(const id of expected){
-  const hit=und.find(x=>String(x.change_id)===id);
-  if(!hit) problems.push("判不了条目 "+id+" 没出现在 undecidable_changes");
-  else if(typeof hit.reason!=="string"||hit.reason.trim()==="") problems.push("判不了条目 "+id+" 的 reason 为空");
+// ① 集合相等：不得多报，也不得漏报（D45 / P-5）
+for(const id of expected) if(!actual.includes(id)) problems.push("判不了条目 "+id+" 没出现在 undecidable_changes");
+for(const id of actual) if(!expected.includes(id)) problems.push("undecidable_changes 多报了 "+id+"（独立重算的判不了集合里没有它）");
+// ② reason 非空 + 可核对（实体必须在权威来源里存在 + 必须含判不了依据标记）
+const MARK=/无显式引用|未命中|没有命中|未引用|无引用|没有引用|无维度|无方法|无信号|没有信号|判不了|无法判定|无法判断|无法推出|推不出|信息不足|缺少|没有影响面|无影响面/;
+const dimIds=(rc.dim_lib||[]).map(d=>String(d.id));
+const methodIds=(rc.method_lib||[]).map(m=>String(m.id));
+for(const item of und){
+  const id=String(item.change_id);
+  const reason=typeof item.reason==="string"?item.reason.trim():"";
+  if(reason===""){problems.push("判不了条目 "+id+" 的 reason 为空");continue;}
+  for(const t of (reason.match(/\bR-\d+\b/g)||[])) if(!(rc.requirement_ids||[]).includes(t)) problems.push("判不了条目 "+id+" 的 reason 提到需求条目 "+t+"，但输入用例集里没有这个需求条目");
+  for(const t of (reason.match(/\bTC-\d{3}\b/g)||[])) if(!(rc.case_ids||[]).includes(t)) problems.push("判不了条目 "+id+" 的 reason 提到用例 "+t+"，但输入用例集里没有这个用例");
+  for(const t of (reason.match(/\bM\d+\.\d+\b/g)||[])) if(!methodIds.includes(t)) problems.push("判不了条目 "+id+" 的 reason 提到方法 "+t+"，但方法库里没有这个方法");
+  for(const m of reason.matchAll(/\b(requirement_ref|case_ref|dim_ref|dim_signal|method_not_applies)\s*:\s*([A-Za-z0-9_.\-]+)/g)){
+    const key=m[1], val=m[2];
+    if(key==="requirement_ref" && !(rc.requirement_ids||[]).includes(val)) problems.push("判不了条目 "+id+" 的 reason 里的 "+key+":"+val+" 在输入用例集里不存在");
+    if(key==="case_ref" && !(rc.case_ids||[]).includes(val)) problems.push("判不了条目 "+id+" 的 reason 里的 "+key+":"+val+" 在输入用例集里不存在");
+    if(key==="dim_ref" && !dimIds.includes(val)) problems.push("判不了条目 "+id+" 的 reason 里的 "+key+":"+val+" 在维度库里不存在");
+    if(key==="dim_signal" && !dimIds.includes(val.replace(/\(.*$/,""))) problems.push("判不了条目 "+id+" 的 reason 里的 "+key+":"+val+" 在维度库里不存在");
+    if(key==="method_not_applies" && !methodIds.includes(val)) problems.push("判不了条目 "+id+" 的 reason 里的 "+key+":"+val+" 在方法库里不存在");
+  }
+  if(!MARK.test(reason)) problems.push("判不了条目 "+id+" 的 reason 里没有可核对的判不了依据标记（应说明为什么判不了：无显式引用 / 未命中 / 判不了 / 推不出 等）");
 }
 console.log(problems.join(" ; "));
 ' "$PLAN" "$RC_FILE" 2>/dev/null)"
+  # ③ D45 子项（判不了的定义 = 推不出任何用例级影响面）：独立夹具
+  D45_DIR="$WORK/d45"
+  mkdir -p "$D45_DIR/cyc/R2-CHANGELOG-2.4"
+  cat > "$D45_DIR/cases.json" <<'FIXD45CASES'
+{
+  "schema_version": 2,
+  "requirements": [
+    { "id": "R-1", "title": "有用例覆盖的需求", "source_ref": "需求 1", "testable": true },
+    { "id": "R-9", "title": "没有任何用例覆盖的需求", "source_ref": "需求 9", "testable": true }
+  ],
+  "open_questions": [],
+  "coverage_matrix": [],
+  "cases": [
+    { "id": "TC-901", "title": "唯一有覆盖的用例", "requirement_refs": ["R-1"], "dimension": "functional", "priority": "P1", "method": ["M1.1"], "status": "active", "steps": [] }
+  ]
+}
+FIXD45CASES
+  cat > "$D45_DIR/CHANGELOG.md" <<'FIXD45LOG'
+# 变更日志 2.4
+
+## 只命中方法短语的条目
+
+本次场景属于 无明确边界的业务流程，相关方法不适用。
+
+## 引用了没有用例覆盖的需求条目
+
+本次修订涉及 @R-9 条目。
+FIXD45LOG
+  node "$RP/scripts/plan-regression.mjs" --changelog "$D45_DIR/CHANGELOG.md" --cases "$D45_DIR/cases.json" --cycle-dir "$D45_DIR/cyc/R2-CHANGELOG-2.4" >/dev/null 2>&1
+  D45_RC=$?
+  D45_PLAN="$D45_DIR/cyc/R2-CHANGELOG-2.4/regression-plan.json"
+  if [ "$D45_RC" -ne 0 ] || [ ! -s "$D45_PLAN" ]; then
+    R12="$R12 ; D45 探针：plan-regression 对独立夹具退出码=$D45_RC（期望 0）"
+  else
+    D45_PROBLEMS="$(node -e '
+const fs=require("fs");
+const plan=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));
+const problems=[];
+const und=(plan.undecidable_changes||[]).map(x=>String(x.change_id)).sort();
+const expect=["C-1","C-2"];
+const why={"C-1":"只命中方法短语、对应不到任何用例","C-2":"合法引用但无任何用例覆盖"};
+for(const id of expect) if(!und.includes(id)) problems.push("条目 "+id+"（"+why[id]+"）没有进 undecidable_changes");
+for(const id of und) if(!expect.includes(id)) problems.push("undecidable_changes 多报了 "+id);
+if((plan.selected||[]).length!==0) problems.push("selected 非空（这两条都推不出用例级影响面）");
+if((plan.needs_review||[]).length!==0) problems.push("needs_review 非空");
+if(plan.summary && plan.summary.impact_complete!==false) problems.push("summary.impact_complete="+plan.summary.impact_complete+"（有判不了条目时必须是 false）");
+console.log(problems.join(" ; "));
+' "$D45_PLAN" 2>/dev/null)"
+    [ -n "$D45_PROBLEMS" ] && R12="$R12 ; D45 探针: $D45_PROBLEMS"
+  fi
   if [ -z "$R12" ]; then ok "$A12"; else bad "$A12" "$R12"; fi
 fi
 
@@ -993,7 +1404,11 @@ const rc=JSON.parse(fs.readFileSync(process.argv[2],"utf8"));
 const und=(Array.isArray(plan.undecidable_changes)?plan.undecidable_changes:[]).map(x=>String(x.change_id));
 const problems=[];
 for(const item of plan.selected||[]){
-  for(const ref of item.change_refs||[]) if(und.includes(String(ref))) problems.push(String(item.case_id)+" 的 change_refs 含判不了条目 "+String(ref));
+  for(const ref of item.change_refs||[]) if(und.includes(String(ref))) problems.push("selected: "+String(item.case_id)+" 的 change_refs 含判不了条目 "+String(ref));
+}
+// D45（P-6）：同一约束必须覆盖 needs_review 侧 —— 只影响 needs_review 的条目不得被挂上判不了条目
+for(const item of plan.needs_review||[]){
+  for(const ref of item.change_refs||[]) if(und.includes(String(ref))) problems.push("needs_review: "+String(item.case_id)+" 的 change_refs 含判不了条目 "+String(ref));
 }
 console.log(problems.join(" ; "));
 ' "$PLAN" "$RC_FILE" 2>/dev/null)"
@@ -1092,8 +1507,8 @@ console.log(problems.join(" ; "));
   if [ -z "$R17" ]; then ok "$A17"; else bad "$A17" "$R17"; fi
 fi
 
-step "AC-018 三个集合必须两两互斥"
-A18="AC-018 三个集合必须两两互斥"
+step "AC-018 selected 与 needs_review 两个用例集合必须互斥"
+A18="AC-018 selected 与 needs_review 两个用例集合必须互斥"
 if plan_guard "$A18"; then
   R18="$(node -e '
 const fs=require("fs");
@@ -1105,17 +1520,29 @@ console.log(sel.filter(id=>rev.includes(id)).join(","));
   if [ -z "$R18" ]; then ok "$A18"; else bad "$A18" "同时出现在 selected 与 needs_review 的用例: $R18"; fi
 fi
 
-step "AC-019 不得修改输入用例集"
-A19="AC-019 不得修改输入用例集"
-SHA_BEFORE="$(sha256sum "$FX/cases.json" 2>/dev/null | cut -d' ' -f1)"
-mkdir -p "$WORK/ac19/R2-CHANGELOG-2.3"
-node "$RP/scripts/plan-regression.mjs" --changelog "$FX/CHANGELOG.md" --cases "$FX/cases.json" --cycle-dir "$WORK/ac19/R2-CHANGELOG-2.3" >/dev/null 2>&1
-SHA_AFTER="$(sha256sum "$FX/cases.json" 2>/dev/null | cut -d' ' -f1)"
-if [ -n "$SHA_BEFORE" ] && [ "$SHA_BEFORE" = "$SHA_AFTER" ]; then
-  ok "$A19"
-else
-  bad "$A19" "cases.json 的 sha256 变了: $SHA_BEFORE → $SHA_AFTER"
+step "AC-019 不得修改输入用例集与变更日志"
+A19="AC-019 不得修改输入用例集与变更日志"
+# D45（G-2 / P-9）：**自己复制一份输入、用副本跑** ——
+#   ① 变更日志也必须被指纹覆盖（此前只指纹 cases.json，而 SKILL.md 的硬约束是「两者一律不改」）；
+#   ② before 指纹必须取自**副本** —— 此前取自共享夹具，而门在更早的步骤里已经跑过一次
+#      plan-regression.mjs，污染会被"前一次跑"吸收掉 → **幂等写回**（写回内容与原文件相同）查不出来。
+AC19_DIR="$WORK/ac19"
+mkdir -p "$AC19_DIR/R2-CHANGELOG-2.3"
+cp "$FX/cases.json" "$AC19_DIR/cases.json"
+cp "$FX/CHANGELOG.md" "$AC19_DIR/CHANGELOG.md"
+C_BEFORE="$(sha256sum "$AC19_DIR/cases.json" 2>/dev/null | cut -d' ' -f1)"
+L_BEFORE="$(sha256sum "$AC19_DIR/CHANGELOG.md" 2>/dev/null | cut -d' ' -f1)"
+node "$RP/scripts/plan-regression.mjs" --changelog "$AC19_DIR/CHANGELOG.md" --cases "$AC19_DIR/cases.json" --cycle-dir "$AC19_DIR/R2-CHANGELOG-2.3" >/dev/null 2>&1
+C_AFTER="$(sha256sum "$AC19_DIR/cases.json" 2>/dev/null | cut -d' ' -f1)"
+L_AFTER="$(sha256sum "$AC19_DIR/CHANGELOG.md" 2>/dev/null | cut -d' ' -f1)"
+A19_PROBLEMS=""
+if [ -z "$C_BEFORE" ] || [ "$C_BEFORE" != "$C_AFTER" ]; then
+  A19_PROBLEMS="$A19_PROBLEMS [cases.json 的 sha256 变了: $C_BEFORE → $C_AFTER]"
 fi
+if [ -z "$L_BEFORE" ] || [ "$L_BEFORE" != "$L_AFTER" ]; then
+  A19_PROBLEMS="$A19_PROBLEMS [CHANGELOG.md 的 sha256 变了: $L_BEFORE → $L_AFTER]"
+fi
+if [ -z "$A19_PROBLEMS" ]; then ok "$A19"; else bad "$A19" "$A19_PROBLEMS"; fi
 
 step "AC-020 同一输入两次跑输出必须逐字相同（除时间戳）"
 A20="AC-020 同一输入两次跑输出必须逐字相同（除时间戳）"
@@ -1127,23 +1554,16 @@ P2F="$WORK/idem2/R2-CHANGELOG-2.3/regression-plan.json"
 if [ ! -s "$P1F" ] || [ ! -s "$P2F" ]; then
   bad "$A20" "两次跑没有都产出计划"
 else
-  DIFF="$(node -e '
-const fs=require("fs");
-const strip=(o)=>{
-  if(Array.isArray(o)) return o.map(strip);
-  if(o&&typeof o==="object"){const out={};for(const [k,v] of Object.entries(o)){if(/^(generated_at|created_at|timestamp|generatedAt|createdAt|time)$/i.test(k))continue;out[k]=strip(v);}return out;}
-  return o;
-};
-const a=strip(JSON.parse(fs.readFileSync(process.argv[1],"utf8")));
-const b=strip(JSON.parse(fs.readFileSync(process.argv[2],"utf8")));
-const sa=JSON.stringify(a,null,2), sb=JSON.stringify(b,null,2);
-if(sa===sb){console.log("");process.exit(0);}
-const la=sa.split("\n"), lb=sb.split("\n");
-const out=[];
-for(let i=0;i<Math.max(la.length,lb.length);i++) if(la[i]!==lb[i]) out.push("行"+(i+1)+": ["+(la[i]||"")+"] vs ["+(lb[i]||"")+"]");
-console.log(out.slice(0,4).join(" ; "));
-' "$P1F" "$P2F" 2>/dev/null)"
-  if [ -z "$DIFF" ]; then ok "$A20"; else bad "$A20" "两次输出有差异: $DIFF"; fi
+  # D45（P-10）：豁免依据是**值的形态**（ISO8601 / epoch 秒 / epoch 毫秒），不是字段名清单 ——
+  # 名为 time 的非时间戳字段不得被误剥，别名字的真时间戳也不得被保留。
+  DIFF="$(node "$WORK/plan-diff.mjs" "$P1F" "$P2F" 2>/dev/null)"
+  if [ -z "$DIFF" ]; then
+    bad "$A20" "比对工具不可用（不可判定，不判通过）"
+  elif [ "$DIFF" = "SAME" ]; then
+    ok "$A20"
+  else
+    bad "$A20" "两次输出有差异: $DIFF"
+  fi
 fi
 
 # ---------------------------------------------------------------- AC-021 ~ AC-024（组合门）
@@ -1158,8 +1578,10 @@ if [ ! -f "$INSTALLER" ]; then
 else
   HELP_OUT="$(node "$INSTALLER" --help 2>&1)"
   SUB_OK=0
-  printf '%s' "$HELP_OUT" | grep -qiE 'verify' && SUB_OK=1
-  [ "$SUB_OK" -eq 0 ] && A21_PROBLEMS="$A21_PROBLEMS --help 里没有列出组合校验子命令"
+  # D45（G-4 / P-11）：命令名**钉死为 verify**（与 README 文档化的命令名一致）——
+  # 必须是独立词（`verify-suite` 这类更长的名字不算），且下面还要 dispatch 实跑一遍。
+  printf '%s' "$HELP_OUT" | grep -qE '(^|[^A-Za-z0-9_-])verify([^A-Za-z0-9_-]|$)' && SUB_OK=1
+  [ "$SUB_OK" -eq 0 ] && A21_PROBLEMS="$A21_PROBLEMS --help 的命令列表里没有列出组合校验子命令 verify"
   VERIFY_OUT="$(node "$INSTALLER" verify --root "$VERIFY_ROOT" 2>&1)"; VERIFY_RC=$?
   [ "$VERIFY_RC" -ne 0 ] && A21_PROBLEMS="$A21_PROBLEMS verify 退出码=$VERIFY_RC out=$(printf '%s' "$VERIFY_OUT" | head -3 | tr '\n' ' ')"
   # ③ 临时目录里必须出现**全部** skill 目录
@@ -1183,6 +1605,25 @@ o.requires=o.requires||{};o.requires["test-case-design"]=">=99.0.0";fs.writeFile
     fi
   else
     A21_PROBLEMS="$A21_PROBLEMS [副本里没有 test-execute/skill-meta.json，无法做依赖图探针]"
+  fi
+  # ⑤ D45（G-6）：版本比较必须**逐段数值** —— 1.10.0 满足 >=1.2.0（字典序会说"不满足"）
+  OKPKG="$WORK/okpkg"
+  mkdir -p "$OKPKG"
+  cp -r "$PKG"/bin "$PKG"/skills "$PKG"/package.json "$OKPKG"/ 2>/dev/null
+  if [ -f "$OKPKG/skills/test-case-design/skill-meta.json" ] && [ -f "$OKPKG/skills/test-execute/skill-meta.json" ]; then
+    node -e '
+const fs=require("fs");
+const mf=process.argv[1], tf=process.argv[2];
+const m=JSON.parse(fs.readFileSync(mf,"utf8")); m.version="1.10.0"; fs.writeFileSync(mf,JSON.stringify(m,null,2));
+const t=JSON.parse(fs.readFileSync(tf,"utf8")); t.requires=t.requires||{}; t.requires["test-case-design"]=">=1.2.0"; fs.writeFileSync(tf,JSON.stringify(t,null,2));
+' "$OKPKG/skills/test-case-design/skill-meta.json" "$OKPKG/skills/test-execute/skill-meta.json" 2>/dev/null
+    mkdir -p "$WORK/okroot"
+    OKV_OUT="$(node "$OKPKG/bin/test-agent-skills.mjs" verify --root "$WORK/okroot" 2>&1)"; OKV_RC=$?
+    if [ "$OKV_RC" -ne 0 ]; then
+      A21_PROBLEMS="$A21_PROBLEMS [1.10.0 满足 >=1.2.0，但 verify 退出码=$OKV_RC —— 版本比较不是逐段数值（字典序会误判不满足）]"
+    fi
+  else
+    A21_PROBLEMS="$A21_PROBLEMS [副本里没有 test-case-design / test-execute 的 skill-meta.json，无法做逐段边界探针]"
   fi
 fi
 if [ -z "$A21_PROBLEMS" ]; then ok "$A21"; else bad "$A21" "$A21_PROBLEMS"; fi
@@ -1247,16 +1688,20 @@ cp -r "$PKG"/bin "$PKG"/skills "$PKG"/package.json "$BADPKG2"/ 2>/dev/null
 if [ ! -f "$BADPKG2/bin/test-agent-skills.mjs" ] || [ ! -f "$BADPKG2/skills/test-execute/skill-meta.json" ]; then
   A23_PROBLEMS="缺安装器或 test-execute/skill-meta.json"
 else
+  # D45（G-6 / P-12）：反向逐段边界探针 —— 1.2.0 **不满足** >=1.10.0
+  # （字典序比较会说"满足" → 一个语义错误的版本比较能一路全绿通过）。
   node -e '
-const fs=require("fs");const f=process.argv[1];const o=JSON.parse(fs.readFileSync(f,"utf8"));
-o.requires=o.requires||{};o.requires["test-case-design"]=">=99.0.0";fs.writeFileSync(f,JSON.stringify(o,null,2));
-' "$BADPKG2/skills/test-execute/skill-meta.json" 2>/dev/null
+const fs=require("fs");
+const mf=process.argv[1], tf=process.argv[2];
+const m=JSON.parse(fs.readFileSync(mf,"utf8")); m.version="1.2.0"; fs.writeFileSync(mf,JSON.stringify(m,null,2));
+const t=JSON.parse(fs.readFileSync(tf,"utf8")); t.requires=t.requires||{}; t.requires["test-case-design"]=">=1.10.0"; fs.writeFileSync(tf,JSON.stringify(t,null,2));
+' "$BADPKG2/skills/test-case-design/skill-meta.json" "$BADPKG2/skills/test-execute/skill-meta.json" 2>/dev/null
   mkdir -p "$WORK/badroot2"
   BADV2_OUT="$(node "$BADPKG2/bin/test-agent-skills.mjs" verify --root "$WORK/badroot2" 2>&1)"; BADV2_RC=$?
   [ "$BADV2_RC" -ne 0 ] || A23_PROBLEMS="$A23_PROBLEMS [退出码=0，期望非 0]"
   printf '%s' "$BADV2_OUT" | grep -q 'test-execute' || A23_PROBLEMS="$A23_PROBLEMS [输出没有点名出问题的 skill]"
-  printf '%s' "$BADV2_OUT" | grep -q '99.0.0' || A23_PROBLEMS="$A23_PROBLEMS [输出没有给出要求的版本值]"
-  printf '%s' "$BADV2_OUT" | grep -q '0.1.0' || A23_PROBLEMS="$A23_PROBLEMS [输出没有给出实际版本值]"
+  printf '%s' "$BADV2_OUT" | grep -q '1\.10\.0' || A23_PROBLEMS="$A23_PROBLEMS [输出没有给出要求的版本值]"
+  printf '%s' "$BADV2_OUT" | grep -q '1\.2\.0' || A23_PROBLEMS="$A23_PROBLEMS [输出没有给出实际版本值]"
   if printf '%s' "$BADV2_OUT" | grep -qiE '缺少必填字段|expected'; then
     A23_PROBLEMS="$A23_PROBLEMS [输出里出现了下游业务错的特征串]"
   fi
@@ -1297,9 +1742,8 @@ if [ "${REQ011_NO_MUT:-0}" = "1" ]; then
 else
   # ⚠️ D25 ⑪：变异**不得在原地改被验对象** —— 一律在整包的**副本**上注入，
   #    并做注入前后指纹比对（注入未生效即判红：变异没打上 → 校验器放行 → 假 PASS）。
-  ORIG_FP="$(node "$WORK/fingerprint.mjs" "$RP" 2>/dev/null)"
   BASE_KEYS=""
-  MUT_TOTAL=0; MUT_DETECTED=0; MUT_ESCAPED=""; MUT_INVALID=""
+  MUT_TOTAL=0; MUT_DETECTED=0; MUT_ESCAPED=""; MUT_INVALID=""; MUT_POLLUTED=""; MUT_NOTE=""
   # 变异清单：每个变异给若干候选注入方式（正则 → 替换），
   # 依次尝试，取第一个「注入生效 + 变异后仍结构合法 + 变异后仍能正常产出计划」的。
   # 候选锚点全部来自**契约里的字面量**（输出字段名 / 库字段名 / 状态字面量），
@@ -1319,13 +1763,21 @@ else
     'case_refs\s*:\s*\[[^\]]*\]'@@@'case_refs: []'
     '\.case_refs\b'@@@'.case_refs_MUT'
     '\bcase_refs\b'@@@'case_refs_MUT'
+    "['\"]case_refs['\"]"@@@"'case_refs_MUT'"
     '(^|\n)([ \t]*)applies_when\s*:[^\n]*'@@@'$1$2applies_when: [],'
     '\bapplies_when\b'@@@'applies_when_MUT'
+    'signal_dimensions\s*:\s*\[[^\]]*\]'@@@'signal_dimensions: []'
+    '\.signal_dimensions\b'@@@'.signal_dimensions_MUT'
     '(^|\n)([ \t]*)not_applies_when\s*:[^\n]*'@@@'$1$2not_applies_when: [],'
     '\bnot_applies_when\b'@@@'not_applies_when_MUT'
+    'method_hits\s*:\s*\[[^\]]*\]'@@@'method_hits: []'
+    '\.method_hits\b'@@@'.method_hits_MUT'
     '([A-Za-z_$][A-Za-z0-9_$]*\.status\s*===\s*.active.)'@@@'true'
     '([A-Za-z_$][A-Za-z0-9_$]*\.status\s*!==\s*.active.)'@@@'false'
     '([A-Za-z_$][A-Za-z0-9_$]*\s*===\s*.active.)'@@@'true'
+    "([A-Za-z_\$][A-Za-z0-9_\$]*\\[['\\\"]status['\\\"]\\]\\s*===\\s*['\\\"]active['\\\"])"@@@'true'
+    "(\\[['\\\"]status['\\\"]\\]\\s*===\\s*['\\\"]active['\\\"])"@@@'true'
+    "([A-Za-z_\$][A-Za-z0-9_\$]*(\\[['\\\"]status['\\\"]\\]|\\.status)\\s*!==\\s*['\\\"]active['\\\"])"@@@'false'
     '(^|\n)([ \t]*)undecidable_changes\s*:[^\n]*'@@@'$1$2undecidable_changes: [],'
     'undecidable_changes\s*:\s*\[[^\]]*\]'@@@'undecidable_changes: []'
     'undecidable_changes\s*:\s*[A-Za-z_$][A-Za-z0-9_$]*'@@@'undecidable_changes: []'
@@ -1335,27 +1787,29 @@ else
     'selected\.push\('@@@'selected.push({case_id:"TC-999",reason:"mutant",change_refs:[]},'
     'const\s+selected\s*=\s*\[\]'@@@'const selected = [{case_id:"TC-999",reason:"mutant",change_refs:[]}]'
   )
-  # 变异 → 候选下标区间（按上面的顺序切段）
+  # 变异 → 候选下标区间（按上面的顺序切段；D45/G-7：每个变异给**多个**备选锚点，
+  # 主锚点不可达时依次尝试；锚点要覆盖等价写法，如 obj.status 与 obj['status']）
   MUT_RANGES=(
-    "0 1 2 3"
-    "4 5"
-    "6 7"
-    "8 9 10"
-    "11 12 13"
-    "14 15"
-    "16"
-    "17 18"
+    "0 1 2 3 4"
+    "5 6 7 8"
+    "9 10 11 12"
+    "13 14 15 16 17 18"
+    "19 20 21"
+    "22 23"
+    "24"
+    "25 26"
   )
   BASE_OUT="$(REQ011_NO_MUT=1 bash "$SELF" "$PKG" 2>&1)"
   BASE_KEYS="$(failkeys "$BASE_OUT")"
+  BASE_SIG="$(failsig "$BASE_OUT" "$PKG")"
+  MUT_NOTE=""
   if [ -n "$BASE_KEYS" ]; then
-    MUT_INVALID="基线本身不绿（失败键: $(printf '%s' "$BASE_KEYS" | tr '\n' ' '))）—— 变异检测无从谈起"
+    MUT_NOTE="基线本身不绿（失败键: $(printf '%s' "$BASE_KEYS" | tr '\n' ' ')）—— 变异检测以「失败行集合差异」为准"
   fi
   for i in "${!MUT_NAMES[@]}"; do
-    MUT_TOTAL=$((MUT_TOTAL+1))
     NAME="${MUT_NAMES[$i]}"
     RANGE="${MUT_RANGES[$i]}"
-    INJECTED=0; USED=""
+    INJECTED=0; USED=""; COPY_CHANGED=0
     for idx in $RANGE; do
       CAND="${MUT_CANDS[$idx]}"
       REGEX="${CAND%%@@@*}"; REPL="${CAND#*@@@}"
@@ -1366,17 +1820,19 @@ else
       MUTRES="$(node "$WORK/mutate.mjs" "$MUTPKG/skills/regression-plan" "$REGEX" "$REPL" 2>/dev/null)"
       CHANGED="$(node -e 'try{console.log(JSON.parse(process.argv[1]).changed)}catch(e){console.log(0)}' "$MUTRES")"
       AFTER_FP="$(node "$WORK/fingerprint.mjs" "$MUTPKG/skills/regression-plan" 2>/dev/null)"
+      # 自证 ①（G-9）：注入必须落在**副本**里 —— 副本内目标文件指纹变化
       if [ "${CHANGED:-0}" -eq 0 ] || [ "$BEFORE_FP" = "$AFTER_FP" ]; then
         continue   # 注入未生效 → 换下一个候选（指纹比对是硬要求）
       fi
-      # 结构合法性：语法必须仍然合法（语法错/崩溃 = 假检出，不计入）
+      COPY_CHANGED=1
+      # 自证 ②：语法必须仍然合法（语法错/崩溃 = 假检出，不计入）
       SYNTAX_BAD=0
       for f in "$MUTPKG"/skills/regression-plan/scripts/*.mjs "$MUTPKG"/skills/regression-plan/scripts/lib/*.mjs; do
         [ -f "$f" ] || continue
         node --check "$f" >/dev/null 2>&1 || { SYNTAX_BAD=1; break; }
       done
       [ "$SYNTAX_BAD" -eq 1 ] && continue
-      # 结构合法性：变异后的脚本必须还能正常产出计划（崩溃 = 假检出，不计入）
+      # 自证 ③：变异后的脚本必须还能正常产出计划（崩溃 = 假检出，不计入）
       mkdir -p "$WORK/mutcheck-$i/R2-CHANGELOG-2.3"
       node "$MUTPKG/skills/regression-plan/scripts/plan-regression.mjs" --changelog "$FX/CHANGELOG.md" --cases "$FX/cases.json" --cycle-dir "$WORK/mutcheck-$i/R2-CHANGELOG-2.3" >/dev/null 2>"$WORK/mutcheck-$i.err"
       MUT_RC=$?
@@ -1386,33 +1842,51 @@ else
       KEYS_BEFORE="$(node "$WORK/plan-keys.mjs" "$BASE_CYC/regression-plan.json" 2>/dev/null)"
       KEYS_AFTER="$(node "$WORK/plan-keys.mjs" "$WORK/mutcheck-$i/R2-CHANGELOG-2.3/regression-plan.json" 2>/dev/null)"
       [ "$KEYS_BEFORE" = "$KEYS_AFTER" ] || continue
+      # 自证 ④（D45 / G-8）：**行为必须真的变了** —— 变异后的计划与基线不同。
+      #   计划与基线相同 = 注入后行为等价（例如实现会过滤掉不存在的用例 id）
+      #   → 这是**无效变异**，不是逃逸 → 换下一个锚点。
+      BEHAVIOR="$(node "$WORK/plan-diff.mjs" "$BASE_CYC/regression-plan.json" "$WORK/mutcheck-$i/R2-CHANGELOG-2.3/regression-plan.json" 2>/dev/null)"
+      case "$BEHAVIOR" in
+        SAME|"") continue ;;
+      esac
       INJECTED=1; USED="$REGEX"
       break
     done
     if [ "$INJECTED" -ne 1 ]; then
-      MUT_INVALID="$MUT_INVALID [$NAME: 没有候选锚点能在副本上注入（结构合法）]"
+      # 无效变异：锚点都不可达 / 语法不合法 / 行为等价 → **不计入分母**，不判红
+      MUT_INVALID="$MUT_INVALID [$NAME: 所有候选锚点都不可用（不可达 / 语法不合法 / 行为等价）]"
       continue
     fi
+    if [ "$COPY_CHANGED" -ne 1 ]; then
+      MUT_INVALID="$MUT_INVALID [$NAME: 没有拿到「注入落在副本上」的证据]"
+      continue
+    fi
+    MUT_TOTAL=$((MUT_TOTAL+1))   # 有效变异数（分母）
     # 跑**本脚本**（嵌套）：护栏必须因为这个变异而多出一条失败
     MUT_OUT="$(REQ011_NO_MUT=1 bash "$SELF" "$MUTPKG" 2>&1)"
-    MUT_KEYS="$(failkeys "$MUT_OUT")"
-    NEWKEYS="$(comm -3 <(printf '%s\n' "$BASE_KEYS" | grep -v '^$') <(printf '%s\n' "$MUT_KEYS" | grep -v '^$'))"
-    if [ -n "$NEWKEYS" ]; then
+    MUT_SIG="$(failsig "$MUT_OUT" "$MUTPKG")"
+    if [ "$MUT_SIG" != "$BASE_SIG" ]; then
       MUT_DETECTED=$((MUT_DETECTED+1))
     else
       MUT_ESCAPED="$MUT_ESCAPED [$NAME]"
     fi
   done
+  # G-9：被验对象在整个验收过程中不得被改动（起点 = 基线计划跑之前）
   NOW_FP="$(node "$WORK/fingerprint.mjs" "$RP" 2>/dev/null)"
-  if [ "$ORIG_FP" != "$NOW_FP" ]; then
-    MUT_INVALID="$MUT_INVALID [被验对象在变异过程中被改动 —— 变异必须只在副本上做]"
+  if [ -n "$RP_FP_START" ] && [ "$RP_FP_START" != "$NOW_FP" ]; then
+    MUT_POLLUTED="被验对象 skills/regression-plan/ 在验收过程中被改动（指纹 $RP_FP_START → $NOW_FP）—— 变异必须只在副本上做"
   fi
-  if [ -n "$MUT_INVALID" ]; then
-    bad "$A25" "检出 $MUT_DETECTED/$MUT_TOTAL；无效变异:$MUT_INVALID"
-  elif [ "$MUT_DETECTED" -eq "$MUT_TOTAL" ] && [ "$MUT_TOTAL" -eq 8 ]; then
+  # 三种结果分开（D45 / G-8）：逃逸 → 判红；有效变异不足 → 不可判定（不判红也不判绿）
+  if [ -n "$MUT_ESCAPED" ]; then
+    bad "$A25" "检出 $MUT_DETECTED/$MUT_TOTAL；逃逸:$MUT_ESCAPED；${MUT_NOTE:-}"
+  elif [ -n "$MUT_POLLUTED" ]; then
+    bad "$A25" "$MUT_POLLUTED"
+  elif [ "$MUT_TOTAL" -eq 8 ] && [ "$MUT_DETECTED" -eq 8 ]; then
     ok "$A25（变异检出 $MUT_DETECTED/$MUT_TOTAL）"
+  elif [ "$MUT_TOTAL" -lt 8 ]; then
+    undec "$A25" "不可判定（有效变异仅 $MUT_TOTAL/8）；无效变异:$MUT_INVALID"
   else
-    bad "$A25" "检出 $MUT_DETECTED/$MUT_TOTAL（要求 8/8）；逃逸:$MUT_ESCAPED"
+    bad "$A25" "检出 $MUT_DETECTED/$MUT_TOTAL（要求 8/8）；无效变异:$MUT_INVALID"
   fi
 fi
 
@@ -1503,16 +1977,16 @@ TP_RP="$(node -e 'try{const o=JSON.parse(process.argv[1]);console.log((o.thirdPa
 NET_RP="$(node -e 'try{const o=JSON.parse(process.argv[1]);console.log((o.network||[]).length)}catch(e){console.log(-1)}' "$SCAN_RP")"
 [ "${TP_RP:-1}" -eq 0 ] || A27_PROBLEMS="$A27_PROBLEMS [\$RP 里的非内置 import: $(node -e 'try{const o=JSON.parse(process.argv[1]);console.log((o.thirdParty||[]).slice(0,3).join(" ; "))}catch(e){console.log("解析失败")}' "$SCAN_RP")]"
 [ "${NET_RP:-1}" -eq 0 ] || A27_PROBLEMS="$A27_PROBLEMS [\$RP 里的网络调用: $(node -e 'try{const o=JSON.parse(process.argv[1]);console.log((o.network||[]).slice(0,3).join(" ; "))}catch(e){console.log("解析失败")}' "$SCAN_RP")]"
-# ③ bin/ 下「本次新增的组合门实现文件」= 含 skill-meta 标记的 .mjs（组合门必须读它）
-BIN_GATE_FILES=""
-for f in "$BINDIR"/*.mjs "$BINDIR"/*.js; do
-  [ -f "$f" ] || continue
-  grep -q 'skill-meta' "$f" 2>/dev/null && BIN_GATE_FILES="$BIN_GATE_FILES $f"
-done
-if [ -z "$BIN_GATE_FILES" ]; then
-  A27_PROBLEMS="$A27_PROBLEMS [bin/ 下没有识别到组合门实现文件（含 skill-meta 标记的 .mjs）]"
+# ③ bin/ 下「本次新增的组合门实现文件」= 必然读写 skill-meta 的 .mjs
+#    D45（G-5 / P-16）：识别规则放宽到等价写法 —— 同时含「skill 标记」与「skill-meta / meta.json 标记」
+#    （覆盖 ['skill','meta.json'].join('-') 这类拼接）；不把 bin/qa-impl.mjs 误认进来（它两者皆无）。
+BIN_GATE_FILES="$(node "$WORK/gate-files.mjs" "$BINDIR" 2>/dev/null)"
+BIN_GATE_COUNT="$(node -e 'try{console.log(JSON.parse(process.argv[1]).length)}catch(e){console.log(0)}' "$BIN_GATE_FILES" 2>/dev/null)"
+case "$BIN_GATE_COUNT" in ''|*[!0-9]*) BIN_GATE_COUNT=0 ;; esac
+if [ "$BIN_GATE_COUNT" -eq 0 ]; then
+  A27_PROBLEMS="$A27_PROBLEMS [bin/ 下没有识别到组合门实现文件（含 skill 标记 + skill-meta/meta.json 标记的 .mjs）]"
 else
-  SCAN_BIN="$(node "$WORK/scan.mjs" $BIN_GATE_FILES 2>/dev/null)"
+  SCAN_BIN="$(node "$WORK/scan.mjs" "$BIN_GATE_FILES" 2>/dev/null)"
   TP_BIN="$(node -e 'try{const o=JSON.parse(process.argv[1]);console.log((o.thirdParty||[]).length)}catch(e){console.log(-1)}' "$SCAN_BIN")"
   NET_BIN="$(node -e 'try{const o=JSON.parse(process.argv[1]);console.log((o.network||[]).length)}catch(e){console.log(-1)}' "$SCAN_BIN")"
   [ "${TP_BIN:-1}" -eq 0 ] || A27_PROBLEMS="$A27_PROBLEMS [组合门实现里的非内置 import: $(node -e 'try{const o=JSON.parse(process.argv[1]);console.log((o.thirdParty||[]).slice(0,3).join(" ; "))}catch(e){console.log("解析失败")}' "$SCAN_BIN")]"
@@ -1529,14 +2003,17 @@ SK="$RP/SKILL.md"
 if [ ! -s "$SK" ]; then
   A28_PROBLEMS="缺 $SK"
 else
-  M_PLAN="$(grep -c 'plan-regression\.mjs' "$SK" 2>/dev/null || true)"
-  M_CHECK="$(grep -c 'check-plan\.mjs' "$SK" 2>/dev/null || true)"
-  SEQ_PLAN="$(grep -cE 'node[[:space:]]+scripts/plan-regression\.mjs' "$SK" 2>/dev/null || true)"
-  SEQ_CHECK="$(grep -cE 'node[[:space:]]+scripts/check-plan\.mjs' "$SK" 2>/dev/null || true)"
-  [ "${M_PLAN:-0}" -ge 1 ] || A28_PROBLEMS="$A28_PROBLEMS [没有提到 plan-regression.mjs]"
-  [ "${M_CHECK:-0}" -ge 1 ] || A28_PROBLEMS="$A28_PROBLEMS [没有提到 check-plan.mjs]"
-  [ "${SEQ_PLAN:-0}" -ge 1 ] || A28_PROBLEMS="$A28_PROBLEMS [没有可执行的调用序列 node scripts/plan-regression.mjs]"
-  [ "${SEQ_CHECK:-0}" -ge 1 ] || A28_PROBLEMS="$A28_PROBLEMS [没有可执行的调用序列 node scripts/check-plan.mjs]"
+  # D45（G-10）：①「文件提及」（非命令语境）与 ②「可执行调用」（带参数）**互斥** → 可分别证伪
+  MENT="$(node "$WORK/skill-mentions.mjs" "$SK" plan-regression.mjs check-plan.mjs 2>/dev/null)"
+  ment_field() { node -e 'try{const o=JSON.parse(process.argv[1]);const v=o[process.argv[2]]||{};console.log(Number(v[process.argv[3]]||0))}catch(e){console.log(0)}' "$1" "$2" "$3"; }
+  MP_M="$(ment_field "$MENT" plan-regression.mjs mentions)"
+  MP_C="$(ment_field "$MENT" plan-regression.mjs callsWithArgs)"
+  MC_M="$(ment_field "$MENT" check-plan.mjs mentions)"
+  MC_C="$(ment_field "$MENT" check-plan.mjs callsWithArgs)"
+  [ "${MP_M:-0}" -ge 1 ] || A28_PROBLEMS="$A28_PROBLEMS [没有在非命令语境里提到 plan-regression.mjs（只出现在命令里不算"提到"）]"
+  [ "${MC_M:-0}" -ge 1 ] || A28_PROBLEMS="$A28_PROBLEMS [没有在非命令语境里提到 check-plan.mjs（只出现在命令里不算"提到"）]"
+  [ "${MP_C:-0}" -ge 1 ] || A28_PROBLEMS="$A28_PROBLEMS [没有可执行的调用序列 node scripts/plan-regression.mjs --<参数>]"
+  [ "${MC_C:-0}" -ge 1 ] || A28_PROBLEMS="$A28_PROBLEMS [没有可执行的调用序列 node scripts/check-plan.mjs --<参数>]"
   FORBIDDEN="$(grep -cE '自行判断影响面|人工分析后手写|由 agent 推断|自行推断受影响用例|手工写[[:space:]]*`?regression-plan\.json' "$SK" 2>/dev/null || true)"
   [ "${FORBIDDEN:-0}" -eq 0 ] || A28_PROBLEMS="$A28_PROBLEMS [出现了让 agent 自行判断影响面的措辞（$FORBIDDEN 处）]"
   # 三类后果各是什么
@@ -1554,13 +2031,13 @@ if [ -z "$A28_PROBLEMS" ]; then ok "$A28"; else bad "$A28" "$A28_PROBLEMS"; fi
 
 # ---------------------------------------------------------------- 结论
 
-EVAL_COUNT=$((PASS + FAIL))
+EVAL_COUNT=$((PASS + FAIL + UNDEC))
 if [ "$EVAL_COUNT" -ne "$AC_COUNT" ]; then
   printf '\n⚠️ 判据条数不符：本脚本评了 %s 条，acceptance.md 的 `### AC-` 实际条数是 %s 条\n' "$EVAL_COUNT" "$AC_COUNT"
   FAIL=$((FAIL+1))
 fi
-printf '\n结论: %s PASS / %s FAIL\n' "$PASS" "$FAIL"
-if [ "$FAIL" -eq 0 ]; then
+printf '\n结论: %s PASS / %s FAIL / %s 不可判定\n' "$PASS" "$FAIL" "$UNDEC"
+if [ "$FAIL" -eq 0 ] && [ "$UNDEC" -eq 0 ]; then
   exit 0
 fi
 exit 1
