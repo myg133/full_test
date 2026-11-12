@@ -183,6 +183,15 @@ cat > "$FX/bad-TC.md" <<'FIXBADTC'
 
 本次只针对 @TC-999 用例做收口。
 FIXBADTC
+# D44：坏维度引用（@dim:<不存在的维度>）也必须报错 —— 维度库是唯一来源，
+# 静默忽略等于悄悄漏测（D36 ③：坏引用是**输入错误**，该报错，不是"判不了"）。
+cat > "$FX/bad-DIM.md" <<'FIXBADDIM'
+# 变更日志 2.3
+
+## 收口某未知维度
+
+本次修订涉及 @dim:not-a-real-dimension 维度。
+FIXBADDIM
 
 # ---------------------------------------------------------------- 判据自带的独立实现（不复用被验代码）
 
@@ -996,17 +1005,21 @@ A14="AC-014 坏引用必须报错，不得静默"
 if [ ! -f "$RP/scripts/plan-regression.mjs" ]; then
   bad "$A14" "缺 scripts/plan-regression.mjs"
 else
-  BAD_RC1=99; BAD_RC2=99; BAD_OUT1=""; BAD_OUT2=""
-  mkdir -p "$WORK/bad1/R2-CHANGELOG-2.3" "$WORK/bad2/R2-CHANGELOG-2.3"
+  BAD_RC1=99; BAD_RC2=99; BAD_RC3=99; BAD_OUT1=""; BAD_OUT2=""; BAD_OUT3=""
+  mkdir -p "$WORK/bad1/R2-CHANGELOG-2.3" "$WORK/bad2/R2-CHANGELOG-2.3" "$WORK/bad3/R2-CHANGELOG-2.3"
   BAD_OUT1="$(node "$RP/scripts/plan-regression.mjs" --changelog "$FX/bad-R.md" --cases "$FX/cases.json" --cycle-dir "$WORK/bad1/R2-CHANGELOG-2.3" 2>&1)"; BAD_RC1=$?
   BAD_OUT2="$(node "$RP/scripts/plan-regression.mjs" --changelog "$FX/bad-TC.md" --cases "$FX/cases.json" --cycle-dir "$WORK/bad2/R2-CHANGELOG-2.3" 2>&1)"; BAD_RC2=$?
-  P1=0; P2=0
+  BAD_OUT3="$(node "$RP/scripts/plan-regression.mjs" --changelog "$FX/bad-DIM.md" --cases "$FX/cases.json" --cycle-dir "$WORK/bad3/R2-CHANGELOG-2.3" 2>&1)"; BAD_RC3=$?
+  P1=0; P2=0; P3=0
   [ "$BAD_RC1" -eq 1 ] && printf '%s' "$BAD_OUT1" | grep -q 'R-99' && P1=1
   [ "$BAD_RC2" -eq 1 ] && printf '%s' "$BAD_OUT2" | grep -q 'TC-999' && P2=1
-  if [ "$P1" -eq 1 ] && [ "$P2" -eq 1 ]; then
+  # D44：第三种坏引用 —— 指向维度库里不存在的维度。退出码必须是 1（不是 2 用法错、不是 0 静默放过），
+  # 且输出必须点名那个不存在的维度名。
+  [ "$BAD_RC3" -eq 1 ] && printf '%s' "$BAD_OUT3" | grep -q 'not-a-real-dimension' && P3=1
+  if [ "$P1" -eq 1 ] && [ "$P2" -eq 1 ] && [ "$P3" -eq 1 ]; then
     ok "$A14"
   else
-    bad "$A14" "@R-99: rc=$BAD_RC1(期望1) 点名=$P1 out=$(printf '%s' "$BAD_OUT1" | head -2 | tr '\n' ' ') | @TC-999: rc=$BAD_RC2(期望1) 点名=$P2 out=$(printf '%s' "$BAD_OUT2" | head -2 | tr '\n' ' ')"
+    bad "$A14" "@R-99: rc=$BAD_RC1(期望1) 点名=$P1 out=$(printf '%s' "$BAD_OUT1" | head -2 | tr '\n' ' ') | @TC-999: rc=$BAD_RC2(期望1) 点名=$P2 out=$(printf '%s' "$BAD_OUT2" | head -2 | tr '\n' ' ') | @dim:不存在: rc=$BAD_RC3(期望1) 点名=$P3 out=$(printf '%s' "$BAD_OUT3" | head -2 | tr '\n' ' ')"
   fi
 fi
 
