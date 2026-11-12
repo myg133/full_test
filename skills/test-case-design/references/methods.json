@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "description": "测试方法库（唯一来源）。本库只收录 M1.x 段的**测试设计方法**（怎么测）；M0.x / M4.x 段是架构稿 Layer 0 的**必选测试点**（测什么），不在本库内 —— 用例里出现这类编号时 check-methods.mjs 报\"无法判定\"，不得默认通过（详见 references/design-methods.md §6）。references/design-methods.md 是本文档的人读说明，scripts/check-methods.mjs 是本文档的机器核验入口；两者不一致时以本文件为准。",
+  "methods": [
+    {
+      "id": "M1.1",
+      "name": "等价类划分",
+      "aliases": ["等价类", "等价类划分法", "EP", "Equivalence Partitioning"],
+      "purpose": "把输入域划分成处理逻辑相同的若干等价类，每个等价类取一个代表值做用例。",
+      "applies_when": ["输入", "取值", "参数", "字段", "格式", "必填", "长度", "范围", "数量", "类型", "枚举", "允许", "禁止"],
+      "not_applies_when": ["无输入域的纯展示需求", "输出完全固定的只读查询"],
+      "required_outputs": [
+        { "kind": "min_cases_by_dimension", "dimension": "functional", "min": 1 },
+        { "kind": "min_assertions_per_case", "min": 1 }
+      ],
+      "typical_dimensions": ["functional", "exception"],
+      "anti_patterns": [
+        "只写有效等价类，无效等价类一条不写",
+        "一个用例同时塞多个等价类的输入，代表值不可辨认",
+        "等价类用例与边界值用例重复（等价类不取临界点）"
+      ]
+    },
+    {
+      "id": "M1.2",
+      "name": "边界值分析",
+      "aliases": ["边界值", "边界值法", "BVA", "Boundary Value Analysis"],
+      "purpose": "取边界及其邻近值做用例，重点测边界内外各一格。",
+      "applies_when": ["长度", "范围", "上限", "下限", "最多", "至少", "不超过", "不少于", "位数", "数量", "阈值", "到期", "间隔"],
+      "not_applies_when": ["无明确边界的业务流程"],
+      "required_outputs": [
+        { "kind": "min_cases_by_dimension", "dimension": "boundary", "min": 3, "distinct_expected": true }
+      ],
+      "typical_dimensions": ["boundary"],
+      "anti_patterns": [
+        "只测边界值本身，没有内外一格",
+        "所有边界用例的期望结果完全相同，看不出区分度",
+        "把多个不相邻的边界混在一张用例里，出错时定位不到具体边界"
+      ]
+    },
+    {
+      "id": "M1.3",
+      "name": "判定表",
+      "aliases": ["判定表法", "决策表", "Decision Table"],
+      "purpose": "把条件组合与动作列成表，用尽量少的用例覆盖全部规则。",
+      "applies_when": ["必须同时", "如果", "否则", "当", "取决于", "任一", "所有", "组合", "规则", "条件"],
+      "not_applies_when": [],
+      "required_outputs": [
+        { "kind": "min_cases_by_dimension", "dimension": "functional", "min": 2, "distinct_expected": true },
+        { "kind": "min_assertions_per_case", "min": 2 }
+      ],
+      "typical_dimensions": ["functional", "permission"],
+      "anti_patterns": [
+        "只覆盖一条规则，其余规则没有对应用例",
+        "把不可能成立的组合硬凑成用例",
+        "一条用例只断言一个动作，规则没有整体验证"
+      ]
+    },
+    {
+      "id": "M1.4",
+      "name": "状态迁移",
+      "aliases": ["状态迁移法", "状态机", "State Transition"],
+      "purpose": "枚举状态与触发事件，验证合法迁移、非法迁移与被忽略的事件。",
+      "applies_when": ["状态", "生命周期", "流转", "迁移", "锁定", "解锁", "生效", "失效", "撤销", "取消", "提交后", "关闭", "开启"],
+      "not_applies_when": [],
+      "required_outputs": [
+        { "kind": "has_dimension", "dimension": "exception" },
+        { "kind": "min_cases_total", "min": 2 }
+      ],
+      "typical_dimensions": ["functional", "exception"],
+      "anti_patterns": [
+        "只测合法迁移，不测应被拒绝的非法迁移",
+        "漏掉初始状态与终态",
+        "状态名与需求原文对不上，读者无法回溯"
+      ]
+    },
+    {
+      "id": "M1.5",
+      "name": "正交实验",
+      "aliases": ["正交", "正交表", "正交实验法", "Orthogonal Array", "OA"],
+      "purpose": "参数多且互相独立时，用少量组合覆盖各参数的两两组合。",
+      "applies_when": ["参数", "组合", "矩阵", "多种", "多个", "各", "排列"],
+      "not_applies_when": [],
+      "required_outputs": [
+        { "kind": "dimension_pair_present", "dimensions": ["functional", "data"] },
+        { "kind": "min_cases_total", "min": 4 }
+      ],
+      "typical_dimensions": ["functional", "data", "compatibility"],
+      "anti_patterns": [
+        "直接做全组合，用例数爆炸",
+        "用正交表代替业务规则校验（规则型需求仍要判定表）",
+        "组合行数不足以覆盖各参数的两两组合"
+      ]
+    },
+    {
+      "id": "M1.6",
+      "name": "场景法",
+      "aliases": ["场景法", "用例法", "Scenario", "Use Case"],
+      "purpose": "沿主成功流程加备选/扩展流程组织用例，覆盖端到端行为。",
+      "applies_when": ["流程", "端到端", "下单", "注册", "登录", "支付", "审批", "异步", "回调", "任务"],
+      "not_applies_when": [],
+      "required_outputs": [
+        { "kind": "min_cases_by_dimension", "dimension": "functional", "min": 1 },
+        { "kind": "min_cases_total", "min": 2 }
+      ],
+      "typical_dimensions": ["functional", "exception"],
+      "anti_patterns": [
+        "只写主成功流程，备选与扩展流程一个没有",
+        "备选流程没有对应到异常维度用例",
+        "步骤顺序颠倒、中途换环境这类组合完全没覆盖"
+      ]
+    }
+  ]
+}

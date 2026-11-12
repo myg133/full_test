@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "description": "覆盖维度库（唯一来源）。references/coverage-dimensions.md 是人读清单，scripts/check-methods.mjs 是机器核验入口；本文件是维度枚举的唯一来源 —— scripts/validate-cases.mjs 与 scripts/check-methods.mjs 都从这里读，不再各自带一份副本（清单与本文件的 id 集合由 check-methods.mjs --check-dimensions-doc 对照保证一致）。",
+  "dimensions": [
+    {
+      "id": "functional",
+      "name": "功能",
+      "always_applies": true,
+      "applies_when": [],
+      "skip_reason_required": true,
+      "skip_reason_hint": "写清该需求条目为什么不产生任何功能行为（例如纯配置项、纯静态文案）",
+      "description": "主流程按需求正确执行，结果符合预期。"
+    },
+    {
+      "id": "boundary",
+      "name": "边界",
+      "always_applies": false,
+      "applies_when": ["长度", "范围", "上限", "下限", "最多", "至少", "不超过", "不少于", "位数", "数量", "阈值", "到期"],
+      "skip_reason_required": true,
+      "skip_reason_hint": "写清该需求条目没有数值/长度/时间边界（例如纯流程编排）",
+      "description": "临界值、最小/最大、超限一点点、临界点两侧。"
+    },
+    {
+      "id": "exception",
+      "name": "异常",
+      "always_applies": false,
+      "applies_when": ["异常", "错误", "失败", "非法", "拒绝", "超时", "中断", "回滚", "错误码", "提示"],
+      "skip_reason_required": true,
+      "skip_reason_hint": "写清该需求条目不存在失败/非法输入路径（例如只读且无外部依赖）",
+      "description": "非法输入、依赖失败、超时、中断、重试后的行为。"
+    },
+    {
+      "id": "permission",
+      "name": "权限",
+      "always_applies": false,
+      "applies_when": ["权限", "角色", "越权", "登录", "管理员", "租户", "鉴权", "授权", "账号"],
+      "skip_reason_required": true,
+      "skip_reason_hint": "写清该需求条目不涉及身份与角色差异（例如系统内部任务）",
+      "description": "角色差异、越权访问、数据可见范围。"
+    },
+    {
+      "id": "data",
+      "name": "数据",
+      "always_applies": false,
+      "applies_when": ["数据", "存储", "字段", "精度", "格式", "脏数据", "唯一", "分页", "排序", "金额"],
+      "skip_reason_required": true,
+      "skip_reason_hint": "写清该需求条目不落库、不校验字段取值（例如纯转发且无状态）",
+      "description": "字段精度、格式、枚举取值、空值、大数据量、跨字段一致性。"
+    },
+    {
+      "id": "concurrency",
+      "name": "并发",
+      "always_applies": false,
+      "applies_when": ["并发", "同时", "重复提交", "幂等", "重试", "竞态", "锁", "批量", "异步", "多用户"],
+      "skip_reason_required": true,
+      "skip_reason_hint": "写清该需求条目无并发语义（例如离线单线程批处理且无共享资源）",
+      "description": "并发写入、重复提交、竞态、幂等。"
+    },
+    {
+      "id": "performance",
+      "name": "性能",
+      "always_applies": false,
+      "applies_when": ["性能", "响应时间", "耗时", "吞吐", "容量", "并发量", "QPS", "上限", "秒内"],
+      "skip_reason_required": true,
+      "skip_reason_hint": "写清需求未给出任何可度量的性能指标，无阈值可依",
+      "description": "响应时间、吞吐、容量上限、资源占用。"
+    },
+    {
+      "id": "compatibility",
+      "name": "兼容",
+      "always_applies": false,
+      "applies_when": ["兼容", "浏览器", "版本", "移动端", "Android", "iOS", "客户端", "旧版"],
+      "skip_reason_required": true,
+      "skip_reason_hint": "写清该需求条目不区分端/版本（例如服务端内部接口）",
+      "description": "端/版本/浏览器/协议版本差异下的行为。"
+    }
+  ]
+}

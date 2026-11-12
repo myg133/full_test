@@ -3,38 +3,96 @@
 //
 // 用法: node scripts/validate-cases.mjs <cases.json>
 //       node scripts/validate-cases.mjs --init     （输出字段齐备的 v2 骨架到 stdout）
+//       node scripts/validate-cases.mjs --help     （打印本用法说明）
 // 退出码: 0 = 校验通过, 1 = 校验失败, 2 = 调用方式错误
+//   2 = 调用方式错误：没有给文件路径、给了未知参数、或 --init 搭配了文件参数。
+//       --help / -h 属"调用方式错误"，退出码同样是 2（与 check-methods.mjs 口径一致）。
 //
 // 纯 Node.js 实现，只依赖 node: 内置模块。
 // 只读取并解析 JSON 文件：不发起任何网络请求，也不执行需求文本或用例文本中的任何内容。
 //
 // 向后兼容规则：顶层未声明 "schema_version": 2 时按 v1 宽松规则处理——
-//   open_questions / coverage_matrix / cases[].method / cases[].status 缺失只报 WARN；
+//   open_questions / coverage_matrix / cases[].method / cases[].status 缺失时仅记 WARN（不阻断退出码）；
 //   显式声明 "schema_version": 2 时同样情形一律升级为 ERROR（声明了 v2 就要守 v2 的规矩）。
 //   注意：字段“存在但内容非法”在两种模式下都是 ERROR，宽松的只是“缺字段”这一件事。
 
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { dirname, join, resolve } from 'node:path';
 import process from 'node:process';
 
-// 覆盖维度枚举，与 references/coverage-dimensions.md 的清单保持一致
-const DIMENSIONS = [
-  'functional',
-  'boundary',
-  'exception',
-  'permission',
-  'data',
-  'concurrency',
-  'performance',
-  'compatibility',
-];
+// --- 覆盖维度枚举：唯一来源是 references/dimensions.json（D16）---
+//
+// 本脚本**不再自带维度枚举副本**：副本 = 又一份真相 = 枚举分叉的病根原地复发
+// （实测：给 dimensions.json 加第 9 个维度后，本脚本判非法、check-methods 照常认，
+//  同一份用例集两个脚本结论相反）。语义不变 —— 仍是那 8 个维度，只是来源从代码常量改为数据文件。
+//
+// 定位方式：import.meta.url 相对定位（与 check-methods.mjs 的 SKILL_ROOT 同法），
+// 不依赖调用方的 cwd —— 从任意目录调用同一个脚本，必须读同一个库。
+//
+// 读不到 / 解析失败 → 明确报错退出（退出码 2），**绝不静默降级到内置列表**：
+// 降级 = 悄悄换一份真相 = 回到今天的病。
+const SKILL_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
+const DIMENSIONS_PATH = join(SKILL_ROOT, 'references', 'dimensions.json');
+
+let DIMENSIONS = null;
+
+/**
+ * 装载覆盖维度枚举（唯一来源 references/dimensions.json）。
+ *
+ * 读不到 / 解析失败 / 结构非法 → 明确报错退出（退出码 2）。
+ * **绝不静默降级到内置列表**：降级 = 悄悄换一份真相 = 枚举分叉的病根原地复发。
+ */
+function loadDimensionIds() {
+  const fatal = (detail) => {
+    emit(`覆盖维度库不可用: ${detail}`);
+    emit(
+      `覆盖维度枚举的唯一来源是 references/dimensions.json（${DIMENSIONS_PATH}）；` +
+        '读不到 / 解析不了就不校验（不静默降级到内置列表）。',
+    );
+    process.exit(2);
+  };
+
+  let raw;
+  try {
+    raw = readFileSync(DIMENSIONS_PATH, 'utf8');
+  } catch (err) {
+    fatal(`无法读取 ${DIMENSIONS_PATH}（${err.message}）`);
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    fatal(`JSON 解析失败: ${DIMENSIONS_PATH}（${err.message}）`);
+  }
+
+  const list = parsed && Array.isArray(parsed.dimensions) ? parsed.dimensions : null;
+  if (!list || list.length === 0) {
+    fatal(`${DIMENSIONS_PATH} 缺少非空的 dimensions 数组`);
+  }
+
+  const ids = [];
+  for (const [index, dimension] of list.entries()) {
+    if (!isObject(dimension) || !isFilledString(dimension.id)) {
+      fatal(`${DIMENSIONS_PATH} 的 dimensions[${index}].id 必须是非空字符串`);
+    }
+    ids.push(dimension.id);
+  }
+  return ids;
+}
 
 const PRIORITIES = ['P0', 'P1', 'P2', 'P3'];
 
 const CASE_ID_PATTERN = /^TC-\d{3}$/;
 const QUESTION_ID_PATTERN = /^Q\d+$/;
-// 方法编号格式，如 M0.1 / M4.5。本阶段只校验格式，不校验方法库中是否真的存在该编号
+// 方法编号格式，如 M1.1 / M1.2。本阶段只校验格式，不校验方法库中是否真的存在该编号
 const METHOD_PATTERN = /^M\d+\.\d+$/;
+// 维度跳过前缀（D11）：coverage_matrix[].skipped[].method 允许写成 "dimension:<维度名>"。
+// 向后兼容：写成方法编号的旧写法行为完全不变（方法编号格式检查的结果一字不改）。
+// 注意：这只放宽 skipped[] 这一处 —— cases[].method[] 与 coverage_matrix[].methods_applied[]
+// 仍然只接受方法编号（它们记的是"用了哪些方法"，不是"跳过了什么"）。
+const DIMENSION_SKIP_PREFIX = 'dimension:';
 
 // 用例生命周期状态枚举
 const CASE_STATUSES = ['active', 'deprecated', 'modified', 'blocked'];
@@ -138,7 +196,7 @@ function warn(message) {
   warnings.push(message);
 }
 
-// 缺失类问题：严格模式升级为 ERROR，宽松模式（v1 兼容）只报 WARN
+// 缺失类问题：严格模式升级为 ERROR，宽松模式（v1 兼容）仅记 WARN（不阻断退出码）
 function failOrWarn(message) {
   if (strict) {
     problems.push(message);
@@ -153,6 +211,39 @@ function isObject(value) {
 
 function isFilledString(value) {
   return typeof value === 'string' && value.trim() !== '';
+}
+
+// skipped[].method 的合法取值有两种形态（D11）：
+//   1) 方法编号（如 "M1.4"）—— 旧写法，行为完全不变
+//   2) 维度跳过标识（如 "dimension:concurrency"）—— 新增，见 references/case-schema.md
+// 维度名对不上覆盖维度枚举时报 ERROR（D15）：写法合法但名字很可能拼错了，
+// 而拼错的跳过声明从来不会生效 —— 若只记 WARN，就会让"校验通过"与
+// "那条维度实际并没有被跳过"同时成立，属虚报。
+// 判定依据是可机械判定的事实（名字不在枚举里），故归 ERROR 而非 WARN。
+function skipTargetKind(value) {
+  if (!isFilledString(value)) return 'empty';
+  const trimmed = value.trim();
+  if (METHOD_PATTERN.test(trimmed)) return 'method';
+  if (trimmed.startsWith(DIMENSION_SKIP_PREFIX)) return 'dimension';
+  return 'invalid';
+}
+
+/**
+ * 描述"跳过了什么"（D13）。
+ *
+ * skipped[].method 有两种形态：方法编号（M1.4）或维度标识（dimension:concurrency）。
+ * 报错文案必须与**实际跳过的对象**一致 —— 跳维度时说"跳过方法"是文案与事实不符，
+ * agent 靠报错文案判断改哪里，文案说错就会改错地方。
+ * 同时必须点名被跳过的那个对象（有多条跳过项时，agent 需要知道该改哪一条）。
+ */
+function skippedTargetLabel(value) {
+  const kind = skipTargetKind(value);
+  if (kind === 'method') return `跳过的方法 ${value.trim()}`;
+  if (kind === 'dimension') {
+    const dimName = value.trim().slice(DIMENSION_SKIP_PREFIX.length).trim();
+    return `跳过的维度 ${dimName}`;
+  }
+  return '跳过的项';
 }
 
 // 问题清单同时写入 stdout 与 stderr：调用方无论捕获哪个流都能定位到缺陷类型
@@ -580,15 +671,52 @@ function validateCoverageMatrix(matrix, requirementIds) {
             fail(`${sAt} 必须是对象（含 method 与 reason）`);
             return;
           }
-          if (!isFilledString(skip.method)) {
-            fail(`${sAt}.method 必须是非空字符串`);
-          } else if (!METHOD_PATTERN.test(skip.method)) {
-            fail(`${sAt}.method 方法编号格式非法: "${skip.method}"，必须匹配 ^M\\d+\\.\\d+$`);
+
+          // D14：旧写法 { "dimension": "<维度名>" } —— 明确报错并指明正确写法。
+          // 不静默兼容（宽松的一方会让非法写法静默放行，与 validate-cases 结论相反）。
+          const legacyDimension = isFilledString(skip.dimension) ? skip.dimension.trim() : null;
+          if (legacyDimension !== null) {
+            fail(
+              `${sAt} 用了旧写法 { "dimension": "${legacyDimension}" }：该写法非法。` +
+                `维度跳过必须写在 method 字段里 —— 写成 { "method": "dimension:${legacyDimension}", "reason": "..." }`,
+            );
           }
+
+          const kind = skipTargetKind(skip.method);
+          if (!isFilledString(skip.method)) {
+            // 旧写法已单独报错且指明了正确写法，不必再叠一条"必须是非空字符串"
+            if (legacyDimension === null) {
+              fail(`${sAt}.method 必须是非空字符串`);
+            }
+          } else if (kind === 'invalid') {
+            fail(
+              `${sAt}.method 方法编号格式非法: "${skip.method}"，必须匹配 ^M\\d+\\.\\d+$` +
+                `（如 "M1.4"），或写成维度跳过 "dimension:<维度名>"（如 "dimension:concurrency"）`,
+            );
+          } else if (kind === 'dimension') {
+            const dimName = skip.method.trim().slice(DIMENSION_SKIP_PREFIX.length).trim();
+            if (dimName === '') {
+              fail(
+                `${sAt}.method 维度跳过写法不完整: "${skip.method}"，` +
+                  '必须写成 "dimension:<维度名>"，<维度名> 不能为空',
+              );
+            } else if (!DIMENSIONS.includes(dimName)) {
+              // D15：维度名不在枚举内是可机械判定的事实 → ERROR（不是 WARN）。
+              // WARN 会让拼错的跳过静默失效（该维度实际没被声明跳过）却报"校验通过"。
+              fail(
+                `${sAt}.method 维度名 "${dimName}" 不在覆盖维度枚举内（${DIMENSIONS.join(' / ')}），` +
+                  '该跳过声明不会生效，请检查是否拼错',
+              );
+            }
+          }
+
+          // D13：缺 reason 的报错文案按**实际跳过的对象**分词，并点名那个对象
+          //（跳方法说"方法"、跳维度说"维度"）—— 文案与事实不符会让 agent 改错地方。
+          const label = skippedTargetLabel(skip.method);
           if (skip.reason === undefined) {
-            fail(`${sAt} 缺少必填字段 reason（跳过方法必须留痕，不能空跳过）`);
+            fail(`${sAt} 缺少必填字段 reason（${label}必须留痕，不能空跳过）`);
           } else if (!isFilledString(skip.reason)) {
-            fail(`${sAt}.reason 不能为空：跳过方法必须写明原因`);
+            fail(`${sAt}.reason 不能为空：${label}必须写明原因`);
           }
         });
       }
@@ -739,7 +867,9 @@ function buildSkeleton() {
     coverage_matrix: [
       {
         requirement: 'R-1',
-        methods_applied: ['M0.1'],
+        // 方法编号取 M1.x 段（测试设计方法，见 references/methods.json）——
+        // 骨架给出的是**能直接用**的编号：照抄 M0.x 会被 check-methods.mjs 判"无法判定"。
+        methods_applied: ['M1.1'],
         skipped: [],
         dimensions: ['functional'],
       },
@@ -751,7 +881,7 @@ function buildSkeleton() {
         requirement_refs: ['R-1'],
         dimension: 'functional',
         priority: 'P0',
-        method: ['M0.1'],
+        method: ['M1.1'],
         status: 'active',
         preconditions: [],
         steps: [{ action: '<可执行的动作>', expected: '<可判定的预期结果>' }],
@@ -785,8 +915,33 @@ function selfCheckSkeleton(doc) {
   return issues;
 }
 
+// 用法说明（--help / 用法错误时打印）
+const USAGE = [
+  '用法: node scripts/validate-cases.mjs <cases.json>',
+  '      node scripts/validate-cases.mjs --init     （输出字段齐备的 v2 骨架到 stdout）',
+  '      node scripts/validate-cases.mjs --help     （打印本用法说明）',
+].join('\n');
+
 function main() {
   const argv = process.argv.slice(2);
+
+  // --- --help / -h：属"调用方式错误"，退出码 2 ---
+  // 与 check-methods.mjs 口径一致（两个脚本头都声明「2 = 调用方式错误」）：
+  // --help 不是用例集文件路径，是调用方式错误，不是"用例集读不出来"。
+  if (argv.includes('--help') || argv.includes('-h')) {
+    emit(USAGE);
+    process.exit(2);
+  }
+
+  // --- 未知参数：同样属"调用方式错误"，退出码 2 ---
+  // 已知开关只有 --init（以及上面的 --help / -h）；
+  // 其它以 "-" 开头的参数一律判用法错误，不当作用例集文件路径（那会退化成 rc=1 的读文件失败）。
+  const unknown = argv.find((arg) => arg.startsWith('-') && arg !== '--init');
+  if (unknown !== undefined) {
+    emit(`用法错误: 未知参数: ${unknown}`);
+    emit(USAGE);
+    process.exit(2);
+  }
 
   // --- --init：输出字段齐备的 v2 骨架（纯增量，不影响原有校验路径） ---
   if (argv.includes('--init')) {
@@ -795,6 +950,8 @@ function main() {
       emit('用法: node scripts/validate-cases.mjs --init（--init 不接受文件参数）');
       process.exit(2);
     }
+    // 骨架自检要用维度枚举 → 先装载唯一来源的维度库
+    DIMENSIONS = loadDimensionIds();
     const skeleton = buildSkeleton();
     const issues = selfCheckSkeleton(skeleton);
     if (issues.length > 0) {
@@ -811,11 +968,15 @@ function main() {
   const file = argv[0];
 
   if (!file) {
-    emit('用法: node scripts/validate-cases.mjs <cases.json>');
+    emit(USAGE);
     process.exit(2);
   }
 
   const target = resolve(file);
+
+  // 维度枚举的唯一来源：references/dimensions.json（D16）。
+  // 读不到 / 解析失败 → 明确报错退出（码 2），不静默降级到内置列表。
+  DIMENSIONS = loadDimensionIds();
 
   let raw;
   try {

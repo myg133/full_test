@@ -1,6 +1,14 @@
 # 覆盖维度清单
 
-用例的 `dimension` 字段取自下面 8 个取值。`scripts/validate-cases.mjs` 中的 `DIMENSIONS` 数组与本清单一一对应，改动其中一处必须同步另一处。
+用例的 `dimension` 字段取自下面 8 个取值。**以 `references/dimensions.json` 为准** —— 它是维度枚举的唯一来源，
+本清单与它的一致性由脚本对照保证（不需要人工同步）：
+
+```console
+node scripts/check-methods.mjs --methods references/methods.json --dimensions references/dimensions.json \
+  --dimensions-doc references/coverage-dimensions.md --check-dimensions-doc
+```
+
+清单与库不一致时该命令退出码非 0，并点名不一致的维度 id。
 
 | 取值 | 中文名 | 关注的问题 |
 |------|--------|------------|
