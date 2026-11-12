@@ -38,9 +38,9 @@ const DEFAULT_DIMENSIONS_DOC_PATH = join(SKILL_ROOT, 'references', 'coverage-dim
 // 跳过某个**维度**时把维度名写进 method 字段，前面加 "dimension:"。
 const DIMENSION_SKIP_PREFIX = 'dimension:';
 
-// 本方法库收录的编号段（D8）：M1.x = 测试设计方法。
+// 本方法库收录的编号段（D8）：M1.x = 通用测试设计方法，M2.x = 安全测试设计方法。
 // M0.x / M4.x = 架构稿 Layer 0 的必选测试点段，不在本库内 —— 出现即判"无法判定"。
-const DESIGN_METHOD_SEGMENT = /^M1\.\d+$/;
+const DESIGN_METHOD_SEGMENT = /^M[12]\.\d+$/;
 const LAYER0_SEGMENT = /^M[04]\.\d+$/;
 
 // 谓词种类（D3：只支持有限几种，不做通用表达式）
@@ -93,14 +93,15 @@ function matchSignals(signals, text) {
 /**
  * 编号分段的提示（D8）。
  *
- * M1.x = 本库收录的测试设计方法；M0.x / M4.x = 架构稿 Layer 0 的必选测试点段，
+ * M1.x / M2.x = 本库收录的测试设计方法（通用方法 + 安全方法）；
+ * M0.x / M4.x = 架构稿 Layer 0 的必选测试点段，
  * 不在设计方法库内 —— 出现这类编号时判"无法判定"，不得默认通过。
  */
 function numberingHint(methodId) {
   if (typeof methodId !== 'string') return '';
   if (DESIGN_METHOD_SEGMENT.test(methodId)) return '';
   if (LAYER0_SEGMENT.test(methodId)) {
-    return `（编号 ${methodId} 属于 Layer 0 必选测试点段，不在本设计方法库内；本库只收录 M1.x 设计方法）`;
+    return `（编号 ${methodId} 属于 Layer 0 必选测试点段，不在本设计方法库内；本库只收录 M1.x/M2.x 两段设计方法）`;
   }
   return '';
 }
