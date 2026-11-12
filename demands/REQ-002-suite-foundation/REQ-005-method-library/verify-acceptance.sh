@@ -1146,9 +1146,17 @@ else
   # ---- 20 追溯链护栏：status.md 的实现清单被砍到只剩 2 条（= 第七轮 A59 探针本体）----
   # 这条变异证明**验收脚本自己**能判红第 ⑨ 子判据 —— 新判据不靠下一轮人工探针证明自己有效。
   TOT26_MIN=19
+  SKIP20=0
   if [ -f "$MUTROOT/feature-meta/status.md" ]; then
-    run_mut_md "status.md实现清单被砍到只剩2条" "$MUTROOT/feature-meta/status.md" 'const fs=require("fs"),f=process.argv[1];let s=fs.readFileSync(f,"utf8");const lines=s.split(/\r?\n/);let seen=0;const out=[];for(const l of lines){  if(/^\s*[-*]\s+`(?:(?:references|scripts)\/[A-Za-z0-9._\-\/]+|SKILL\.md)`/.test(l)){seen++;if(seen>2){continue;}}  out.push(l);}const t=out.join("\n");for(const tok of ["条判据","D1~D","M1.","个维度"]){if(!t.includes(tok))process.exit(3);}fs.writeFileSync(f,t);'
-    TOT26_MIN=20
+    # 若**基线本身**已经在 AC-034 上判红（外层探针已把追溯链搞坏），第 20 个变异体在嵌套跑批里
+    # **不可检测**（失败键集合不变）→ 不计入、也不算逃逸。否则会把"外层探针造成的基线偏红"
+    # 误报成"护栏失效"（第八轮实测：A59 / N08 类探针会多出一个 AC-026 键）。
+    if printf '%s\n' "$BASE_KEYS" | grep -q "^AC-034$"; then
+      SKIP20=1
+    else
+      run_mut_md "status.md实现清单被砍到只剩2条" "$MUTROOT/feature-meta/status.md" 'const fs=require("fs"),f=process.argv[1];let s=fs.readFileSync(f,"utf8");const lines=s.split(/\r?\n/);let seen=0;const out=[];for(const l of lines){  if(/^\s*[-*]\s+`(?:(?:references|scripts)\/[A-Za-z0-9._\-\/]+|SKILL\.md)`/.test(l)){seen++;if(seen>2){continue;}}  out.push(l);}const t=out.join("\n");for(const tok of ["条判据","D1~D","M1.","个维度"]){if(!t.includes(tok))process.exit(3);}fs.writeFileSync(f,t);'
+      TOT26_MIN=20
+    fi
   fi
   # 还原后必须回到基线（确认变异被还原干净）
   RB_OUT="$(QA005_NO_MUT=1 bash "$SELF" "$MUT" 2>&1)"
@@ -1156,7 +1164,11 @@ else
   RB_OK=0
   if [ "$RB_KEYS" = "$BASE_KEYS" ]; then RB_OK=1; fi
   if [ $DET26 -eq $TOT26 ] && [ $TOT26 -ge $TOT26_MIN ] && [ -z "$INVALID" ] && [ $RB_OK -eq 1 ]; then
-    ok "AC-026 变异体 100% 被检出（$DET26/$TOT26，还原后回到基线）"
+    if [ "${SKIP20:-0}" = "1" ]; then
+      ok "AC-026 变异体 100% 被检出（$DET26/$TOT26，还原后回到基线；基线已在 AC-034 上判红 → 第 20 个追溯链护栏变异体不可检测，未计入）"
+    else
+      ok "AC-026 变异体 100% 被检出（$DET26/$TOT26，还原后回到基线）"
+    fi
   else
     bad "AC-026 变异体 100% 被检出" \
         "检出 $DET26/$TOT26（要求 $TOT26_MIN/$TOT26_MIN 且无注入异常）逃逸:$ESCAPED 注入异常:$INVALID 还原后回到基线=$RB_OK 基线失败项=[$(printf '%s' "$BASE_KEYS" | tr '\n' ' ')] 最后一次嵌套输出尾部=[$(printf '%s' "$LAST_OUT" | tail -5 | tr '\n' ' ')]"
@@ -1639,6 +1651,26 @@ else
   for(const p of stList){
     try{ if(!fs.statSync(tcd+"/"+p).isFile()) prob.push("status.md: 实现清单项「"+p+"」不是文件（是目录）—— 存在性检查会被目录蒙混过关"); }catch(e){}
   }
+  // ---- 第⑮子判据：实现清单必须**覆盖被验目录里真实存在的每一个文件**（第八轮 N09）
+  // 为什么：⑨⑭ 只保证"两份追溯件**互相一致**" —— 两份**一致地**漏掉一个交付文件时仍会判绿
+  // （N09 把 SKILL.md 从追溯矩阵与 status.md 清单里同时抹掉）。基准必须是**被验目录的实际内容**。
+  let dirFiles=[];
+  try{
+    const walk=(dir,rel)=>{
+      for(const e of fs.readdirSync(dir,{withFileTypes:true})){
+        if(e.name.startsWith(".")) continue;          // 隐藏文件不算交付物
+        const p=dir+"/"+e.name, r=rel?rel+"/"+e.name:e.name;
+        if(e.isDirectory()) walk(p,r);
+        else if(e.isFile()) dirFiles.push(r);
+      }
+    };
+    walk(tcd,"");
+  }catch(e){}
+  if(dirFiles.length===0) prob.push("被验目录里一个文件都读不到 —— 无法核对实现清单是否覆盖全部交付物");
+  else{
+    const missed=dirFiles.filter(f=>stList.indexOf(f)<0);
+    if(missed.length) prob.push("status.md: 实现清单漏列了被验目录里的文件 "+missed.join(",")+" —— 追溯链没有覆盖全部交付物");
+  }
   // ---- 第⑧子判据：验证报告必须有**逐层结论**与**能力结论表**（第六轮 A60）
   const vr=perFile["verification-report.md"]||"";
   const vrLines=vr.split(/\r?\n/);
@@ -1663,7 +1695,12 @@ else
   else if(layerNum["REQ-002B"] && layerNum["REQ-002B"].P!==upB) prob.push("verification-report.md: REQ-002B 层写 "+layerNum["REQ-002B"].P+" PASS，现场实跑是 "+upB+" —— 报告数字与真实结果不符");
   // ---- 第⑬子判据：三份追溯文件里**每一处**「N PASS / M FAIL」都必须与它所属那层的真实条数一致（第七轮 X08/X09）
   // 归属判定：看该处数字**同一行内、它前面**的上下文提到的是哪一层（002A / 002B / 都不是 → 主验收）
+  // 归属判定（第八轮 N07/N08 洗白攻击后强化）：
+  // **行内若提到主验收脚本，该行的数字只能是主验收条数** —— 否则在同一行里塞一句
+  // "（与 REQ-002A 一并统计）"就能把主验收的 35 伪装成上游的 19，归属判定被"洗白"。
+  const MAIN_MARK="verify-acceptance.sh";
   const layerExpect=(ctx)=>{
+    if(ctx.indexOf(MAIN_MARK)>=0) return {v:actual,name:"主验收"};
     if(ctx.indexOf("002A")>=0) return upA>=0?{v:upA,name:"REQ-002A"}:null;
     if(ctx.indexOf("002B")>=0) return upB>=0?{v:upB,name:"REQ-002B"}:null;
     return {v:actual,name:"主验收"};
