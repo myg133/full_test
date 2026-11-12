@@ -380,6 +380,7 @@ function printHelp() {
   install     把本包 skills/ 下的各 skill 安装到 <安装根>/skills/<name>/（幂等）
   uninstall   移除本包安装的 skill 目录与锁条目（不碰其它 skill）
   list        列出本包管理的 skill 及其安装状态
+  verify      组合校验：把包装到临时根、校验 skill 之间的版本配套、实跑跨 skill 组合场景
 
 选项:
   --root <dir>  指定安装根目录（默认 ~/.agents）；优先级高于 TEST_AGENT_SKILLS_DIR
@@ -431,7 +432,7 @@ function parseArgs(argv) {
 /**
  * 入口。
  */
-function main() {
+async function main() {
   let args;
   try {
     args = parseArgs(process.argv.slice(2));
@@ -461,6 +462,10 @@ function main() {
     cmdUninstall(root);
   } else if (args.command === 'list') {
     cmdList(root);
+  } else if (args.command === 'verify') {
+    // 组合校验：实现放在 bin/verify-suite.mjs（它承载组合门逻辑，必须读各 skill 的版本声明）。
+    const { runVerify } = await import('./verify-suite.mjs');
+    process.exitCode = runVerify(args.root);
   } else {
     console.error(`[error] 未知命令: ${args.command}`);
     printHelp();
@@ -469,7 +474,7 @@ function main() {
 }
 
 try {
-  main();
+  await main();
 } catch (err) {
   console.error(`[error] ${err && err.message ? err.message : String(err)}`);
   process.exitCode = 1;

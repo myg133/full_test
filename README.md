@@ -28,6 +28,9 @@ npx test-agent-skills install
 ```
 ~/.agents/skills/
 ├── test-case-design/      # 本包安装的 skill
+├── test-execute/          # 本包安装的 skill
+├── qa-toolchain/          # 本包安装的 skill
+├── regression-plan/       # 本包安装的 skill
 └── <你原有的其它 skill>     # 不受影响
 ```
 
@@ -44,6 +47,7 @@ test-agent-skills <command> [options]
 | `install` | 把本包 `skills/` 下的各 skill 复制到 `<安装根>/skills/<name>/`，**幂等** |
 | `uninstall` | 移除**本包安装的** skill 目录与锁条目，不碰你的其它 skill |
 | `list` | 列出本包管理的 skill 及其安装状态 |
+| `verify` | 组合校验：把包装到**临时根**、校验 skill 之间的版本配套、**实跑**跨 skill 组合场景 |
 
 | 选项 | 说明 |
 |------|------|
@@ -111,6 +115,32 @@ test-agent-skills <command> [options]
 |-------|------|
 | `test-case-design` | 需求 → 测试用例设计：拆解需求条目、判定可测试性、套用测试设计方法、按固定 schema 输出用例集与追溯矩阵 |
 | `test-execute` | 用例集 → 执行与证据链：读执行配置与用例集、调度可插拔执行器、按断言逐步判定、产出带 sha256 指纹与脱敏留痕的证据链（入口命令：`node skills/test-execute/scripts/run-suite.mjs <suite.json>`） |
+| `qa-toolchain` | 项目级 `.tools/` 工具链自举：声明式清单、隔离安装（Python venv / Node 包）、幂等重装、显式降级（入口命令：`qa install` / `qa doctor` / `qa list`） |
+| `regression-plan` | 变更 → 回归选样：切分变更条目、按需求条目 / 用例 / 维度 / 方法判影响面、产出 `regression-plan.json`（哪些用例确定重跑、哪些需人工复核、哪些变更判不了）（入口命令：`node skills/regression-plan/scripts/plan-regression.mjs --changelog <file> --cases <file> --cycle-dir <dir>`） |
+
+### Skill 之间的版本配套
+
+每个 skill 根级有一份 `skill-meta.json`，声明自己的版本与对别的 skill 的依赖：
+
+```json
+{ "name": "test-execute", "version": "0.1.0", "requires": { "test-case-design": ">=0.1.0" } }
+```
+
+`test-execute` 对 `test-case-design` 是**硬跨 skill 依赖**（轮次推进走的是
+`test-case-design/scripts/cycle-state.mjs`），`regression-plan` 消费它的维度库与方法库。
+
+### 组合门（`verify`）
+
+```bash
+node bin/test-agent-skills.mjs verify --root /tmp/verify-root
+```
+
+把包装到**临时根**（不碰真实安装根），校验 skill 之间的**版本配套**，
+再**实跑**跨 skill 组合场景：`test-execute` 的 offline 夹具（4 passed / 1 failed / 1 blocked / 0 skipped）
+与「轮次初始化 → 带轮次执行 → execute 阶段推进」这条硬跨 skill 依赖链路。
+
+依赖版本不满足时，组合门报**版本问题**（点名哪个 skill、要求什么、实际什么），
+而不是让下游报业务错。
 
 ---
 
