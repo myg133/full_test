@@ -116,21 +116,37 @@ failsig() {
 # ⚠️ 为什么不能只比「计划内容」：有的变异只影响**错误路径**
 #    （例：坏引用被静默忽略 → 退出码从 1 变 0，但正常输入下的计划一模一样）——
 #    只比计划会把这种**有效**变异误判成「无效变异」。
-FP_CYC=""
+#
+# ⚠️ D46（F-2）：每次调用必须用**全新且唯一**的运行目录 ——
+#    错误路径的探针（bad-TC）失败时**不重写** regression-plan.json；
+#    若复用上一次的目录，**上一次残留的计划**会被当成本次指纹的一部分
+#    ⇒ BASE 与 MUT 的指纹仅因"残留"而不同 ⇒ **等价**变异体被误判成「行为不同」
+#    ⇒ 落入分母 → 嵌套跑无差异 → 判「逃逸」→ AC-025 **假红**。
+#
+#    ⚠⚠ **不能用「序号自增」来保证唯一**：本函数在 `$(impl_fp ...)` **命令替换**里被调用
+#    ⇒ 它运行在**子 shell** 中 ⇒ 序号自增**不回流**到父 shell ⇒ 每次都算出同一个目录名
+#    ⇒ **目录照样被复用**（这正是 F-2 的坑，且极易写错 —— 自检里实测过：自增后仍是同一目录）。
+#    ⇒ 用 `mktemp -d` 生成**真正唯一**的目录名（子 shell 内同样唯一），且不做删除。
+# ⚠️ D46（F-1）：输入取自 **pristine 快照**的独立副本，共享夹具 $FX 只作只读源。
+FP_ROOT="$WORK/fp"
 impl_fp() { # $1 = regression-plan skill 目录
-  local skill="$1" out="" probe cl rc o phash
+  local skill="$1" out="" probe cl rc o phash run
+  run="$(mktemp -d "$FP_ROOT-XXXXXX")"
   for probe in valid bad-R bad-TC bad-DIM; do
     case "$probe" in
-      valid)   cl="$FX/CHANGELOG.md" ;;
-      bad-R)   cl="$FX/bad-R.md" ;;
-      bad-TC)  cl="$FX/bad-TC.md" ;;
-      bad-DIM) cl="$FX/bad-DIM.md" ;;
+      valid)   cl="CHANGELOG.md" ;;
+      bad-R)   cl="bad-R.md" ;;
+      bad-TC)  cl="bad-TC.md" ;;
+      bad-DIM) cl="bad-DIM.md" ;;
     esac
-    mkdir -p "$FP_CYC/$probe"
-    o="$(node "$skill/scripts/plan-regression.mjs" --changelog "$cl" --cases "$FX/cases.json" --cycle-dir "$FP_CYC/$probe" 2>&1)"; rc=$?
-    o="$(printf '%s' "$o" | tr '\n' ' ' | sed -e "s#$FP_CYC#<FPCYC>#g" -e 's/qa-011-[A-Za-z0-9]*/<WORK>/g')"
+    # 每个探针一份**独立副本**（D46 / F-1）：实现对输入的写回不会跨探针传播
+    mkdir -p "$run/$probe/in"
+    cp "$PRISTINE/cases.json" "$run/$probe/in/cases.json"
+    cp "$PRISTINE/$cl" "$run/$probe/in/$cl"
+    o="$(node "$skill/scripts/plan-regression.mjs" --changelog "$run/$probe/in/$cl" --cases "$run/$probe/in/cases.json" --cycle-dir "$run/$probe" 2>&1)"; rc=$?
+    o="$(printf '%s' "$o" | tr '\n' ' ' | sed -e "s#$run#<FPRUN>#g" -e 's/qa-011-[A-Za-z0-9]*/<WORK>/g')"
     phash=""
-    [ -s "$FP_CYC/$probe/regression-plan.json" ] && phash="$(node "$WORK/plan-hash.mjs" "$FP_CYC/$probe/regression-plan.json" 2>/dev/null)"
+    [ -s "$run/$probe/regression-plan.json" ] && phash="$(node "$WORK/plan-hash.mjs" "$run/$probe/regression-plan.json" 2>/dev/null)"
     out="$out [$probe rc=$rc out=$o plan=$phash]"
   done
   printf '%s' "$out"
@@ -233,6 +249,28 @@ cat > "$FX/bad-DIM.md" <<'FIXBADDIM'
 
 本次修订涉及 @dim:not-a-real-dimension 维度。
 FIXBADDIM
+
+# D46（F-1）：**在任何 plan-regression 运行之前**对夹具做一次只读快照 ——
+#   共享夹具 $FX 之后只作**只读源**：被验实现永远不直接写它。
+#   为什么必须快照：若实现**幂等写回** cases.json（写回的是"规范化形态"），
+#   那么更早的步骤（基线计划）已经把 $FX/cases.json 改成了规范化形态；
+#   后面 AC-019 再从 $FX 取副本时拿到的是**已被污染的品** ⇒ before 指纹已是规范化形态
+#   ⇒ 再跑一次幂等写回，内容逐字相同 ⇒ sha 不变 ⇒ **逃逸**。
+PRISTINE="$WORK/pristine"
+mkdir -p "$PRISTINE"
+for FXF in cases.json CHANGELOG.md bad-R.md bad-TC.md bad-DIM.md; do
+  cp "$FX/$FXF" "$PRISTINE/$FXF"
+done
+
+# 从 pristine 快照复制一份**独立副本**（D46 / F-1）
+#   用法: input_copy <目标目录>
+#   每个运行点（基线计划 / AC-014 探针 / AC-019 / AC-020 / 变异自证）各用一份，
+#   ⇒ 任何一次运行对输入的写回都不会被别的运行点看见。
+input_copy() { # $1 = 目标目录
+  mkdir -p "$1"
+  cp "$PRISTINE/cases.json" "$1/cases.json"
+  cp "$PRISTINE/CHANGELOG.md" "$1/CHANGELOG.md"
+}
 
 # ---------------------------------------------------------------- 判据自带的独立实现（不复用被验代码）
 
@@ -663,6 +701,13 @@ cat > "$WORK/plan-hash.mjs" <<'FIXHASH'
 // D45 第二轮：AC-025 的「行为等价」判定需要一个**与实现无关**的行为指纹 ——
 // 变异体若只影响**错误路径**（例：坏引用报错），计划内容不变，只有退出码/输出变了。
 // 故指纹 = 计划内容（去时间戳）+ 退出码 + 归一化输出（见 impl_fp）。
+//
+// D46（F-2）：还要归一化**路径形态的值** —— 计划里记着输入来源
+// （`source.changelog` / `source.cases`）。D46 把每次运行的输入副本放在**唯一目录**下
+// ⇒ 每次的绝对路径都不同 ⇒ 若不归一化，**每一次调用的计划指纹必然不同**
+// ⇒ 「行为等价」判定恒不成立（等价变异体被误判成「行为不同」）。
+// 归一化口径：绝对路径 → `<DIR>/<基名>`（**保留基名**，仍能区分"是哪个文件"，
+// 只抹掉"在哪个临时目录"）—— 这是与「同一输入」的语义一致的口径。
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 
@@ -674,8 +719,16 @@ const isEpochMs = (v) => (typeof v === 'number' && Number.isInteger(v) && v >= 1
   || (typeof v === 'string' && /^\d{13}$/.test(v));
 const isTimestampLike = (v) => isIso(v) || isEpochSec(v) || isEpochMs(v);
 
+// D46（F-2）：绝对路径 → `<DIR>/<基名>`（只归一化目录部分）
+const isAbsPathLike = (v) => typeof v === 'string' && v.startsWith('/') && v.length > 1;
+
 const norm = (v) => {
   if (isTimestampLike(v)) return '<TS>';
+  if (isAbsPathLike(v)) {
+    const parts = v.split('/');
+    const base = parts.pop();
+    return '<DIR>/' + base;
+  }
   if (Array.isArray(v)) return v.map(norm);
   if (v && typeof v === 'object') {
     const out = {};
@@ -1017,8 +1070,12 @@ mkdir -p "$BASE_CYC"
 PLAN="$BASE_CYC/regression-plan.json"
 PLAN_OUT=""
 PLAN_RC=1
+# D46（F-1）：基线计划跑在**独立副本**上 —— 共享夹具 $FX 只作只读源。
+#   否则实现对输入的写回会污染**后续所有**从 $FX 取输入的判据（幂等写回 ⇒ 污染不可见）。
+BASE_IN="$WORK/in-base"
 if [ -f "$RP/scripts/plan-regression.mjs" ]; then
-  PLAN_OUT="$(node "$RP/scripts/plan-regression.mjs" --changelog "$FX/CHANGELOG.md" --cases "$FX/cases.json" --cycle-dir "$BASE_CYC" 2>&1)"
+  input_copy "$BASE_IN"
+  PLAN_OUT="$(node "$RP/scripts/plan-regression.mjs" --changelog "$BASE_IN/CHANGELOG.md" --cases "$BASE_IN/cases.json" --cycle-dir "$BASE_CYC" 2>&1)"
   PLAN_RC=$?
 else
   PLAN_OUT="缺 scripts/plan-regression.mjs"
@@ -1029,7 +1086,8 @@ printf '基线计划: rc=%s %s\n' "$PLAN_RC" "$([ "$PLAN_OK" = "1" ] && echo 可
 
 RC_JSON=""
 if [ "$PLAN_OK" = "1" ] && [ -f "$DIM" ] && [ -f "$MTH" ]; then
-  RC_JSON="$(node "$WORK/recompute.mjs" "$PLAN" "$FX/cases.json" "$FX/CHANGELOG.md" "$DIM" "$MTH" 2>/dev/null)"
+  # D46（F-1）：独立重算必须与**基线计划用同一份输入副本**（否则两者输入不同源 ⇒ 集合差异是假的）
+  RC_JSON="$(node "$WORK/recompute.mjs" "$PLAN" "$BASE_IN/cases.json" "$BASE_IN/CHANGELOG.md" "$DIM" "$MTH" 2>/dev/null)"
 fi
 RC_FILE="$WORK/recompute.json"
 printf '%s' "$RC_JSON" > "$RC_FILE"
@@ -1484,9 +1542,14 @@ if [ ! -f "$RP/scripts/plan-regression.mjs" ]; then
 else
   BAD_RC1=99; BAD_RC2=99; BAD_RC3=99; BAD_OUT1=""; BAD_OUT2=""; BAD_OUT3=""
   mkdir -p "$WORK/bad1/R2-CHANGELOG-2.3" "$WORK/bad2/R2-CHANGELOG-2.3" "$WORK/bad3/R2-CHANGELOG-2.3"
-  BAD_OUT1="$(node "$RP/scripts/plan-regression.mjs" --changelog "$FX/bad-R.md" --cases "$FX/cases.json" --cycle-dir "$WORK/bad1/R2-CHANGELOG-2.3" 2>&1)"; BAD_RC1=$?
-  BAD_OUT2="$(node "$RP/scripts/plan-regression.mjs" --changelog "$FX/bad-TC.md" --cases "$FX/cases.json" --cycle-dir "$WORK/bad2/R2-CHANGELOG-2.3" 2>&1)"; BAD_RC2=$?
-  BAD_OUT3="$(node "$RP/scripts/plan-regression.mjs" --changelog "$FX/bad-DIM.md" --cases "$FX/cases.json" --cycle-dir "$WORK/bad3/R2-CHANGELOG-2.3" 2>&1)"; BAD_RC3=$?
+  # D46（F-1）：三个探针各用**独立副本**（从 pristine 快照取）——
+  #   共享夹具 $FX 只作只读源 ⇒ 实现对输入的写回不会污染后续探针/判据。
+  input_copy "$WORK/in-badR";   cp "$PRISTINE/bad-R.md"   "$WORK/in-badR/bad-R.md"
+  input_copy "$WORK/in-badTC";  cp "$PRISTINE/bad-TC.md"  "$WORK/in-badTC/bad-TC.md"
+  input_copy "$WORK/in-badDIM"; cp "$PRISTINE/bad-DIM.md" "$WORK/in-badDIM/bad-DIM.md"
+  BAD_OUT1="$(node "$RP/scripts/plan-regression.mjs" --changelog "$WORK/in-badR/bad-R.md" --cases "$WORK/in-badR/cases.json" --cycle-dir "$WORK/bad1/R2-CHANGELOG-2.3" 2>&1)"; BAD_RC1=$?
+  BAD_OUT2="$(node "$RP/scripts/plan-regression.mjs" --changelog "$WORK/in-badTC/bad-TC.md" --cases "$WORK/in-badTC/cases.json" --cycle-dir "$WORK/bad2/R2-CHANGELOG-2.3" 2>&1)"; BAD_RC2=$?
+  BAD_OUT3="$(node "$RP/scripts/plan-regression.mjs" --changelog "$WORK/in-badDIM/bad-DIM.md" --cases "$WORK/in-badDIM/cases.json" --cycle-dir "$WORK/bad3/R2-CHANGELOG-2.3" 2>&1)"; BAD_RC3=$?
   P1=0; P2=0; P3=0
   [ "$BAD_RC1" -eq 1 ] && printf '%s' "$BAD_OUT1" | grep -q 'R-99' && P1=1
   [ "$BAD_RC2" -eq 1 ] && printf '%s' "$BAD_OUT2" | grep -q 'TC-999' && P2=1
@@ -1588,10 +1651,14 @@ A19="AC-019 不得修改输入用例集与变更日志"
 #   ① 变更日志也必须被指纹覆盖（此前只指纹 cases.json，而 SKILL.md 的硬约束是「两者一律不改」）；
 #   ② before 指纹必须取自**副本** —— 此前取自共享夹具，而门在更早的步骤里已经跑过一次
 #      plan-regression.mjs，污染会被"前一次跑"吸收掉 → **幂等写回**（写回内容与原文件相同）查不出来。
+# D46（F-1）：副本必须取自 **pristine 快照**，不是共享夹具 $FX ——
+#   $FX 可能已被**更早的步骤**（基线计划 / AC-014 探针）里的实现写回污染；
+#   幂等写回写回的是"规范化形态"，从污染品取副本 ⇒ before 指纹已是规范化形态
+#   ⇒ 再跑一次写回内容逐字相同 ⇒ sha 不变 ⇒ **逃逸**（首轮与第二轮都逃逸的那个探针）。
+#   取 pristine 快照 ⇒ before 一定是**原始形态** ⇒ 写回必被看见。
 AC19_DIR="$WORK/ac19"
 mkdir -p "$AC19_DIR/R2-CHANGELOG-2.3"
-cp "$FX/cases.json" "$AC19_DIR/cases.json"
-cp "$FX/CHANGELOG.md" "$AC19_DIR/CHANGELOG.md"
+input_copy "$AC19_DIR"
 C_BEFORE="$(sha256sum "$AC19_DIR/cases.json" 2>/dev/null | cut -d' ' -f1)"
 L_BEFORE="$(sha256sum "$AC19_DIR/CHANGELOG.md" 2>/dev/null | cut -d' ' -f1)"
 node "$RP/scripts/plan-regression.mjs" --changelog "$AC19_DIR/CHANGELOG.md" --cases "$AC19_DIR/cases.json" --cycle-dir "$AC19_DIR/R2-CHANGELOG-2.3" >/dev/null 2>&1
@@ -1609,8 +1676,11 @@ if [ -z "$A19_PROBLEMS" ]; then ok "$A19"; else bad "$A19" "$A19_PROBLEMS"; fi
 step "AC-020 同一输入两次跑输出必须逐字相同（除时间戳）"
 A20="AC-020 同一输入两次跑输出必须逐字相同（除时间戳）"
 mkdir -p "$WORK/idem1/R2-CHANGELOG-2.3" "$WORK/idem2/R2-CHANGELOG-2.3"
-node "$RP/scripts/plan-regression.mjs" --changelog "$FX/CHANGELOG.md" --cases "$FX/cases.json" --cycle-dir "$WORK/idem1/R2-CHANGELOG-2.3" >/dev/null 2>&1
-node "$RP/scripts/plan-regression.mjs" --changelog "$FX/CHANGELOG.md" --cases "$FX/cases.json" --cycle-dir "$WORK/idem2/R2-CHANGELOG-2.3" >/dev/null 2>&1
+# D46（F-1）：两次跑各用**独立副本**（内容逐字相同）⇒ 真正满足「同一输入两次跑」；
+#   实现对输入的写回不会让第二次的输入与第一次不同（此前两次共用 $FX/cases.json）。
+input_copy "$WORK/in-idem1"; input_copy "$WORK/in-idem2"
+node "$RP/scripts/plan-regression.mjs" --changelog "$WORK/in-idem1/CHANGELOG.md" --cases "$WORK/in-idem1/cases.json" --cycle-dir "$WORK/idem1/R2-CHANGELOG-2.3" >/dev/null 2>&1
+node "$RP/scripts/plan-regression.mjs" --changelog "$WORK/in-idem2/CHANGELOG.md" --cases "$WORK/in-idem2/cases.json" --cycle-dir "$WORK/idem2/R2-CHANGELOG-2.3" >/dev/null 2>&1
 P1F="$WORK/idem1/R2-CHANGELOG-2.3/regression-plan.json"
 P2F="$WORK/idem2/R2-CHANGELOG-2.3/regression-plan.json"
 if [ ! -s "$P1F" ] || [ ! -s "$P2F" ]; then
@@ -1879,7 +1949,7 @@ else
   BASE_KEYS="$(failkeys "$BASE_OUT")"
   BASE_SIG="$(failsig "$BASE_OUT" "$PKG")"
   # D45 第二轮：原始实现的「行为指纹」（变异体的基准）
-  FP_CYC="$WORK/fpcyc"
+  # D46（F-2）：运行目录由 impl_fp **内部**管理（每次调用全新目录）→ 此处不再指定固定目录。
   BASE_FP="$(impl_fp "$RP")"
   MUT_NOTE=""
   if [ -n "$BASE_KEYS" ]; then
@@ -1912,14 +1982,19 @@ else
       done
       [ "$SYNTAX_BAD" -eq 1 ] && continue
       # 自证 ③：变异后的脚本必须还能正常产出计划（崩溃 = 假检出，不计入）
-      mkdir -p "$WORK/mutcheck-$i/R2-CHANGELOG-2.3"
-      node "$MUTPKG/skills/regression-plan/scripts/plan-regression.mjs" --changelog "$FX/CHANGELOG.md" --cases "$FX/cases.json" --cycle-dir "$WORK/mutcheck-$i/R2-CHANGELOG-2.3" >/dev/null 2>"$WORK/mutcheck-$i.err"
+      # D46（F-2 同型面）：每次候选尝试用**唯一**目录 + **独立输入副本** ——
+      #   同一 $i 的多个候选锚点此前复用同一个 mutcheck 目录 ⇒ 上一候选的**残留计划**
+      #   可能被当成本次产物（"计划存在但其实是旧的"）⇒ 行为判定被污染。
+      MC="$WORK/mutcheck-$i-$idx"
+      input_copy "$WORK/in-mut-$i-$idx"
+      mkdir -p "$MC/R2-CHANGELOG-2.3"
+      node "$MUTPKG/skills/regression-plan/scripts/plan-regression.mjs" --changelog "$WORK/in-mut-$i-$idx/CHANGELOG.md" --cases "$WORK/in-mut-$i-$idx/cases.json" --cycle-dir "$MC/R2-CHANGELOG-2.3" >/dev/null 2>"$WORK/mutcheck-$i.err"
       MUT_RC=$?
-      if [ "$MUT_RC" -ne 0 ] || [ ! -s "$WORK/mutcheck-$i/R2-CHANGELOG-2.3/regression-plan.json" ]; then
+      if [ "$MUT_RC" -ne 0 ] || [ ! -s "$MC/R2-CHANGELOG-2.3/regression-plan.json" ]; then
         continue
       fi
       KEYS_BEFORE="$(node "$WORK/plan-keys.mjs" "$BASE_CYC/regression-plan.json" 2>/dev/null)"
-      KEYS_AFTER="$(node "$WORK/plan-keys.mjs" "$WORK/mutcheck-$i/R2-CHANGELOG-2.3/regression-plan.json" 2>/dev/null)"
+      KEYS_AFTER="$(node "$WORK/plan-keys.mjs" "$MC/R2-CHANGELOG-2.3/regression-plan.json" 2>/dev/null)"
       [ "$KEYS_BEFORE" = "$KEYS_AFTER" ] || continue
       # 自证 ④（D45 第二轮）：**行为必须真的变了** —— 变异体与原始实现的「行为指纹」必须不同。
       #   指纹 = 4 个探针输入上的（退出码 + 归一化输出 + 计划内容）。
