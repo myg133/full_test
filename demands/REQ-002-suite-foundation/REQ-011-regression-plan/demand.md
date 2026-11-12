@@ -111,7 +111,7 @@ needs_review(case) = affected(case) ∧ method_blocked(case)
 
 ### F4 输出契约：`regression-plan.json`
 
-写到**轮次目录**内（与 `cycle.json` 同级）：`test-assets/cycles/<cycle_id>/regression-plan.json`
+写到**轮次目录**内（与 `cycle.json` 同级）：`test-assets/cycles/<轮次目录>/regression-plan.json`
 
 ```jsonc
 {
@@ -128,7 +128,19 @@ needs_review(case) = affected(case) ∧ method_blocked(case)
 }
 ```
 
-**`selected` / `needs_review` / `undecidable_changes` 三个集合必须两两互斥**；
+**`cycle_id` 的口径（D45 第二轮 · 父会话裁定，写死）**：
+
+- `regression-plan.json` 的 `cycle_id` 字段由**输入**派生（回归轮次 + 变更集标识，例：`R2` + 变更日志文件名去扩展名），
+  **与输出轮次目录的名字解耦** —— 同一份输入写到不同 basename 的轮次目录，产出的计划除 `generated_at` 外**逐字相同**；
+- 理由（**判据的硬要求优先于习惯**）：**AC-020** 要求「同一输入两次跑，除时间戳外逐字相同」。
+  若 `cycle_id` 取自**输出路径**，换个目录名就不成立 —— 判据的硬要求优先于"目录名与 cycle_id 同名"这一习惯；
+- ⚠️ **REQ-002 的目录契约（「轮次目录名 = `cycle.json` 的 `cycle_id`」）只约束 `cycle.json`**，
+  **不适用于 `regression-plan.json`** —— 后者是"计划"产物，不是"轮次状态"；
+- 「`regression-plan.json` 的 `cycle_id` 与轮次目录名的关联是否要成为新不变量」→ **登记为后续 REQ 的候选**
+  （跨产物的目录契约扩展，须在下一个 REQ 正式立判据；本 REQ **不临时加判据**，判据条数必须守恒）。详见 `decisions.md` D45 尾巴。
+
+**`selected` / `needs_review` 两个用例集合必须互斥**；
+`undecidable_changes` 装的是**变更条目 id**（与用例集不同域），由「集合必须与独立重算相等」+「不得被任何选样条目引用」单独约束（见 AC-012 / AC-013）；
 `summary` 的每个数字必须与对应集合的长度**逐字相等**。
 
 ### F5 诚实性要求（本 REQ 的红线）

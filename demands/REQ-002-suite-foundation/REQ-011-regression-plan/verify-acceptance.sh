@@ -110,6 +110,32 @@ failsig() {
     | grep -E '^FAIL' | sort
 }
 
+# impl_fp —— 一个实现的「**行为指纹**」（D45 第二轮，AC-025 自证 ④ 用）
+# 在 4 个探针输入上跑 plan-regression，取【退出码 + 归一化输出 + 计划内容指纹】。
+# 两个实现的指纹**完全相同** ⟺ 行为等价（变异被架空 → 无效变异，**不是**逃逸）。
+# ⚠️ 为什么不能只比「计划内容」：有的变异只影响**错误路径**
+#    （例：坏引用被静默忽略 → 退出码从 1 变 0，但正常输入下的计划一模一样）——
+#    只比计划会把这种**有效**变异误判成「无效变异」。
+FP_CYC=""
+impl_fp() { # $1 = regression-plan skill 目录
+  local skill="$1" out="" probe cl rc o phash
+  for probe in valid bad-R bad-TC bad-DIM; do
+    case "$probe" in
+      valid)   cl="$FX/CHANGELOG.md" ;;
+      bad-R)   cl="$FX/bad-R.md" ;;
+      bad-TC)  cl="$FX/bad-TC.md" ;;
+      bad-DIM) cl="$FX/bad-DIM.md" ;;
+    esac
+    mkdir -p "$FP_CYC/$probe"
+    o="$(node "$skill/scripts/plan-regression.mjs" --changelog "$cl" --cases "$FX/cases.json" --cycle-dir "$FP_CYC/$probe" 2>&1)"; rc=$?
+    o="$(printf '%s' "$o" | tr '\n' ' ' | sed -e "s#$FP_CYC#<FPCYC>#g" -e 's/qa-011-[A-Za-z0-9]*/<WORK>/g')"
+    phash=""
+    [ -s "$FP_CYC/$probe/regression-plan.json" ] && phash="$(node "$WORK/plan-hash.mjs" "$FP_CYC/$probe/regression-plan.json" 2>/dev/null)"
+    out="$out [$probe rc=$rc out=$o plan=$phash]"
+  done
+  printf '%s' "$out"
+}
+
 # ---------------------------------------------------------------- 夹具
 
 FX="$WORK/fx"
@@ -628,6 +654,42 @@ for (const file of files) {
 }
 process.stdout.write(`${JSON.stringify({ files: files.length, thirdParty, network })}\n`);
 FIXSCAN
+
+cat > "$WORK/plan-hash.mjs" <<'FIXHASH'
+// plan-hash.mjs —— 计划内容的**指纹**（把时间戳形态的值归一化后再哈希）
+// 用法: node plan-hash.mjs <plan.json>
+// 输出: sha256（64 位十六进制）
+//
+// D45 第二轮：AC-025 的「行为等价」判定需要一个**与实现无关**的行为指纹 ——
+// 变异体若只影响**错误路径**（例：坏引用报错），计划内容不变，只有退出码/输出变了。
+// 故指纹 = 计划内容（去时间戳）+ 退出码 + 归一化输出（见 impl_fp）。
+import fs from 'node:fs';
+import crypto from 'node:crypto';
+
+const isIso = (v) => typeof v === 'string'
+  && /^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?(Z|[+-]\d{2}:?\d{2})?)?$/.test(v);
+const isEpochSec = (v) => (typeof v === 'number' && Number.isInteger(v) && v >= 1e9 && v < 1e11)
+  || (typeof v === 'string' && /^\d{10}$/.test(v));
+const isEpochMs = (v) => (typeof v === 'number' && Number.isInteger(v) && v >= 1e12 && v < 1e14)
+  || (typeof v === 'string' && /^\d{13}$/.test(v));
+const isTimestampLike = (v) => isIso(v) || isEpochSec(v) || isEpochMs(v);
+
+const norm = (v) => {
+  if (isTimestampLike(v)) return '<TS>';
+  if (Array.isArray(v)) return v.map(norm);
+  if (v && typeof v === 'object') {
+    const out = {};
+    for (const k of Object.keys(v).sort()) out[k] = norm(v[k]);
+    return out;
+  }
+  return v;
+};
+
+let plan = null;
+try { plan = JSON.parse(fs.readFileSync(process.argv[2], 'utf8')); } catch { plan = null; }
+const text = plan === null ? '' : JSON.stringify(norm(plan));
+process.stdout.write(`${crypto.createHash('sha256').update(text).digest('hex')}\n`);
+FIXHASH
 
 cat > "$WORK/gate-files.mjs" <<'FIXGATE'
 // gate-files.mjs —— AC-027 ③：识别 bin/ 下的「**组合门实现文件**」
@@ -1625,6 +1687,20 @@ const t=JSON.parse(fs.readFileSync(tf,"utf8")); t.requires=t.requires||{}; t.req
   else
     A21_PROBLEMS="$A21_PROBLEMS [副本里没有 test-case-design / test-execute 的 skill-meta.json，无法做逐段边界探针]"
   fi
+  # ⑥ D45 第二轮（F-1 的判据覆盖）：**同一个 --root 连跑两次**，两次退出码都必须为 0。
+  #    组合门若在调用方给的持久根下留下**固定的轮次态**（例：cycle-state.mjs 的 init 不覆盖
+  #    已有的 cycle.json），第二次跑就会假失败 —— 而此前每个子检查都用**各自独立的新根**跑一次，
+  #    这个形态**永远测不到**。
+  RUN2_OUT="$(node "$INSTALLER" verify --root "$VERIFY_ROOT" 2>&1)"; RUN2_RC=$?
+  if [ "$RUN2_RC" -ne 0 ]; then
+    if [ "$VERIFY_RC" -eq 0 ]; then
+      # 第一次同一条命令 rc=0、第二次 rc≠0 —— 两次唯一的差别就是第一次留下的状态
+      # → 失败原因**必然**来自残留状态（点名，不是"别的原因"）
+      A21_PROBLEMS="$A21_PROBLEMS [同一个 --root 第二次跑退出码=$RUN2_RC（第一次 rc=0）—— 失败原因来自第一次留下的残留状态；输出=$(printf '%s' "$RUN2_OUT" | head -4 | tr '\n' ' ')]"
+    else
+      A21_PROBLEMS="$A21_PROBLEMS [同一个 --root 第二次跑退出码=$RUN2_RC（第一次也失败 rc=$VERIFY_RC）—— 输出=$(printf '%s' "$RUN2_OUT" | head -4 | tr '\n' ' ')]"
+    fi
+  fi
 fi
 if [ -z "$A21_PROBLEMS" ]; then ok "$A21"; else bad "$A21" "$A21_PROBLEMS"; fi
 
@@ -1802,6 +1878,9 @@ else
   BASE_OUT="$(REQ011_NO_MUT=1 bash "$SELF" "$PKG" 2>&1)"
   BASE_KEYS="$(failkeys "$BASE_OUT")"
   BASE_SIG="$(failsig "$BASE_OUT" "$PKG")"
+  # D45 第二轮：原始实现的「行为指纹」（变异体的基准）
+  FP_CYC="$WORK/fpcyc"
+  BASE_FP="$(impl_fp "$RP")"
   MUT_NOTE=""
   if [ -n "$BASE_KEYS" ]; then
     MUT_NOTE="基线本身不绿（失败键: $(printf '%s' "$BASE_KEYS" | tr '\n' ' ')）—— 变异检测以「失败行集合差异」为准"
@@ -1842,13 +1921,13 @@ else
       KEYS_BEFORE="$(node "$WORK/plan-keys.mjs" "$BASE_CYC/regression-plan.json" 2>/dev/null)"
       KEYS_AFTER="$(node "$WORK/plan-keys.mjs" "$WORK/mutcheck-$i/R2-CHANGELOG-2.3/regression-plan.json" 2>/dev/null)"
       [ "$KEYS_BEFORE" = "$KEYS_AFTER" ] || continue
-      # 自证 ④（D45 / G-8）：**行为必须真的变了** —— 变异后的计划与基线不同。
-      #   计划与基线相同 = 注入后行为等价（例如实现会过滤掉不存在的用例 id）
-      #   → 这是**无效变异**，不是逃逸 → 换下一个锚点。
-      BEHAVIOR="$(node "$WORK/plan-diff.mjs" "$BASE_CYC/regression-plan.json" "$WORK/mutcheck-$i/R2-CHANGELOG-2.3/regression-plan.json" 2>/dev/null)"
-      case "$BEHAVIOR" in
-        SAME|"") continue ;;
-      esac
+      # 自证 ④（D45 第二轮）：**行为必须真的变了** —— 变异体与原始实现的「行为指纹」必须不同。
+      #   指纹 = 4 个探针输入上的（退出码 + 归一化输出 + 计划内容）。
+      #   指纹相同 ⟺ 行为等价（例如实现会过滤掉不存在的用例 id）→ **无效变异**，不是逃逸。
+      MUTFP="$(impl_fp "$MUTPKG/skills/regression-plan")"
+      if [ "$MUTFP" = "$BASE_FP" ]; then
+        continue
+      fi
       INJECTED=1; USED="$REGEX"
       break
     done
