@@ -20,7 +20,7 @@
   `BA/demands/REQ-002-suite-foundation/REQ-011-regression-plan/verify-acceptance.sh`
 - 需求文档（只读）：`BA/demands/REQ-002-suite-foundation/REQ-011-regression-plan/`
   （`acceptance.md` 判据集 28 条 / `decisions.md` D35~D45）
-- 验收脚本的 sha256 钉版值：`54efde3477e68f1aa70e9bdd4770873d0cd7a4216d8638f846c5daac69e5bd4a`
+- 验收脚本的 sha256 钉版值：`089af61c48b024b187c60790f4fb0477c7a5b9268b2ba91a06120592021a2d36`
 
 > 本 REQ 的验收判据集共 28 条判据（AC-001~AC-028），下表逐条给出交付位置与自验方式。
 

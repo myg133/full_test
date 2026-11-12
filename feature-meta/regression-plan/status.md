@@ -48,6 +48,6 @@
   - 上游回归（REQ-006 主验收 / REQ-002A / REQ-002B）→ 全绿
 - 需求文档（只读）：`BA/demands/REQ-002-suite-foundation/REQ-011-regression-plan/`
   （`acceptance.md` 判据集 28 条 / `decisions.md` D35~D45 / `verify-acceptance.sh`，
-  sha256 钉版值 `54efde3477e68f1aa70e9bdd4770873d0cd7a4216d8638f846c5daac69e5bd4a`）
+  sha256 钉版值 `089af61c48b024b187c60790f4fb0477c7a5b9268b2ba91a06120592021a2d36`）
 - 上游基线：REQ-006（`test-case-design`）、REQ-004（`test-execute`）、REQ-003（`qa-toolchain`）；
   本 REQ **不改** `test-case-design` 的任何既有文件（只新增根级版本声明）。
