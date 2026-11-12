@@ -86,7 +86,8 @@ const PRIORITIES = ['P0', 'P1', 'P2', 'P3'];
 
 const CASE_ID_PATTERN = /^TC-\d{3}$/;
 const QUESTION_ID_PATTERN = /^Q\d+$/;
-// 方法编号格式，如 M1.1 / M1.2。本阶段只校验格式，不校验方法库中是否真的存在该编号
+// 方法编号格式，如 M1.1 / M1.2 / M2.1。本阶段只校验格式，不校验方法库中是否真的存在该编号
+// （方法库收录 M1.x / M2.x 两段设计方法；M0.x / M4.x 是 Layer 0 必选测试点段，由 check-methods.mjs 判"无法判定"）
 const METHOD_PATTERN = /^M\d+\.\d+$/;
 // 维度跳过前缀（D11）：coverage_matrix[].skipped[].method 允许写成 "dimension:<维度名>"。
 // 向后兼容：写成方法编号的旧写法行为完全不变（方法编号格式检查的结果一字不改）。
@@ -867,8 +868,9 @@ function buildSkeleton() {
     coverage_matrix: [
       {
         requirement: 'R-1',
-        // 方法编号取 M1.x 段（测试设计方法，见 references/methods.json）——
+        // 方法编号取 M1.x 段（通用测试设计方法，见 references/methods.json）——
         // 骨架给出的是**能直接用**的编号：照抄 M0.x 会被 check-methods.mjs 判"无法判定"。
+        // 安全测试方法在 M2.x 段（M2.1~M2.3），按需替换。
         methods_applied: ['M1.1'],
         skipped: [],
         dimensions: ['functional'],

@@ -73,6 +73,33 @@
       "skip_reason_required": true,
       "skip_reason_hint": "写清该需求条目不区分端/版本（例如服务端内部接口）",
       "description": "端/版本/浏览器/协议版本差异下的行为。"
+    },
+    {
+      "id": "security",
+      "name": "安全",
+      "always_applies": false,
+      "applies_when": ["认证", "会话", "令牌", "凭据", "密钥", "注入", "脱敏", "加密", "审计", "登录态"],
+      "skip_reason_required": true,
+      "skip_reason_hint": "写清该需求条目不涉及认证会话、输入解析、凭据密钥、敏感数据保密或审计留痕（例如纯内部计算）",
+      "description": "认证与会话、输入解析（注入）、凭据与密钥、敏感数据脱敏与传输加密、审计可追溯。"
+    },
+    {
+      "id": "stress",
+      "name": "压力",
+      "always_applies": false,
+      "applies_when": ["限流", "过载", "峰值", "洪峰", "降级", "背压", "排队", "超卖", "重试风暴", "容量打满"],
+      "skip_reason_required": true,
+      "skip_reason_hint": "写清该需求条目不存在容量上限或洪峰场景（例如离线单用户单次处理）",
+      "description": "接近与超出设计容量时的行为正确性：限流与拒绝、优雅降级、背压排队、超时不丢数据、重试与幂等在洪峰下仍成立。"
+    },
+    {
+      "id": "observability",
+      "name": "可观测性",
+      "always_applies": false,
+      "applies_when": ["日志", "告警", "监控", "指标", "链路追踪", "埋点", "追踪", "可观测", "诊断"],
+      "skip_reason_required": true,
+      "skip_reason_hint": "写清该需求条目失败后无需定位（例如用户可见的成功提示即最终结论）",
+      "description": "关键路径日志、日志级别与内容正确、错误可诊断、关键指标与告警、链路追踪、敏感信息不入日志。"
     }
   ]
 }

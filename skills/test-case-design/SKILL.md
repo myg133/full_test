@@ -34,12 +34,12 @@ description: |
 3. **判定每条是否可测试**，`testable` 置 false 的（背景叙述、目标声明、术语解释）单独归类，不强行生成用例。
    原因：给不可测项编用例只会制造覆盖率的假象，让真正的缺口被淹没。
 
-4. **为每个可测试点选适用的设计方法**（等价类、边界值、判定表、状态迁移、正交、场景法）。
+4. **为每个可测试点选适用的设计方法**（等价类、边界值、判定表、状态迁移、正交、场景法、威胁建模、攻击面枚举、模糊测试）。
    **方法的适用信号、必需产出、常见反模式在 `references/methods.json`（唯一来源）**，人读说明见 `references/design-methods.md`。
    选完把方法编号写进 `coverage_matrix[].methods_applied[]`，**并在下一步用脚本核验**——方法"用没用"不是声明出来的，是脚本在用例集里找得到对应产出才算数。
    原因：凭直觉罗列用例容易只覆盖"顺利路径"；每种方法对应一类系统性遗漏，选方法等于决定这轮能发现哪类缺陷。而 `methods_applied` 只是个字符串列表，写上编号不产生任何用例，光靠自觉填等于没填。
 
-5. **按覆盖维度清单补齐**：功能 / 边界 / 异常 / 权限 / 数据 / 并发 / 性能 / 兼容。**维度枚举的唯一来源是 `references/dimensions.json`**（适用信号与跳过理由要求都在里面），人读清单见 `references/coverage-dimensions.md`（两者由脚本对照保证一致，**不要**手工同步，改维度只改 `dimensions.json`）。
+5. **按覆盖维度清单补齐**：功能 / 边界 / 异常 / 权限 / 数据 / 并发 / 性能 / 兼容 / 安全 / 压力 / 可观测性。**维度枚举的唯一来源是 `references/dimensions.json`**（适用信号与跳过理由要求都在里面），人读清单见 `references/coverage-dimensions.md`（两者由脚本对照保证一致，**不要**手工同步，改维度只改 `dimensions.json`）。
    维度不适用的，在 `coverage_matrix[].skipped[]` 里写明维度与理由（跳过必须留痕），不要静默跳过。**写法**：跳过维度用 `method` 字段记 `"dimension:<维度名>"`（如 `{"method":"dimension:concurrency","reason":"该接口为纯查询，无并发写入语义"}`）——`skipped[]` 的元素结构固定是 `method` + `reason`，不新增 `dimension` 字段（旧写法 `{ "dimension": ... }` 两个脚本都判非法并指明正确写法）。
    **维度名必须照 `dimensions.json` 抄**：拼错的名字是 **ERROR**（不是 WARN）——拼错的跳过声明从来不会生效，只报 WARN 就等于"报了校验通过、那条维度实际没被跳过"。
    原因：维度清单是查漏网用的统一视角，每个维度都问一遍"这一条适用吗"，比凭经验想更容易发现被忽略的维度。
@@ -64,7 +64,7 @@ description: |
    node scripts/check-methods.mjs cases.json
    ```
    原因：`methods_applied` 只是声明，脚本才会到用例集里找该方法的必需产出（"用了 M1.2"必须能在用例集里找到边界值用例）。这一步是"声明"变成"可核验事实"的唯一入口。
-   **方法编号分两段，别混用**：`M1.x` 是本 skill 的**测试设计方法**（等价类/边界值/判定表/状态迁移/正交/场景）；`M0.x` / `M4.x` 是架构稿 Layer 0 的**必选测试点**（正常路径/边界值/异常输入/非法迁移/幂等/服务端校验/数据质量），**不在方法库内** —— 写进 `methods_applied[]` 或 `cases[].method[]` 会被判**"无法判定"**，不会默认通过。
+   **方法编号分两段，别混用**：`M1.x` 是本 skill 的**通用测试设计方法**（等价类/边界值/判定表/状态迁移/正交/场景），`M2.x` 是本 skill 的**安全测试设计方法**（威胁建模/攻击面枚举/模糊测试）；`M0.x` / `M4.x` 是架构稿 Layer 0 的**必选测试点**（正常路径/边界值/异常输入/非法迁移/幂等/服务端校验/数据质量），**不在方法库内** —— 写进 `methods_applied[]` 或 `cases[].method[]` 会被判**"无法判定"**，不会默认通过。
    **三类结论的后果**：
    - **ERROR**：产出确实缺失，是可机械判定的事实 → **必须修**，修完重跑直到退出码 0；
    - **WARN**：适用性存疑，是主观判断 → 退出码仍为 0，但**必须在报告里说明**（写清为什么这条不适用/为什么用这个方法），不得静默忽略；
@@ -166,7 +166,7 @@ node scripts/cycle-state.mjs show test-assets/cycles/R1-REQ-001 --json
 
 - `references/project-layout.md` —— 目录契约与字段表（环境配置 / 执行配置 / `cycle.json`）。校验器怎么判，依据就是这份文件。
 - `references/state-machine.md` —— 轮次状态转移表、终态、推进器全部子命令与原子性规则。
-- `references/design-methods.md` —— 6 种方法的适用信号、必需产出与反模式（人读说明；判定依据是 `references/methods.json`）。
+- `references/design-methods.md` —— 9 种方法的适用信号、必需产出与反模式（人读说明；判定依据是 `references/methods.json`）。
 - `references/dimensions.json` —— 覆盖维度枚举的**唯一来源**（适用信号与跳过理由要求），人读清单见 `references/coverage-dimensions.md`。
 
 **硬约束：状态文件只由脚本写。** `cycle.json` 与 `cycles/index.json` **不得直接编辑**，状态推进一律走 `cycle-state.mjs`：它先校验前置状态合法性，再原子写入（临时文件 + rename），并让 `status` 与 `history` 在同一次写入里保持自洽；索引写失败时会回滚 `cycle.json`，不留"轮次已推进、索引没跟上"的脱同步。手改两处必然对不齐，而对不齐的状态会让后续轮次的证据链整条作废。
@@ -180,7 +180,7 @@ node scripts/cycle-state.mjs show test-assets/cycles/R1-REQ-001 --json
   - `meta`：`source`（需求来源标识）、`generated_at`（ISO-8601）、`case_count`（用例总数）
   - `requirements[]`：`id`、`title`、`source_ref`、`testable`
   - `open_questions[]`（v2）：`id`（`Q1` 起）、`question`、`requirement_refs[]`、`interpretations[{reading, impact}]`（**至少 2 条**——只列一种解读等于替需求方做了裁定）、`affected_cases[]`、`severity`（`blocking` / `non-blocking`）、`coverage`（`cases` / `deferred`，`deferred` 时须给 `defer_reason`）
-  - `coverage_matrix[]`（v2）：`requirement`、`methods_applied[]`（写**方法编号** `M1.x`）、`skipped[]`（元素固定为 `method` + `reason`；跳过方法写编号，跳过维度写 `"dimension:<维度名>"`；**两种都必须写 reason**，空理由即 FAIL）、`dimensions[]`
+  - `coverage_matrix[]`（v2）：`requirement`、`methods_applied[]`（写**方法编号** `M1.x` / `M2.x`）、`skipped[]`（元素固定为 `method` + `reason`；跳过方法写编号，跳过维度写 `"dimension:<维度名>"`；**两种都必须写 reason**，空理由即 FAIL）、`dimensions[]`
   - `cases[]`：`id`、`title`、`requirement_refs[]`、`dimension`、`priority`、`method[]`（v2）、`status`（v2：`active` / `deprecated` / `modified` / `blocked`）、`revision`（`status` 非 `active` 时必填）、`preconditions[]`、`steps[{action, expected}]`、`data`、`tags[]`
 - **Markdown 报告**（`render-report.mjs` 的 stdout）：用例总览表、追溯矩阵（需求条目 → 覆盖用例 ID → 覆盖状态）、未覆盖需求条目清单、未决问题、覆盖矩阵。
 - **覆盖汇报**：未覆盖需求条目 ID 列表 + 未决问题列表 + `check-methods.mjs` 的 WARN 与无法判定项，三项都不能省略。
