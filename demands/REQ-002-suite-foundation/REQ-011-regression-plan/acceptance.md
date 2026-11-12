@@ -31,8 +31,12 @@ node scripts/check-plan.mjs --plan <file> --cases <file> --changelog <file> \
 ```
 
 **输入样例（判据用的最小夹具）**：
-- 用例集 `cases.json`：schema v2，含 2 个需求条目（`R-1` / `R-2`）、6 条用例，维度取自 `dimensions.json`，方法取自 `methods.json`
-- changelog：3 个变更条目 —— 一条带 `@R-1`、一条带 `@dim:security`、一条**无引用无信号**（用于 AC-012/013）
+- 用例集 `cases.json`：schema v2，含 **3 个需求条目**（`R-1` / `R-2` / `R-3`）、**7 条用例**，维度取自 `dimensions.json`，方法取自 `methods.json`
+- changelog：**4 个变更条目** —— 一条带 `@R-1`、一条带 `@dim:security`、一条正文命中**另一个维度**（如 `observability`）的 `applies_when` 信号词、一条**无引用无信号**（用于 AC-012/013）
+- ⚠️ **夹具的「角色分离」是硬要求**（干跑实测，否则判据会互斥或变异会逃逸）：
+  1. **被方法挡住的用例**（其方法命中某变更条目的 `not_applies_when`）**不得**同时是「需求命中」用例 —— 否则 AC-006（要求它在 `selected`）与 AC-017③ / AC-018（要求它不在 `selected`）**互斥**；
+  2. **信号词路径命中的维度必须与显式 `@dim:` 的维度不同** —— 否则 AC-007 的探针「只堵显式路径须判红」无法与信号路径**区分**（堵掉显式路径会连带堵掉信号路径，探针就测不出差异）；
+  3. **非 `active` 的用例不得恰好就是被方法挡住的那条** —— 否则「忽略 `status`」这个变异**无观测差异**（该用例本来就不在 `selected` 里），会**逃逸**。
 
 **库文件默认值**：未显式传 `--dimensions` / `--methods` 时，必须回落到**同包内**
 `../test-case-design/references/{dimensions,methods}.json`（相对 `$RP`）——
@@ -87,12 +91,16 @@ node scripts/check-plan.mjs --plan <file> --cases <file> --changelog <file> \
 ### AC-006: 命中需求条目的用例必须在 `selected`
 - **前置条件**: 同上；夹具含一条带 `@R-1` 的变更条目
 - **测试步骤**: 取 `P.changes` 里 `requirement_refs` 含 `R-1` 的变更条目 C；对输入里每条 `requirement_refs` 含 `R-1` 且 `status == active` 的用例 u，断言 u 出现在 `P.selected`
+  —— ⚠️ **联合读法（干跑实测补）**：「命中需求条目」指的是 `affected(u)`（见 demand.md F3），而 `selected = affected ∧ ¬method_blocked`。
+  故本条的对象是「命中需求条目**且未被方法挡住**」的用例；被方法挡住的用例归 AC-017（`needs_review`），**不在本条范围内**
+  （若不排除，AC-006 与 AC-017③ / AC-018 就**互斥**，一条用例会被两条判据同时要求相反的结论）
 - **预期结果**: 全部出现在 `selected`；漏一条 → 判红并点名漏了哪个
 - **判据形式**: 查绝对事实（输入用例集的实际用例）；探针：把实现改成"只选显式引用的用例" → 本条判红
 - **类型**: 功能
 
 ### AC-007: 命中维度的用例必须在 `selected`（显式与隐式两条路径）
-- **前置条件**: 同上；夹具含一条带 `@dim:security` 的变更条目，**以及**一条正文命中 `security` 维度 `applies_when` 信号词的变更条目
+- **前置条件**: 同上；夹具含一条带 `@dim:security` 的变更条目，**以及**一条正文命中**另一个维度**（如 `observability`）的 `applies_when` 信号词的变更条目
+  —— ⚠️ **两个维度必须不同**（干跑实测补）：否则「只堵显式路径」的探针无法与信号路径**区分**（堵掉显式路径会连带堵掉同维度的信号路径），探针就测不出差异
 - **测试步骤**: ① 对显式 `@dim:` 引用的维度 D，取输入里 `dimension == D` 且 `status == active` 的用例，断言全在 `selected`；② 对信号词命中的维度 D'，同样断言
 - **预期结果**: 两条路径都不得漏；任一漏 → 判红并点名是显式路径还是信号路径
 - **判据形式**: 查绝对事实；探针：去掉隐式信号路径的实现 → 本条判红（**只堵显式路径的实现在此判红**）
@@ -269,9 +277,9 @@ node scripts/check-plan.mjs --plan <file> --cases <file> --changelog <file> \
 - **测试步骤**:
   ① `feature-meta/regression-plan/` 下的四件套（`status.md` / `traceability.md` / `verification-report.md` / `manifest.json`）**存在且非空**，缺一即判红
   ② `feature-meta/manifest.json`（**根目录**那一份）的 `req` 必须仍是 `REQ-006` —— 本 REQ **不得改写** REQ-006 的追溯件（若被改成 `REQ-011` 或缺失 → 判红）
-  ③ `feature-meta/regression-plan/traceability.md` 里以 `| AC-0` 开头的**追溯矩阵行数**必须 == 25，且其 AC 编号集合恰好等于 `AC-001`~`AC-025`（多一行、少一行、或出现集合外的编号 → 判红）
-  ④ 三份 md 追溯件里**恰好各有一处**「25 条判据」，且该数字 == `acceptance.md` 里 `### AC-` 的实际条数（**上游回归的数字写的是「N PASS / 0 FAIL」形态，不受影响**）
-  ⑤ 三份 md 追溯件里写明的**决策号范围**必须与本 REQ `decisions.md` 的实际 D 号集合一致（应为 `D35~D40`；集合不符 → 判红）
+  ③ `feature-meta/regression-plan/traceability.md` 里以 `| AC-0` 开头的**追溯矩阵行数**必须 == `acceptance.md` 里 `### AC-` 的**实际条数**（当前 28），且其 AC 编号集合恰好等于实际判据编号集合（当前 `AC-001`~`AC-028`）（多一行、少一行、或出现集合外的编号 → 判红）
+  ④ 三份 md 追溯件里**恰好各有一处**「N 条判据」（N == `acceptance.md` 的实际条数，当前 28）（**上游回归的数字写的是「N PASS / 0 FAIL」形态，不受影响**）
+  ⑤ 三份 md 追溯件里写明的**决策号范围**必须与本 REQ `decisions.md` 的实际 D 号集合一致（当前为 `D35~D43`；集合不符 → 判红）
   ⑥ `feature-meta/regression-plan/manifest.json` 的 `req` == `REQ-011`，且 `demand_dir` 指向的目录**真实存在**
 - **预期结果**: 六项全满足；任一不符 → 判红并点名是哪一项
 - **判据形式**: 查**绝对事实**（追溯件的实际内容 + `acceptance.md` / `decisions.md` 的实际条数与编号）；
@@ -287,7 +295,9 @@ node scripts/check-plan.mjs --plan <file> --cases <file> --changelog <file> \
 
 ### AC-027: 零第三方依赖 + 可移植（不联网）
 - **前置条件**: 被验 skill 目录 `$RP` + 被验包 `bin/`
-- **测试步骤**: ① 扫描 `$RP` 下全部 `.mjs` 文件的 `import` / `require` 语句，凡**不是** `node:` 内置模块的依赖 → 判红并点名；② 扫描这些文件里是否出现发起网络请求的构造（`fetch(`、`node:http` / `node:https` 的客户端用法、`XMLHttpRequest`）→ 出现即判红；③ 对 `bin/` 下**本次新增**的组合门实现文件做同样的两条检查
+- **测试步骤**: ① 扫描 `$RP` 下全部 `.mjs` 文件的 `import` / `require` 语句，凡**不是** `node:` 内置模块的依赖 → 判红并点名；② 扫描这些文件里是否出现发起网络请求的构造（`fetch(`、`node:http` / `node:https` 的客户端用法、`XMLHttpRequest`）→ 出现即判红；③ 对 `bin/` 下**组合门实现文件**做同样的两条检查
+  —— **「组合门实现文件」的识别规则**：承载组合校验逻辑、因而**必然读写 `skill-meta.json`**（要校验依赖图就必须读它）的 `.mjs` 文件。
+  **若识别不到任何组合门实现文件 → 判红**（不得因「找不到被护对象」就自我豁免 —— 那等于放行漏洞）
 - **预期结果**: 三项全满足；任一违反 → 判红并点名文件与那一行
 - **判据形式**: 查**绝对事实**（源码里实际的依赖与网络调用）；
   探针：把某个 `import` 改成第三方模块 → 本条判红；加一处 `fetch(` → 本条判红
@@ -295,6 +305,9 @@ node scripts/check-plan.mjs --plan <file> --cases <file> --changelog <file> \
 - **说明**: 本包是 **npm 交付物**（`test-agent-skills`），用户装到 `~/.agents/skills/` 后直接跑 ——
   引入第三方依赖会让"装上就能用"这件事变成"装上还要装依赖"。REQ-006 的 AC-009 是同一条约束的先例
   （当时正是它挡住了实现方引入依赖）。
+  ⚠️ **③ 为何不扫 `bin/` 下全部 `.mjs`**：`bin/qa-impl.mjs`（REQ-003 的工具链 runner）**合法地**含一处 `fetch(`
+  （它要真的执行外部工具），扫全部文件会把既有交付物判红 —— 那是**越界**（本 REQ 不该改 REQ-003 的文件）。
+  ③ 只约束**本次新增的组合门实现**，既有文件由它们自己的 REQ 负责。
 
 ### AC-028: SKILL.md 必须把「影响面判定」落在脚本上，不得让 agent 自行判断
 - **前置条件**: `$RP/SKILL.md`
