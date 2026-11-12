@@ -1184,14 +1184,28 @@ else
       TOT26_MIN=20
     fi
   fi
+  # ---- 21 追溯链护栏：主验收行被"洗白"成上游层的条数（= 第九轮 P09A / P09B / P09D 探针本体）----
+  # 这条变异证明**验收脚本自己**能判红第 ⑬ 子判据的"洗白"一族 ——
+  # 洗白手法：把主验收行的 35 改成上游的 19，并在同一行里塞 `REQ-002A`，
+  # 让「这一处属于哪一层」的归属判定被带偏。D25 ⑫ 之后归属改为**整行判定**，
+  # 该行只要出现主验收标记（脚本名或「主验收」字样），数字就只能是主验收条数。
+  SKIP21=0
+  if [ -f "$MUTROOT/feature-meta/traceability.md" ]; then
+    if printf '%s\n' "$BASE_KEYS" | grep -q "^AC-034$"; then
+      SKIP21=1
+    else
+      run_mut_md "主验收行被洗白成上游条数" "$MUTROOT/feature-meta/traceability.md" 'const fs=require("fs"),f=process.argv[1];let s=fs.readFileSync(f,"utf8");const lines=s.split(/\r?\n/);let hit=0;const out=lines.map(l=>{if(hit===0 && l.indexOf("verify-acceptance.sh")>=0 && l.indexOf("35 PASS / 0 FAIL")>=0){hit++;return l.replace("35 PASS / 0 FAIL","19 PASS / 0 FAIL（与 `REQ-002A` 一并统计）");}return l;});if(!hit)process.exit(3);const t=out.join("\n");for(const tok of ["条判据","D1~D","M1.","个维度"]){if(!t.includes(tok))process.exit(3);}fs.writeFileSync(f,t);'
+      TOT26_MIN=21
+    fi
+  fi
   # 还原后必须回到基线（确认变异被还原干净）
   RB_OUT="$(QA005_NO_MUT=1 bash "$SELF" "$MUT" 2>&1)"
   RB_KEYS="$(failkeys "$RB_OUT")"
   RB_OK=0
   if [ "$RB_KEYS" = "$BASE_KEYS" ]; then RB_OK=1; fi
   if [ $DET26 -eq $TOT26 ] && [ $TOT26 -ge $TOT26_MIN ] && [ -z "$INVALID" ] && [ $RB_OK -eq 1 ]; then
-    if [ "${SKIP20:-0}" = "1" ]; then
-      ok "AC-026 变异体 100% 被检出（$DET26/$TOT26，还原后回到基线；基线已在 AC-034 上判红 → 第 20 个追溯链护栏变异体不可检测，未计入）"
+    if [ "${SKIP20:-0}" = "1" ] || [ "${SKIP21:-0}" = "1" ]; then
+      ok "AC-026 变异体 100% 被检出（$DET26/$TOT26，还原后回到基线；基线已在 AC-034 上判红 → 第 20/21 个追溯链护栏变异体不可检测，未计入）"
     else
       ok "AC-026 变异体 100% 被检出（$DET26/$TOT26，还原后回到基线）"
     fi
@@ -1692,9 +1706,16 @@ else
     };
     walk(tcd,"");
   }catch(e){}
+  // ⚠️ D25 ⑫（第九轮 F2）：⑮ 的基准必须与第 ⑩ 条的**登记口径**一致 ——
+  // 清单项正则只认 `references/…` / `scripts/…` / `SKILL.md`，所以根级文件（如 `NOTES.md`）
+  // **永远登记不上** → 该子判据变成**不可满足**（如实登记也判红，第九轮探针 P10 实测）。
+  // 处置：⑮ 的基准限定为**清单能表达的那一类**；同时保留"读不到交付文件 → 判红"的护栏
+  //（不许"找不到被护对象就自我豁免"）。
+  const inScope=dirFiles.filter(f=>f==="SKILL.md" || /^(references|scripts)\//.test(f));
   if(dirFiles.length===0) prob.push("被验目录里一个文件都读不到 —— 无法核对实现清单是否覆盖全部交付物");
+  else if(inScope.length===0) prob.push("被验目录里读不到任何交付文件（references/ scripts/ SKILL.md）—— 无法核对实现清单是否覆盖全部交付物");
   else{
-    const missed=dirFiles.filter(f=>stList.indexOf(f)<0);
+    const missed=inScope.filter(f=>stList.indexOf(f)<0);
     if(missed.length) prob.push("status.md: 实现清单漏列了被验目录里的文件 "+missed.join(",")+" —— 追溯链没有覆盖全部交付物");
   }
   // ---- 第⑧子判据：验证报告必须有**逐层结论**与**能力结论表**（第六轮 A60）
@@ -1728,9 +1749,20 @@ else
   // 归属判定（第八轮 N07/N08 洗白攻击后强化）：
   // **行内若提到主验收脚本，该行的数字只能是主验收条数** —— 否则在同一行里塞一句
   // "（与 REQ-002A 一并统计）"就能把主验收的 35 伪装成上游的 19，归属判定被"洗白"。
+  // ⚠️ D25 ⑫（第九轮 P09A / P09B / P09D 三条真逃逸的处置）：
+  // 归属判定此前只看「**数字之前的那一段**」—— 而标记落在哪一段是**被测文件自己**说了算：
+  //   P09A：主验收行不写脚本名、只写 `REQ-002A` → 被归到 002A 层 → 19 == 19 → 判绿；
+  //   P09B：脚本名写在**数字之后** → 不在数字前的切片里 → 判绿；
+  //   P09D：同一行先 19（归 002A）再 35（归主验收）→ 两个都"合法" → 判绿。
+  // 改法：**主验收标记改为整行判定**，且标记集合加入「主验收」字样 ——
+  // 行内只要出现主验收标记（脚本名或「主验收」字样），该行的**所有**「N PASS / M FAIL」
+  // 都只能是主验收条数；**不再看标记落在数字前还是数字后**。
+  // 未出现主验收标记的行，仍按「数字前的切片」判 002A / 002B ——
+  // 追溯矩阵里"同一行并列写 19 与 41"的**合法**写法不能被误伤。
   const MAIN_MARK="verify-acceptance.sh";
-  const layerExpect=(ctx)=>{
-    if(ctx.indexOf(MAIN_MARK)>=0) return {v:actual,name:"主验收"};
+  const MAIN_WORD="主验收";
+  const layerExpect=(ctx,whole)=>{
+    if(whole.indexOf(MAIN_MARK)>=0 || whole.indexOf(MAIN_WORD)>=0) return {v:actual,name:"主验收"};
     if(ctx.indexOf("002A")>=0) return upA>=0?{v:upA,name:"REQ-002A"}:null;
     if(ctx.indexOf("002B")>=0) return upB>=0?{v:upB,name:"REQ-002B"}:null;
     return {v:actual,name:"主验收"};
@@ -1743,7 +1775,7 @@ else
       while((m=re.exec(line))!==null){
         const ctx=line.slice(last,m.index+m[0].length);
         last=m.index+m[0].length;
-        const e=layerExpect(ctx);
+        const e=layerExpect(ctx,line);
         if(!e) continue;               // 上游真值拿不到 → 已由第⑫子判据报过，不重复报
         if(e.name==="主验收") mainHit[F]=(mainHit[F]||0)+1;
         if(Number(m[1])!==e.v) prob.push(F+": 写着 "+m[1]+" PASS / "+m[2]+" FAIL，但这一处属于「"+e.name+"」层（该层真实条数 "+e.v+"）—— 追溯链里的验收数字与实际不符");
