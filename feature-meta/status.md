@@ -10,6 +10,7 @@
   - `references/coverage-dimensions.md` —— 维度清单文档（由脚本对照保证与 JSON 一致）
   - `references/case-schema.md` —— 用例集结构契约（schema v2）
   - `scripts/check-methods.mjs` —— 方法使用与维度适用性核验器
+  - `scripts/validate-cases.mjs` —— 用例集结构校验器
   - `SKILL.md` —— skill 入口（方法选择与维度适用性一律走脚本）
 - 核心变更：`methods_applied[]` 从「字符串声明」变成「可核验事实」——
   声称用了某方法，必须能在用例集里找到该方法的必需产出，否则报 ERROR。
