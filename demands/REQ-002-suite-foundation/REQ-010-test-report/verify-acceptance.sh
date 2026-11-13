@@ -111,9 +111,10 @@ MUT_INVALID=""
 MUT_NOTE=""
 MUT_UNDEC=0
 MUT_CONTROL_OK=0
+MUT_MISSING_IMPL=0
 MUT_CONTROL_FAILED=""
 
-ok()   { PASS=$((PASS+1)); printf '%s\n' "$1" > "$RES_DIR/$2.res"; }
+ok()   { PASS=$((PASS+1)); printf 'PASS  %s\n' "$1" > "$RES_DIR/$2.res"; }
 bad()  { FAIL=$((FAIL+1)); printf 'FAIL  %s\n' "$1" > "$RES_DIR/$2.res"; }
 # 不可判定 —— 既不判红也不判绿（不可判定 ≠ 通过）
 undec(){ UNDEC=$((UNDEC+1)); printf 'UNDEC %s\n' "$1" > "$RES_DIR/$2.res"; }
@@ -765,12 +766,13 @@ const selectedMissing = Array.isArray(reg.selected_missing) ? reg.selected_missi
       'source.results_sha256', 'source.evidence_manifest_sha256', 'report_sha256'];
     for (const k of REQUIRED) if (!seen.has(k)) problems.push(`摘要缺必需键 ${k}`);
     // ④ 正文关键数字（对齐 demand.md F4.2 的标签词汇表）：
-    //    标签 + 数字（标签与数字之间**不得**夹中文；单位 条/个/项 **可省略**）。
+    //    标签 + 数字（标签与数字之间**不得出现字母或数字** —— 拦的是 id 自带的数字；
+    //    单位 条/个/项 **可省略**）。
     //    ⚠️ 标签与数字之间的「间隔」里**不允许**出现字母/数字（否则「漏跑：TC-006（1 条）」里的
     //    「006」会被当成漏跑条数 —— 那是误判）。这种写法按「未呈现」处理（不判红，只是不计入呈现数）。
     const BODY = md.replace(/<!--\s*report-digest:[^\n]*?-->/g, '');
     const METRICS = [
-      { key: 'cases.total', expect: counts.total, label: '(?:用例总数|总数|共计|总计)' },
+      { key: 'cases.total', expect: counts.total, label: '(?:用例总数|共计|总计|合计)' },
       { key: 'cases.passed', expect: counts.passed, label: '(?:通过)' },
       { key: 'cases.failed', expect: counts.failed, label: '(?:失败)' },
       { key: 'cases.blocked', expect: counts.blocked, label: '(?:阻塞|阻断)' },
@@ -1682,6 +1684,24 @@ else
   SCEN="$(printf '%s' "$VERIFY_OUT" | grep -c '组合场景' || true)"
   [ "${SCEN:-0}" -ge 1 ] || A29_PROBLEMS="$A29_PROBLEMS [输出里没有组合场景的实跑记录]"
   printf '%s' "$VERIFY_OUT" | grep -q '组合场景失败' && A29_PROBLEMS="$A29_PROBLEMS [组合场景失败]"
+  # ③ 之补（OI-7 裁定）：至少有一条组合场景**真的经过 test-report** ——「装了」不等于「用上了」。
+  #   机械口径（三条同时成立才算数）：
+  #     ① 组合场景的输出行里点名 test-report / make-report；
+  #     ② 该场景**真的产出了报告产物**（临时根里出现非空的 report.json），或直接断言了报告里的结论；
+  #     ③ 组合门对它的断言是**实跑的**（断言了 verdict/overall 的值），而不是只查文件存在。
+  SCEN_TR="$(printf '%s' "$VERIFY_OUT" | grep -E '组合场景' | grep -E 'test-report|make-report' | head -1)"
+  if [ -z "$SCEN_TR" ]; then
+    A29_PROBLEMS="$A29_PROBLEMS [没有一条组合场景真的经过 test-report（只装不跑 ⇒ 判红）]"
+  else
+    REPORT_ART="$(find "$VERIFY_ROOT" -path "$VERIFY_ROOT/skills" -prune -o -type f -name report.json -size +0c -print 2>/dev/null | head -1)"
+    VERDICT_ASSERT="$(printf '%s' "$SCEN_TR" | grep -cE 'verdict\.overall|verdict\.' || true)"
+    if [ "${VERDICT_ASSERT:-0}" -eq 0 ]; then
+      A29_PROBLEMS="$A29_PROBLEMS [经过 test-report 的组合场景没有断言报告里的结论（verdict/overall），只是查了文件存在]"
+    fi
+    if [ -z "$REPORT_ART" ] && [ "${VERDICT_ASSERT:-0}" -eq 0 ]; then
+      A29_PROBLEMS="$A29_PROBLEMS [组合场景声称经过 test-report，但临时根里没有真的产出 report.json]"
+    fi
+  fi
   TR_INSTALL="$VERIFY_ROOT/skills/test-execute"
   OFFLINE="$TR_INSTALL/examples/offline"
   SUITE="$OFFLINE/test-assets/suites/REQ-DEMO-demo/suite.json"
@@ -1840,9 +1860,16 @@ SHIMEOF
     ENTRY="$MUTPKG/$ENTRY_REL"
     STATUS="有效"
     # 自证 ①：入口锚点在副本里**逐字唯一命中 1 次**
-    HITS="$(node "$WORK/pkgfiles.mjs" "$MUTPKG" "$ENTRY_REL" 2>/dev/null | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log(JSON.parse(s).length)}catch(e){console.log(0)}})')"
-    if [ "${HITS:-0}" -ne 1 ]; then
-      STATUS="无效变异（入口锚点命中 $HITS 次，要求恰好 1 次）"
+    #   ⚠️ 两种「无效」要分开说：入口脚本**不存在** = **实现未交付**（不是门侧问题）；
+    #      入口存在但命中数 ≠ 1 = **门侧锚点不可达**（不唯一）。
+    if [ ! -f "$ENTRY" ]; then
+      STATUS="无效变异（**实现缺失**：$ENTRY_REL 不存在 —— 变异体无法注入；这是实现未交付，不是门侧问题）"
+      MUT_MISSING_IMPL=1
+    else
+      HITS="$(node "$WORK/pkgfiles.mjs" "$MUTPKG" "$ENTRY_REL" 2>/dev/null | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log(JSON.parse(s).length)}catch(e){console.log(0)}})')"
+      if [ "${HITS:-0}" -ne 1 ]; then
+        STATUS="无效变异（门侧锚点不可达：入口锚点命中 $HITS 次，要求恰好 1 次）"
+      fi
     fi
     # 自证 ②：产物里的锚点路径恰好出现 1 次（锚点 0 次或 >1 次即无效变异）
     if [ "$STATUS" = "有效" ]; then
@@ -1904,7 +1931,10 @@ SHIMEOF
   mkdir -p "$CTRLPKG"
   cp -r "$PKG"/. "$CTRLPKG"/ 2>/dev/null
   CTRL_STATUS="有效"
-  if ! inject_shim "$CTRLPKG" "report.meta_note = 'mutant-control';"; then
+  if [ ! -f "$CTRLPKG/skills/test-report/scripts/make-report.mjs" ]; then
+    CTRL_STATUS="无效变异（**实现缺失**：skills/test-report/scripts/make-report.mjs 不存在 —— 变异体无法注入；这是实现未交付，不是门侧问题）"
+    MUT_MISSING_IMPL=1
+  elif ! inject_shim "$CTRLPKG" "report.meta_note = 'mutant-control';"; then
     CTRL_STATUS="无效变异（包装层注入失败）"
   fi
   if [ "$CTRL_STATUS" = "有效" ]; then
@@ -1936,15 +1966,19 @@ SHIMEOF
     fi
   fi
 
-  # ⑤ 结论
+  # ⑤ 结论（责任方要指对：「实现缺失」是实现方的问题，「锚点不可达」才是门侧的问题）
+  MUT_WHY="门侧注入问题：锚点不可达或注入不生效"
+  if [ "$MUT_MISSING_IMPL" -eq 1 ]; then
+    MUT_WHY="**实现缺失**：skills/test-report/scripts/make-report.mjs 不存在 —— 变异体无法注入；这是实现未交付，不是门侧问题"
+  fi
   if [ -n "$MUT_ESCAPED" ]; then
     MUT_NOTE="检出 $MUT_DETECTED/$MUT_TOTAL（有效变异体）；逃逸:$MUT_ESCAPED"
   elif [ "$MUT_TOTAL" -lt "$MUT_REQUIRED" ]; then
     MUT_UNDEC=1
-    MUT_NOTE="不可判定：有效变异体只有 $MUT_TOTAL/$MUT_REQUIRED（门侧注入问题：锚点不可达或注入不生效）；无效变异:$MUT_INVALID"
+    MUT_NOTE="不可判定：有效变异体只有 $MUT_TOTAL/$MUT_REQUIRED（$MUT_WHY）；无效变异:$MUT_INVALID"
   elif [ -n "$MUT_INVALID" ]; then
     MUT_UNDEC=1
-    MUT_NOTE="不可判定：$MUT_INVALID（门侧注入问题）"
+    MUT_NOTE="不可判定：$MUT_INVALID（$MUT_WHY）"
   else
     MUT_NOTE="检出 $MUT_DETECTED/$MUT_TOTAL（有效变异体）"
   fi
@@ -1974,7 +2008,11 @@ elif [ -n "$MUT_CONTROL_FAILED" ]; then
   printf '  （负控本该「未检出」；它被报成「已检出」说明检出判定恒真，本门结论不可采信）\n'
 elif [ "$MUT_UNDEC" -eq 1 ]; then
   printf '不可判定: 1 项（变异体套件）—— %s\n' "$MUT_NOTE"
-  printf '  （这是**门侧注入问题**，不是被验实现的缺陷；退出码为 1，判据结论仍以上面的 PASS/FAIL 为准）\n'
+  if [ "$MUT_MISSING_IMPL" -eq 1 ]; then
+    printf '  （这是**实现未交付**，不是门侧问题：变异体需要 `skills/test-report/scripts/make-report.mjs` 才能注入。退出码为 1，判据结论仍以上面的 PASS/FAIL 为准）\n'
+  else
+    printf '  （这是**门侧注入问题**，不是被验实现的缺陷；退出码为 1，判据结论仍以上面的 PASS/FAIL 为准）\n'
+  fi
 fi
 
 # 退出条件：
