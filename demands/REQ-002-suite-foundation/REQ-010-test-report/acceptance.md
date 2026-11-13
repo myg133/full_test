@@ -167,14 +167,14 @@ $FX/ART/
 
 ### AC-001: `test-report` skill 存在且结构合法
 - **前置条件**: 被验包目录
-- **测试步骤**: ① 检查 `skills/test-report/` 存在；② `SKILL.md` 存在且 YAML frontmatter 含 `name: test-report` 与**非空** `description`（取 frontmatter 的**值**再判空 —— 块标量 `|` 取其缩进块；普通标量剥掉首尾引号，`""` / `''` 判空）；③ `references/report-schema.md`、`references/report-rules.md`、`scripts/make-report.mjs`、`scripts/check-report.mjs` 四个文件存在且非空；④ 两个脚本首行是 `#!/usr/bin/env node` 或可被 `node` 直接执行，且 `node --check` 通过
+- **测试步骤**: ① 检查 `skills/test-report/` 存在；② `SKILL.md` 存在且 YAML frontmatter 含 `name: test-report` 与**非空** `description`（取 frontmatter 的**值**再判空 —— 块标量 `|` 取其缩进块；普通标量剥掉首尾引号，`""` / `''` 判空）；③ `references/report-schema.md`、`references/report-rules.md`、`scripts/make-report.mjs`、`scripts/check-report.mjs` 四个文件存在且非空；④ 两个脚本**各自**（不是两个合起来满足其一）首行是 `#!/usr/bin/env node`、文件**可执行**、且 `node --check` 通过；任一脚本不满足 → 判红并**点名是哪个脚本**
 - **预期结果**: 四项全满足；任一缺失 → 判红并点名缺哪个；`description` 为空值 → 判红
 - **判据形式**: 查**绝对事实**（文件真实存在且非空）；探针：把 `description` 改成 `""` → 本条判红
 - **类型**: 功能
 
 ### AC-002: 每个 skill 都声明版本与依赖（`skill-meta.json`）
 - **前置条件**: 被验包目录
-- **测试步骤**: 对 `skills/` 下**每一个**含 `SKILL.md` 的目录，检查存在 `skill-meta.json`；解析它必须有 `name`（非空且等于目录名）、`version`（形如 `<数字>.<数字>.<数字>`）、`requires`（对象；值为形如 `>=<x.y.z>` 或 `<x.y.z>` 的约束）；并检查 `name` 与该 skill 的 SKILL.md frontmatter `name` 一致
+- **测试步骤**: 对 `skills/` 下**每一个**含 `SKILL.md` 的目录，检查存在 `skill-meta.json`；解析它必须有 `name`（非空且等于目录名）、`version`（形如 `<数字>.<数字>.<数字>`）、`requires`（对象；值为形如 `>=<x.y.z>` 或 `<x.y.z>` 的约束）；并检查 `name` 与该 skill 的 SKILL.md frontmatter `name` 一致（frontmatter 取**值**再比对 —— 剥首尾引号、支持块标量；不得用「取第一个 token」的裸正则）
 - **预期结果**: 每个 skill 都有合法声明；**`test-report` 的 `requires` 必须包含 `test-execute`**（它消费执行产物的格式，是硬依赖）；任一不满足 → 判红并点名
 - **判据形式**: 查绝对事实；探针：删掉某个 skill 的 `skill-meta.json` → 本条判红；把 `test-report.requires` 里的 `test-execute` 删掉 → 本条判红
 - **类型**: 功能
@@ -221,14 +221,19 @@ $FX/ART/
 ### AC-008: 报告必须绑定输入产物的指纹
 - **前置条件**: 同上
 - **测试步骤**: 取 `report.json` 的 `source.results_sha256` / `source.evidence_manifest_sha256`，与 `meta.json` 里记录的两个值比对；再与**从 `results.json` 按 §0.4 口径重算**的值比对
-- **预期结果**: 四个值**全部相等**（meta 的记录值 == 重算值 == 报告里写的值）；报告不得只抄 `meta.json`（若 meta 的指纹与重算值不符，报告必须指出而不是跟着抄）
+- **预期结果**: 报告里的 `source.results_sha256` / `source.evidence_manifest_sha256` 必须与**重算值**相等；报告不得只抄 `meta.json`（若 meta 的指纹与重算值不符，报告必须指出而不是跟着抄）
 - **判据形式**: 查绝对事实；探针：把实现改成把 `source.results_sha256` 写成别的值 → 本条判红
+- **可判探针与责任对位（D71 / F-09）**:
+  - **探针**: 把夹具副本的 `meta.json` 的两个指纹改成 64 个 `0` 后重跑 → 报告里的 `source.*` 仍必须是**重算值**（≠ 被篡改的值），
+    且 `evidence.findings` 至少含一条 `kind == "fingerprint_mismatch"`；不满足 → 本条判红（不许只抄 meta 的错值）。
+  - **责任对位**: 「meta 记录的指纹 ≠ 重算值」属于**夹具自检**，**不计入**本条的判红（那是夹具的问题，不是实现的问题），
+    但必须在门的输出里**标注**出来（例：`夹具自检：meta 指纹与重算值一致`）。
 - **类型**: 功能
 
 ### AC-009: 输入缺失或非法时必须报错退出，不得产出半份报告
 - **前置条件**: ① 产物目录不存在；② `meta.json` 不是合法 JSON；③ `results.json` 根节点不是数组
 - **测试步骤**: 三种情形各跑一次 `make-report.mjs`，检查退出码与输出目录
-- **预期结果**: 三种情形**退出码均非 0**（用法错 = 2，输入非法 = 1），且**不得**留下半份报告（`report.json` / `report.md` 不存在或不含未完成内容）；错误信息要点名是什么坏了
+- **预期结果**: 三种情形**退出码均为 1**（输入非法；用法错 = 2 另行判定），且**不得**留下半份报告 —— `report.json` / `report.md` **只要存在**就算「留下了半份报告」（**0 字节也算**，按**存在性**判定，不按「非空」判定）；错误信息（**stderr**）必须**点名是什么坏了**：产物目录不存在 → 含「产物目录」；`meta.json` 非法 → 含「meta.json」；`results.json` 根非数组 → 含「results.json」
 - **判据形式**: 查绝对事实（真实退出码 + 产物目录实况）；探针：让实现在解析失败时仍写出一个空的 `report.json` → 本条判红
 - **类型**: 功能
 
@@ -240,6 +245,10 @@ $FX/ART/
 - **前置条件**: §0.1 的执行产物目录
 - **测试步骤**: 取 `report.json`，按 **demand.md F3.2 规定的规范化口径**（剔除 `generated_at` 与 `report_sha256` 两字段后，对剩余内容做**键名按码位升序**的稳定序列化：对象键排序、数组保序、无空白分隔符、数值用 JSON 表示、字符串用 JSON 转义）重算 sha256，与报告里的 `report_sha256` 比对
 - **预期结果**: 两者**逐字相等**；口径必须**同时**写在 `references/report-schema.md` 里（否则无法核）；报告不得把自己算进去
+- **口径的唯一性（D71 / C-F）**: **schema 声明的规范化口径**是判定依据 —— 声明须写明 F3.2 的**唯一规范口径**
+  （剔除 `generated_at` 与 `report_sha256` → 对象键按**码位升序** → 数组**保序** → **无空白** → **UTF-8** → sha256）；
+  schema 未写明 → **判红**「schema 未写明 report_sha256 规范化口径」。
+  实现实际用的口径必须与 schema 声明**一致** —— 「多口径并集」只作**兜底**（用来点名实现用错了口径），**不得单独作为通过依据**
 - **判据形式**: 查绝对事实（可重算）；探针：让实现写死一个 `report_sha256` → 本条判红
 - **类型**: 功能
 
@@ -247,6 +256,17 @@ $FX/ART/
 - **前置条件**: 同上（**须带 `--regression-plan $FX/PLAN`**，以覆盖全部数字类型）
 - **测试步骤**: ① `report.md` 必须含**一行机器可读摘要**，格式为 `<!-- report-digest: key=value; key=value; ... -->`（单行、每个键值对之间用 `; ` 分隔）；② 摘要里的每个键都必须能在 `report.json` 里找到**同名路径**（点号路径，如 `cases.total` / `verdict.overall` / `regression.selected_missing`），且**值逐字相等**（数组用逗号连接其元素，顺序敏感）；③ 摘要必须**至少**覆盖这些键：`cases.total` / `cases.passed` / `cases.failed` / `cases.blocked` / `cases.skipped` / `verdict.case_layer` / `verdict.evidence_layer` / `verdict.regression_layer` / `verdict.overall` / `source.results_sha256` / `source.evidence_manifest_sha256` / `report_sha256`；④ md **正文**里出现的关键数字必须按 **demand.md F4.2 的标签词汇表**呈现（「标签 + 数字」，标签与数字之间**不得**夹中文，单位 `条`/`个`/`项` 可省），且数字值必须与摘要一致：总数 / 各状态数 / 漏跑条数 / 待复核条数 / 判不了条数
 - **预期结果**: ①②③④ 全满足；**任何**一个数字对不上、或摘要缺必需键 → 判红并点名是哪个键
+- **④ 的判定口径（D71 / C-C / C-D）**:
+  - **别名判定**：按指标取别名（如「用例总数」的别名是 `用例总数` / `共计` / `总计` / `合计`）；
+    别名须为**独立标签** —— 别名前后都不得是中文 / 字母 / 数字；
+    别名与紧随的数字之间只能有**分隔符**（非中文、非字母、非数字、不跨行）。
+    ⇒ `已执行的待复核：1 条` 里的「待复核」前面是中文「的」→ **不算**「待复核」的呈现。
+  - **必须呈现的类数**：**带计划场景 8 类关键数字必须全部呈现**（用例总数 / 通过 / 失败 / 阻塞 / 跳过 / 漏跑 / 待复核 / 判不了）——
+    **缺一即判红并点名缺哪类**；**无计划场景只需 5 类**（用例总数 / 通过 / 失败 / 阻塞 / 跳过）。
+  - **词表外标签**：正文出现「标签 + 数字」且该标签含 `总数`、**不属于任一别名**、
+    且不含 {证据, 文件, 条目, 目录, 路径} → 判红「正文出现词表外标签的关键数字」。
+    裸 `总数` **不在词表内**（词表是「8 个指标各自的合法别名表」，**不是**全文标签白名单 ——
+    与这 8 个指标无关的数字（证据份数、选样条数、耗时）不受词表约束）。
 - **判据形式**: 查绝对事实（两份产物的实际内容互比）；探针：让实现在 md 的摘要里写死一个计数 → 本条判红
 - **说明**: 摘要行是 md 的**渲染契约**（D50）——"md 是 json 的渲染、数字逐字相等"若没有可机械抽取的落点，就只能靠人眼比对，那等于没有约束。
 
@@ -259,7 +279,7 @@ $FX/ART/
 
 ### AC-013: `report.json` 的必填字段集必须完整
 - **前置条件**: 同上
-- **测试步骤**: ① `references/report-schema.md` 必须存在且非空，其中**必须列出** `demand.md` F3 声明的必填字段清单（**缺一个 → 判红**，不得"schema 里没写就不查"）；② 逐个检查 `report.json` 的**路径**存在、类型正确：`schema_version`（number）、`generated_at`（string）、`source.{artifacts,run_id,suite,requirement,environment,started_at,finished_at,results_sha256,evidence_manifest_sha256,regression_plan}`（string；`regression_plan` 未给计划时为 `null`）、`cases.{total,passed,failed,blocked,skipped,duration_ms_total}`（number）、`verdict.{case_layer,evidence_layer,regression_layer,overall}`（string 且取值在枚举内：`case_layer ∈ {pass,fail,incomplete}`、`evidence_layer ∈ {pass,fail,unknown}`、`regression_layer ∈ {pass,fail,incomplete,not_applicable,unknown}`、`overall ∈ {pass,fail,incomplete}`）、`failures[]` 每项含 `case_id`/`title`/`status`/`error`/`reproduction`/`evidence`、`evidence.{files_present,files_missing,missing_paths,findings}`（前两个 number，`missing_paths` 为 string[]，`findings` 为对象数组，每项含 `kind`（枚举 `missing_evidence`/`evidence_mismatch`/`count_mismatch`/`fingerprint_mismatch`）与非空 `message`）、`regression`（给计划时为对象，含 `selected_planned`/`selected_executed`/`needs_review_planned`/`needs_review_executed`（number）、`selected_missing`（string[]）、`undecidable_changes`（对象数组，每项含 `change_id`/`reason`）、`impact_complete`（boolean）；未给计划时为 `null`）、`report_sha256`（64 位 hex）；③ `references/report-schema.md` 里必须写明 `report_sha256` 的**规范化口径**（剔除 `generated_at` 与 `report_sha256` 后的稳定序列化方式），否则 AC-010 无法核
+- **测试步骤**: ① `references/report-schema.md` 必须存在且非空，其中**必须列出** `demand.md` F3 声明的必填字段清单（**按路径写法**逐个核，如 `cases.total` / `cases.passed` / `evidence.files_present` —— 不得用 `total` / `evidence` 这类裸 token，否则 `total` ⊂ `duration_ms_total`；**缺一个 → 判红**，不得"schema 里没写就不查"）；② 逐个检查 `report.json` 的**路径**存在、类型正确：`schema_version`（number）、`generated_at`（string）、`source.{artifacts,run_id,suite,requirement,environment,started_at,finished_at,results_sha256,evidence_manifest_sha256,regression_plan}`（string；`regression_plan` 未给计划时为 `null`）、`cases.{total,passed,failed,blocked,skipped,duration_ms_total}`（number）、`verdict.{case_layer,evidence_layer,regression_layer,overall}`（string 且取值在枚举内：`case_layer ∈ {pass,fail,incomplete}`、`evidence_layer ∈ {pass,fail,unknown}`、`regression_layer ∈ {pass,fail,incomplete,not_applicable,unknown}`、`overall ∈ {pass,fail,incomplete}`）、`failures[]` 每项含 `case_id`/`title`/`status`/`error`/`reproduction`/`evidence`、`evidence.{files_present,files_missing,missing_paths,findings}`（前两个 number，`missing_paths` 为 string[]，`findings` 为对象数组，每项含 `kind`（枚举 `missing_evidence`/`evidence_mismatch`/`count_mismatch`/`fingerprint_mismatch`）与非空 `message`）、`regression`（给计划时为对象，含 `selected_planned`/`selected_executed`/`needs_review_planned`/`needs_review_executed`（number）、`selected_missing`（string[]）、`undecidable_changes`（对象数组，每项含 `change_id`/`reason`）、`impact_complete`（boolean）；未给计划时为 `null`）、`report_sha256`（64 位 hex）；③ `references/report-schema.md` 里必须写明 `report_sha256` 的**规范化口径**（剔除 `generated_at` 与 `report_sha256` 后的稳定序列化方式：键码位升序 / 数组保序 / 无空白 / UTF-8 / sha256），否则 AC-010 无法核；schema 未写明 → **判红**
 - **预期结果**: ①②③ 全满足；缺字段、类型错、枚举越界或 schema 未列出 F3 字段 → 判红并点名缺哪个
 - **判据形式**: 查绝对事实（按 F3 的固定字段清单逐字段核 + schema 文档实查）；探针：让实现删掉 `verdict.evidence_layer` 字段 → 本条判红
 - **类型**: 功能
@@ -279,15 +299,17 @@ $FX/ART/
 
 ### AC-015: 漏跑必须导向失败结论
 - **前置条件**: 同上
-- **测试步骤**: 检查 `verdict.regression_layer` 与 `verdict.overall`
-- **预期结果**: `selected_missing` 非空 → `regression_layer == "fail"` **且** `overall != "pass"`；两点缺一 → 判红
+- **测试步骤**: 检查 `verdict.regression_layer` 与 `verdict.overall`；**触发条件用重算的漏跑清单**（计划 `selected[]` 减去 `results.json` 里实际出现的 `case_id`），**不看报告自述**
+- **预期结果**: 重算漏跑非空 → `regression_layer == "fail"` **且** `overall != "pass"`；两点缺一 → 判红
 - **判据形式**: 查绝对事实；探针：让实现在漏跑时仍给 `overall: "pass"` → 本条判红
 - **类型**: 诚实性
 
 ### AC-016: `needs_review` 非空时不得判回归通过
 - **前置条件**: 同上（计划的 `needs_review` 含 `TC-003`，且 `TC-003` 在执行产物里、状态为 `blocked`）
 - **测试步骤**: 检查 `verdict.regression_layer`、`regression.needs_review_planned`、`regression.needs_review_executed`
-- **预期结果**: `needs_review_planned == 1`、`needs_review_executed == 1`；`regression_layer` **不得**为 `"pass"`（待人工复核 ≠ 回归通过）；`report.md` 必须显示这批待复核用例的 id（点名 `TC-003`）
+- **预期结果**: `needs_review_planned == 1`、`needs_review_executed == 1`；`regression_layer` **不得**为 `"pass"`（待人工复核 ≠ 回归通过）；`report.md` 必须显示这批待复核用例的 id（点名 `TC-003`）。
+  **点名 = 在待复核语境里出现该 id**（同一段落或紧邻 2 行内同时出现「待复核 / 需复核 / 人工复核」与该 id）；
+  只在别的章节提到该 id（如「失败与阻塞用例」段）**不算**点名（D71 / C-E）
 - **判据形式**: 查绝对事实；探针：让实现在 `needs_review` 非空时仍给 `regression_layer: "pass"` → 本条判红
 - **类型**: 诚实性
 
@@ -302,6 +324,10 @@ $FX/ART/
 - **前置条件**: 只有执行产物，**不给** `--regression-plan`
 - **测试步骤**: 跑 `make-report.mjs --artifacts $FX/ART`；检查 `regression` 段、`verdict.regression_layer`，以及 `report.md` 的全文
 - **预期结果**: `regression == null`；`regression_layer == "not_applicable"`；`report.md` 中**不得出现**「回归通过」「回归完整」「回归覆盖」等断言回归状态的措辞（不得出现 `regression_layer` 的其它取值）；`overall` 的推导**不得**依赖回归层
+- **措辞禁令的边界（D71 / C-E2）**: 只禁**肯定式**断言。
+  **允许表述白名单** = {`不适用`, `未提供计划`, `未提供`, `not_applicable`, `n/a`} ——
+  它们出现在断言句里**不算**肯定式断言（例：「未提供计划，本层不适用」合法）；
+  层名的同义词表 = {`回归`, `对账`, `选样`}；扫描窗口**跨行**（对全文做跨行匹配，窗口 ≥ 30 字）。
 - **判据形式**: 查绝对事实（两份产物的实际内容）；探针：让实现在没给计划时也填一个 `regression` 段 → 本条判红
 - **类型**: 诚实性
 
@@ -319,14 +345,14 @@ $FX/ART/
 ### AC-020: 证据链不自洽不得出可信结论
 - **前置条件**: 把 `$FX/ART` 复制一份，在副本里把某个**证据文件的内容改掉**（`TC-002` 的 `evidence/TC-002/step-1-response.json`，**不改 `results.json` 里的 sha256**）⇒ 该证据的实算 sha256 与记录值不符
 - **测试步骤**: 跑 `make-report.mjs --artifacts <被篡改的副本>`；检查 `verdict.evidence_layer`、`verdict.overall`、`report.json` 的 `evidence.findings[]`、`report.md`
-- **预期结果**: `evidence_layer == "fail"`；`overall != "pass"`；`evidence.findings[]` 至少含一条 `kind ∈ {"evidence_mismatch","fingerprint_mismatch"}`，其 `message` **点名被篡改的证据路径**（含 `TC-002` 与该文件名）或点名"指纹不符"；`report.md` 必须出现该条 `message` 的**关键片段**（路径片段或 `kind` 名）—— 只写"证据链校验失败"**不算**
+- **预期结果**: `evidence_layer == "fail"`；`overall != "pass"`；`evidence.findings[]` 至少含一条 `kind ∈ {"evidence_mismatch","fingerprint_mismatch"}`，其 `message` **必须点名被篡改的证据路径**（含 `TC-002` 与该文件名）—— 只写「指纹不符」**不算**（D69 / D71 / C-H）；`report.md` 必须出现该条 `message` 的**关键片段**（路径片段）—— 只写"证据链校验失败"**不算**
 - **判据形式**: 查绝对事实（真实退出码 + 报告内容）；探针：让实现跳过证据链校验（假定产物可信）→ 本条判红
 - **类型**: 诚实性
 
 ### AC-021: `meta.json` 计数与 `results.json` 不符必须被发现
 - **前置条件**: §0.1 的夹具（**故意**：`meta` 写 6/2/1/1/2，实际是 5/2/1/1/1）
 - **测试步骤**: 跑 `make-report.mjs --artifacts $FX/ART`；检查 `verdict.evidence_layer`、`evidence.findings[]`、`report.md`
-- **预期结果**: `evidence.findings[]` 至少含一条 `kind == "count_mismatch"`，其 `message` **点名是哪个计数**（含 `cases_total` 或"总数"字样）**且同时含 meta 记的值 `6` 与重算真值 `5`**；`evidence_layer == "fail"`（或至少 `overall != "pass"`）；`report.md` 必须出现该条 `message` 的关键片段；但 `cases.*` 仍必须按 `results.json` 重算（AC-005 的真值 5/2/1/1/1）
+- **预期结果**: `evidence.findings[]` 至少含一条 `kind == "count_mismatch"`，其 `message` **点名是哪个计数**（含 `cases_total` 或"总数"字样）**且同时含 meta 记的值 `6` 与重算真值 `5`**（按**数字词边界**匹配 —— `6` / `5` 不得是 `16` / `56` 的一部分）；`evidence_layer == "fail"`（或至少 `overall != "pass"`）；`report.md` 必须出现该条 `message` 的关键片段；但 `cases.*` 仍必须按 `results.json` 重算（AC-005 的真值 5/2/1/1/1）
 - **判据形式**: 查绝对事实；探针：让实现完全无视 `meta` 的计数差异（既不报也不判失败）→ 本条判红
 - **类型**: 诚实性
 
@@ -347,7 +373,7 @@ $FX/ART/
   - ② **id 溯源（md 侧）**：从 `report.md` **全文**抽取所有形如 `[A-Za-z][A-Za-z0-9]*-\d+` 的 token，凡**看起来是用例 id**（前缀与 `results.json`/`plan` 里出现的用例 id 前缀相同，如 `TC-`）的必须 ∈ `IDS`；凡**看起来是变更 id**（前缀与 `plan.changes[].id` 前缀相同，如 `C-`）的必须 ∈ `CHANGE_IDS`
   - ③ **数字可重算（用例层）**：`report.json` 的 `cases` 段**只允许** F3 声明的 6 个键 `total`/`passed`/`failed`/`blocked`/`skipped`/`duration_ms_total`；前 5 个必须逐字等于从 `results.json` 逐条重算的真值（`5/2/1/1/1`），`duration_ms_total` 必须等于各条 `duration_ms` 之和；出现第 7 个键 → 判红
   - ④ **数字可重算（回归层）**：`regression` 段内**每一个数字型字段**必须能由 `plan` 与 `results.json` 逐字段重算得出：`selected_planned` == `plan.selected.length`；`selected_executed` == |`plan.selected[].case_id` ∩ `results.json` 实际出现的 `case_id`|；`needs_review_planned` == `plan.needs_review.length`；`needs_review_executed` == |`plan.needs_review[].case_id` ∩ `results.json` 实际出现的 `case_id` 集|；`undecidable_changes.length` == `plan.undecidable_changes.length`；`impact_complete` == `plan.summary.impact_complete`；并检查 `selected_planned == selected_executed + selected_missing.length`
-  - ⑤ **顶层不得有野生数字**：`report.json` 的**顶层**只允许**一个**数字型叶子字段 —— `schema_version`（值 `1`，F3 声明）；除此之外，顶层出现任何数字型叶子字段（如 `total: 42`）→ 判红并点名（**字符串**字段不受此限）
+  - ⑤ **顶层不得有野生数字**：`report.json` 的**顶层**只允许**一个**数字型叶子字段 —— `schema_version`（值 `1`，F3 声明；**按值核**，不是只查「有没有这个字段」）；除此之外，顶层出现任何数字型叶子字段（如 `total: 42`）→ 判红并点名（**字符串**字段不受此限）
 - **预期结果**: ①~⑤ 全满足；出现一个输入里没有的 id、或一个重算不上的数字、或一个野生数字字段 → 判红并点名（是哪个 id / 哪个字段）
 - **判据形式**: 查绝对事实（集合运算 + 逐字段重算 + 顶层字段枚举）；探针：让实现在报告里写死一个 `total: 42` → 本条判红（`cases.total != 5`（③）**且**多出顶层数字字段（⑤）—— 两处同时命中）
 - **类型**: 诚实性
@@ -360,13 +386,14 @@ $FX/ART/
 ### AC-024: 同一输入两次出报告必须逐字相同
 - **前置条件**: §0.1 的执行产物 + §0.3 的计划
 - **测试步骤**: 跑两次 `make-report.mjs --artifacts $FX/ART --regression-plan $FX/PLAN`（输出到两个不同目录）；两份 `report.json` 与两份 `report.md` 逐字比对（**排除** `generated_at` 字段）
-- **预期结果**: 除 `generated_at` 外**逐字相同**（含 `report_sha256` —— 它也必须相同，因为它排除 `generated_at`）；`report.md` 同理
+- **预期结果**: 除 `generated_at` 外**逐字相同**（含 `report_sha256` —— 它也必须相同，因为它排除 `generated_at`）；`report.md` 同理；
+  **md 的时间戳须逐字取自 `report.json.generated_at`**（两处出现的是同一个字符串；不得各自取当前时间）（D71 / C-K）
 - **判据形式**: 查绝对事实（两份产物的实际内容互比）；探针：让实现在报告里塞入随机值或时间戳 → 本条判红
 - **类型**: 可复现性
 
 ### AC-025: 输出路径约定 + 只写自己的目录
 - **前置条件**: 同上
-- **测试步骤**: ① 默认输出：检查 `<run_dir>/report/report.json` 与 `report.md` 存在；② `--out-dir <其它目录>`：检查报告落在指定目录；③ 检查**输入产物目录**下**除 `report/` 外**没有新增/修改任何文件；④ 检查输出目录**不在**输入产物目录内时，不得在输入产物目录里留下任何散落文件
+- **测试步骤**: ① 默认输出：检查 `<run_dir>/report/report.json` 与 `report.md` 存在；② `--out-dir <其它目录>`：检查报告落在指定目录；③ 检查**输入产物目录**下**除产物目录根下那一个 `report/` 外**没有新增/修改任何文件（**快照不排除任何目录** —— 连嵌套的 `report/` 也不排除；「排除 `report/`」只作用于「默认输出位置」那一支的判读）；④ 检查输出目录**不在**输入产物目录内时，不得在输入产物目录里留下任何散落文件（含产物目录根下的 `report/`）
 - **预期结果**: 四项全满足；报告写到输入产物目录之外时，输入产物目录必须**逐字未变**
 - **判据形式**: 查绝对事实（文件系统实况）；探针：让实现把报告写到当前工作目录或输入产物根 → 本条判红
 - **类型**: 功能
@@ -395,16 +422,16 @@ $FX/ART/
 
 ### AC-028: 交付侧记账必须与实际一致
 - **前置条件**: 被验包目录 + `feature-meta/test-report/` 追溯件
-- **测试步骤**: ① `feature-meta/test-report/` 下 `status.md` / `traceability.md` / `verification-report.md` / `manifest.json` 四件齐全且非空；② `traceability.md` 的**追溯矩阵行数**与本文件判据条数（**29**）相等，且编号集合恰为 AC-001~AC-029；③ 三份 md 各**恰一处**记载判据条数与决策号范围；④ 决策号范围与 `decisions.md` 的实际 D 集合一致（**D48~D70**）；⑤ **`feature-meta/test-report/manifest.json`** 的 `req` 为 `REQ-010`
+- **测试步骤**: ① `feature-meta/test-report/` 下 `status.md` / `traceability.md` / `verification-report.md` / `manifest.json` 四件齐全且非空；② `traceability.md` 的**追溯矩阵行数**与本文件判据条数（**29**）相等，且编号集合恰为 AC-001~AC-029；③ 三份 md 记载的判据条数与决策号范围必须**取值唯一** —— 同一 md 里出现的判据条数**取值集合** == {实际条数}、决策号范围**取值集合** == {D48~D70}；同一取值被重复引用**不算**多处记载，出现**第二个不同取值**才判红并点名；④ 决策号范围固定为 **D48~D70**（**实现侧**追溯范围；验收期追加的**门侧裁定**不在实现侧追溯范围内）；⑤ **`feature-meta/test-report/manifest.json`** 的 `req` 为 `REQ-010`
 - **预期结果**: 五项全满足；任一不符 → 判红并点名
-- **判据形式**: 查绝对事实（追溯件的实际内容 vs 契约的实际内容）；**不得**改写 REQ-011 / REQ-006 的既有追溯件（`feature-meta/` **根目录**四件套与 `feature-meta/regression-plan/` 子目录必须**逐字未变** —— 包括根 `feature-meta/manifest.json` 的 `req` 仍是 `REQ-006`、`feature-meta/regression-plan/manifest.json` 的 `req` 仍是 `REQ-011`）
+- **判据形式**: 查绝对事实（追溯件的实际内容 vs 契约的实际内容）；**不得**改写 REQ-011 / REQ-006 的既有追溯件（`feature-meta/` **根目录**四件套与 `feature-meta/regression-plan/` 子目录必须**逐字节未变**（sha256 钉版）—— 包括根 `feature-meta/manifest.json` 的 `req` 仍是 `REQ-006`、`feature-meta/regression-plan/manifest.json` 的 `req` 仍是 `REQ-011`）
 - **类型**: 追溯
 - **说明**: ⑤ 指的是**本 REQ 自己的** `feature-meta/test-report/manifest.json`；
   根 `feature-meta/manifest.json` 属于 REQ-006 的既有追溯件，**必须逐字未变** —— 两者不是同一个文件。
 
 ### AC-029: 组合门必须覆盖第 5 个 skill
 - **前置条件**: 被验包目录 + REQ-011 交付的组合门（`bin/test-agent-skills.mjs verify` / `bin/verify-suite.mjs`）
-- **测试步骤**: 跑组合门，检查：① 临时根**装齐 5 个 skill**（含 `test-report`）；② 依赖图校验通过；③ 跨 skill 组合场景**实跑**并产出结果，且**至少有一条场景真的经过 `test-report`**（如「执行产物 → `make-report.mjs` → 三层结论」）；④ 版本错配时**报版本问题**（不是下游业务错）
+- **测试步骤**: 跑组合门，检查：① 临时根**装齐 5 个 skill**（含 `test-report`）；② 依赖图校验通过；③ 跨 skill 组合场景**实跑**并产出结果，且**至少有一条场景真的经过 `test-report`**（如「执行产物 → `make-report.mjs` → 三层结论」）—— 判据从**临时根的产物**反推：必须存在**非空** `report.json`，且其 `verdict.*` / `cases.*` 与场景断言一致（结构完整、数字自洽、结论与数字不矛盾）；输出文本里含 `test-report` / `make-report` 只作**辅助**证据，**不得单独**作为通过依据；④ 版本错配时**报版本问题**（不是下游业务错）
 - **预期结果**: 四项全满足；漏装 `test-report` → 判红；组合场景没真跑（只是查文件存在）→ 判红；**组合场景里没有任何一条经过 `test-report`**（只装不跑）→ 判红
 - **判据形式**: 查绝对事实（组合门的真实退出码与输出）；探针：让组合门漏装 `test-report` → 本条判红；探针：让组合门装了 `test-report` 但**不跑任何经过它的场景** → 本条判红
 - **类型**: 功能

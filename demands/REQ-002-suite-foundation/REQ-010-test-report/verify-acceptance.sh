@@ -400,6 +400,37 @@ walk(path.resolve(root));
 process.stdout.write(`${JSON.stringify(hits)}\n`);
 FIXFILES
 
+cat > "$WORK/snapdir.mjs" <<'FIXSNAP'
+// snapdir.mjs —— 产物目录的**完整**快照（每行 "相对路径 sha256"，按路径排序）
+// 用法: node snapdir.mjs <dir> [exclude-prefix]
+//   exclude-prefix：可选，形如 "report/" —— **只排除产物目录根下的那一个** report/ 子树。
+// ⚠️ C-J：快照**不排除任何目录**（连嵌套的 report/ 也不排除）；
+//    「report/ 的排除」只作用于「默认输出位置」那一支的**判读**。
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
+
+const root = path.resolve(process.argv[2]);
+const exclude = process.argv[3] ? String(process.argv[3]) : '';
+const lines = [];
+const walk = (dir) => {
+  let entries = [];
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) { walk(full); continue; }
+    if (!entry.isFile()) continue;
+    const rel = path.relative(root, full).split(path.sep).join('/');
+    if (exclude && (rel === exclude.replace(/\/$/, '') || rel.startsWith(exclude))) continue;
+    const hash = crypto.createHash('sha256').update(fs.readFileSync(full)).digest('hex');
+    lines.push(`${rel} ${hash}`);
+  }
+};
+walk(root);
+lines.sort();
+process.stdout.write(`${lines.join('\n')}\n`);
+FIXSNAP
+
 cat > "$WORK/mkfixture.mjs" <<'FIXMK'
 // mkfixture.mjs —— 按 acceptance.md §0 自造夹具（执行产物 + 回归计划）
 // 用法: node mkfixture.mjs <art-dir> <plan-file>
@@ -550,14 +581,14 @@ cat > "$WORK/judge.mjs" <<'FIXJUDGE'
 //   ② 指纹用本脚本自带的独立实现（./fingerprint.mjs），**不** import 被验包里的实现；
 //   ③ 只读被验包与夹具，绝不写回。
 //
-// 用法: node judge.mjs <art-dir> <plan-file> <out-plan> <out-noplan> <out-tamper> <pkg-root>
+// 用法: node judge.mjs <art-dir> <plan-file> <out-plan> <out-noplan> <out-tamper> <pkg-root> <out-fpmeta>
 // 输出: 每行 "AC-xxx\tPASS|FAIL\t说明"
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { resultsFingerprint, evidenceManifestFingerprint } from './fingerprint.mjs';
 
-const [artDir, planFile, outPlan, outNoPlan, outTamper, pkgRoot] = process.argv.slice(2);
+const [artDir, planFile, outPlan, outNoPlan, outTamper, pkgRoot, outFpMeta] = process.argv.slice(2);
 
 const out = [];
 const emit = (id, ok, msg) => {
@@ -632,6 +663,8 @@ const reg = isObj(rp) && isObj(rp.regression) ? rp.regression : {};
 const findings = Array.isArray(ev.findings) ? ev.findings : [];
 const missingPaths = Array.isArray(ev.missing_paths) ? ev.missing_paths.map(String) : [];
 const selectedMissing = Array.isArray(reg.selected_missing) ? reg.selected_missing.map(String) : [];
+// 重算出的漏跑清单（AC-014 / AC-015 共用同一口径 —— 不看报告自述）
+const expectedMissing = planSelected.filter((id) => !caseIds.has(id));
 
 // ---------------------------------------------------------------- AC-005 计数重算
 {
@@ -686,7 +719,12 @@ const selectedMissing = Array.isArray(reg.selected_missing) ? reg.selected_missi
   emit('AC-007', problems.length === 0, problems.join('; ') || 'missing_paths/files_present/files_missing/findings/evidence_layer 均符合');
 }
 
-// ---------------------------------------------------------------- AC-008 指纹绑定
+// ---------------------------------------------------------------- AC-008 指纹绑定（F-09）
+// ① 「meta 记录的指纹 != 门重算值」是**夹具自检**的问题，不计入本条的 problems
+//    （判红责任必须对位）；但要在门的输出里标注出来。
+// ② 新增**可判探针**：把夹具副本的 meta 两个指纹改成 64 个 0，让实现重跑 ——
+//    报告里的 source.* 仍必须是**重算值**（≠ 被篡改的值），且 evidence.findings 里
+//    至少有一条 kind == "fingerprint_mismatch"（不许只抄 meta 的错值）。
 {
   const problems = [];
   const recR = resultsFingerprint(resultsArr);
@@ -694,14 +732,39 @@ const selectedMissing = Array.isArray(reg.selected_missing) ? reg.selected_missi
   const mR = isObj(meta) ? meta.results_sha256 : undefined;
   const mE = isObj(meta) ? meta.evidence_manifest_sha256 : undefined;
   const src = isObj(rp) && isObj(rp.source) ? rp.source : {};
-  if (mR !== recR) problems.push('meta.results_sha256 与重算值不符');
-  if (mE !== recE) problems.push('meta.evidence_manifest_sha256 与重算值不符');
+  const fixtureNotes = [];
+  if (mR !== recR) fixtureNotes.push(`meta.results_sha256（${String(mR).slice(0, 12)}…）与重算值不符`);
+  if (mE !== recE) fixtureNotes.push(`meta.evidence_manifest_sha256（${String(mE).slice(0, 12)}…）与重算值不符`);
+  const fixtureSelfCheck = fixtureNotes.length > 0
+    ? `夹具自检：${fixtureNotes.join('；')}`
+    : '夹具自检：meta 指纹与重算值一致';
   if (src.results_sha256 !== recR) problems.push(`report.source.results_sha256=${JSON.stringify(src.results_sha256)}，重算值=${recR}`);
   if (src.evidence_manifest_sha256 !== recE) problems.push(`report.source.evidence_manifest_sha256=${JSON.stringify(src.evidence_manifest_sha256)}，重算值=${recE}`);
-  emit('AC-008', problems.length === 0, problems.join('; ') || `四个值全部相等（results=${recR.slice(0, 12)}…）`);
+  // ② 篡改 meta 指纹后的副本：报告必须**重算**，不得抄被篡改的值
+  const TAMPERED = '0'.repeat(64);
+  const fp = outFpMeta ? readJson(path.join(outFpMeta, 'report.json')) : null;
+  if (!isObj(fp)) {
+    problems.push('篡改 meta 指纹后的副本没有产出可读的 report.json —— 探针不可判定，不判通过');
+  } else {
+    const fsrc = isObj(fp.source) ? fp.source : {};
+    if (fsrc.results_sha256 === TAMPERED || fsrc.evidence_manifest_sha256 === TAMPERED) {
+      problems.push('篡改 meta 指纹后，报告里的 source 指纹仍是被篡改的值 —— 报告只抄 meta，没重算');
+    }
+    if (fsrc.results_sha256 !== recR) problems.push(`篡改副本的 source.results_sha256=${JSON.stringify(fsrc.results_sha256)}，重算值=${recR}`);
+    if (fsrc.evidence_manifest_sha256 !== recE) problems.push(`篡改副本的 source.evidence_manifest_sha256=${JSON.stringify(fsrc.evidence_manifest_sha256)}，重算值=${recE}`);
+    const ffind = isObj(fp.evidence) && Array.isArray(fp.evidence.findings) ? fp.evidence.findings : [];
+    if (!ffind.some((f) => isObj(f) && f.kind === 'fingerprint_mismatch')) {
+      problems.push('篡改 meta 指纹后，evidence.findings 里没有 kind == "fingerprint_mismatch" 的条目 —— 实现没发现指纹不符');
+    }
+  }
+  emit('AC-008', problems.length === 0, problems.join('; ')
+    || `${fixtureSelfCheck}；source 的两个指纹等于重算值；篡改 meta 指纹后仍报重算值且有 fingerprint_mismatch`);
 }
 
-// ---------------------------------------------------------------- AC-010 report_sha256 可重算
+// ---------------------------------------------------------------- AC-010 report_sha256 可重算（F-08）
+// 口径（C-F）：**schema 声明的规范化口径**是判定依据。F3.2 的**唯一**规范口径是
+//   「剔除 generated_at 与 report_sha256 → 对象键按码位升序 → 数组保序 → 无空白 → UTF-8 → sha256」。
+//   多口径并集**只作兜底**（用来点名实现实际用的口径与声明不一致），不得单独作为通过依据。
 {
   const problems = [];
   if (!isObj(rp)) problems.push('report.json 不可读');
@@ -709,28 +772,47 @@ const selectedMissing = Array.isArray(reg.selected_missing) ? reg.selected_missi
     const clone = JSON.parse(JSON.stringify(rp));
     delete clone.generated_at;
     delete clone.report_sha256;
+    const canonical = stableStringify(clone, true);
+    const canonicalHash = sha256Hex(canonical);
     const cands = new Set([
-      stableStringify(clone, true),
+      canonical,
       stableStringify(clone, false),
       JSON.stringify(clone, null, 2),
       `${JSON.stringify(clone, null, 2)}\n`,
-      `${stableStringify(clone, true)}\n`,
+      `${canonical}\n`,
     ]);
     const hashes = new Set([...cands].map((c) => sha256Hex(c)));
     const claimed = rp.report_sha256;
+    // ① schema 必须**写明**规范化口径（否则无法核）
+    const statesExclude = /(剔除|排除|去掉|去除)/.test(schemaDoc) && /generated_at/.test(schemaDoc) && /report_sha256/.test(schemaDoc);
+    const statesSort = /(码位升序|键名[^。\n]{0,16}排序|sort)/i.test(schemaDoc);
+    const statesArray = /数组[^。\n]{0,16}(保持|保序|原顺序)/.test(schemaDoc);
+    const statesNoWs = /(无空白|不含空白|不带空白)/.test(schemaDoc);
+    const statesUtf8 = /UTF-8/i.test(schemaDoc);
+    const statesHash = /(sha256|sha-256)/i.test(schemaDoc);
+    const statesSerial = /(序列化|规范化|canonical|stable)/i.test(schemaDoc);
+    const docOk = statesExclude && statesSort && statesArray && statesNoWs && statesUtf8 && statesHash && statesSerial;
+    if (!docOk) {
+      const missing = [];
+      if (!statesExclude) missing.push('剔除 generated_at 与 report_sha256');
+      if (!statesSort) missing.push('键名按码位升序');
+      if (!statesArray) missing.push('数组保序');
+      if (!statesNoWs) missing.push('无空白');
+      if (!statesUtf8) missing.push('UTF-8');
+      if (!statesHash) missing.push('sha256');
+      if (!statesSerial) missing.push('规范化序列化');
+      problems.push(`references/report-schema.md 里没有写明 report_sha256 的规范化口径（缺：${missing.join('、')}）`);
+    }
+    // ② 按**声明的口径**（F3.2 唯一规范口径）复算
     if (typeof claimed !== 'string' || !/^[0-9a-f]{64}$/i.test(claimed)) {
       problems.push(`report_sha256=${JSON.stringify(claimed)} 不是 64 位 hex`);
-    } else if (!hashes.has(claimed)) {
-      problems.push(`report_sha256=${claimed} 与「剔除 generated_at 与 report_sha256 后稳定序列化」重算出的值不符`);
+    } else if (claimed !== canonicalHash) {
+      const inUnion = hashes.has(claimed);
+      problems.push(`report_sha256=${claimed} 与 schema 声明的规范化口径（F3.2：剔除 generated_at 与 report_sha256 后键码位升序稳定序列化）重算出的 ${canonicalHash} 不符`
+        + (inUnion ? '；它落在**另一个**口径上（多口径并集只作兜底，不作为通过依据）' : ''));
     }
-    const docOk = /report_sha256/.test(schemaDoc)
-      && /generated_at/.test(schemaDoc)
-      && /(排除|剔除|去掉|去除|不含)/.test(schemaDoc)
-      && /(sha256|SHA-256|sha-256)/i.test(schemaDoc)
-      && /(序列化|规范化|canonical|stable)/i.test(schemaDoc);
-    if (!docOk) problems.push('references/report-schema.md 里没有写明 report_sha256 的规范化口径（剔除 generated_at 与本字段后的稳定序列化）');
   }
-  emit('AC-010', problems.length === 0, problems.join('; ') || '可重算且口径已写进 schema');
+  emit('AC-010', problems.length === 0, problems.join('; ') || '按 schema 声明的 F3.2 口径重算一致，且 schema 已写明该口径');
 }
 
 // ---------------------------------------------------------------- AC-011 md 摘要与正文
@@ -765,33 +847,71 @@ const selectedMissing = Array.isArray(reg.selected_missing) ? reg.selected_missi
       'verdict.case_layer', 'verdict.evidence_layer', 'verdict.regression_layer', 'verdict.overall',
       'source.results_sha256', 'source.evidence_manifest_sha256', 'report_sha256'];
     for (const k of REQUIRED) if (!seen.has(k)) problems.push(`摘要缺必需键 ${k}`);
-    // ④ 正文关键数字（对齐 demand.md F4.2 的标签词汇表）：
-    //    标签 + 数字（标签与数字之间**不得出现字母或数字** —— 拦的是 id 自带的数字；
-    //    单位 条/个/项 **可省略**）。
-    //    ⚠️ 标签与数字之间的「间隔」里**不允许**出现字母/数字（否则「漏跑：TC-006（1 条）」里的
-    //    「006」会被当成漏跑条数 —— 那是误判）。这种写法按「未呈现」处理（不判红，只是不计入呈现数）。
+    // ④ 正文关键数字（demand.md F4.2 的标签词汇表；裁定 C-C / C-D，F-02）
+    //    一次「呈现」的成立条件（三条同时成立）：
+    //      ① 别名**独立出现** —— 别名的前后都不得是中文 / 字母 / 数字；
+    //      ② 别名与紧随的数字之间只允许**分隔符**（非中文、非字母、非数字、不跨行）；
+    //      ③ 呈现的数字必须等于该指标在 report.json 里的值（与摘要一致）。
+    //    ⇒ 「已执行的待复核：1 条」里的「待复核」前面是中文「的」→ **不算**呈现（修掉假阳性）。
+    //    ⇒ 「漏跑：TC-006（1 条）」里的「006」不是漏跑条数 → 「漏跑」后面夹了字母/数字 → 不算呈现。
     const BODY = md.replace(/<!--\s*report-digest:[^\n]*?-->/g, '');
+    const CJK = '\\u3400-\\u9fff\\uf900-\\ufaff';
+    const WORDCH = `[${CJK}A-Za-z0-9]`;
+    const SEPCH = `[^${CJK}A-Za-z0-9\\r\\n]`;
     const METRICS = [
-      { key: 'cases.total', expect: counts.total, label: '(?:用例总数|共计|总计|合计)' },
-      { key: 'cases.passed', expect: counts.passed, label: '(?:通过)' },
-      { key: 'cases.failed', expect: counts.failed, label: '(?:失败)' },
-      { key: 'cases.blocked', expect: counts.blocked, label: '(?:阻塞|阻断)' },
-      { key: 'cases.skipped', expect: counts.skipped, label: '(?:跳过)' },
-      { key: 'regression.selected_missing', expect: selectedMissing.length, label: '(?:漏跑|未执行|未跑)' },
-      { key: 'regression.needs_review_planned', expect: Number(reg.needs_review_planned || 0), label: '(?:待复核|需复核|人工复核)' },
-      { key: 'regression.undecidable_changes', expect: Array.isArray(reg.undecidable_changes) ? reg.undecidable_changes.length : 0, label: '(?:判不了|无法判定|不可判定)' },
+      { key: 'cases.total', expect: counts.total, aliases: ['用例总数', '共计', '总计', '合计'] },
+      { key: 'cases.passed', expect: counts.passed, aliases: ['通过'] },
+      { key: 'cases.failed', expect: counts.failed, aliases: ['失败'] },
+      { key: 'cases.blocked', expect: counts.blocked, aliases: ['阻塞', '阻断'] },
+      { key: 'cases.skipped', expect: counts.skipped, aliases: ['跳过'] },
+      { key: 'regression.selected_missing', expect: selectedMissing.length, aliases: ['漏跑', '未执行', '未跑'] },
+      { key: 'regression.needs_review_planned', expect: Number(reg.needs_review_planned || 0), aliases: ['待复核', '需复核', '人工复核'] },
+      { key: 'regression.undecidable_changes', expect: Array.isArray(reg.undecidable_changes) ? reg.undecidable_changes.length : 0, aliases: ['判不了', '无法判定', '不可判定'] },
     ];
-    let presented = 0;
-    for (const m of METRICS) {
-      const re = new RegExp(`${m.label}[^0-9A-Za-z\\u4e00-\\u9fa5]{0,10}?(\\d+)\\s*[条个项]?`, 'g');
-      const hits = [...BODY.matchAll(re)].map((x) => Number(x[1]));
-      if (hits.length === 0) continue;
-      presented += 1;
+    // C-D：带计划场景 8 类**全必须呈现**（缺一即判红并点名缺哪类）；无计划场景只需 5 类
+    const WITH_PLAN = isObj(rp) && rp.regression !== null;
+    const REQUIRED_METRICS = WITH_PLAN ? METRICS : METRICS.slice(0, 5);
+    const missingMetrics = [];
+    for (const m of REQUIRED_METRICS) {
+      const hits = [];
+      for (const alias of m.aliases) {
+        const re = new RegExp(`(?<!${WORDCH})${alias}(?!${WORDCH})${SEPCH}{0,20}?(\\d+)`, 'g');
+        for (const x of BODY.matchAll(re)) hits.push({ alias, value: Number(x[1]) });
+      }
+      if (hits.length === 0) { missingMetrics.push(m.key); continue; }
       for (const h of hits) {
-        if (h !== m.expect) problems.push(`正文里「${m.key}」标签后的数字是 ${h}，与摘要的 ${m.expect} 不一致`);
+        if (h.value !== m.expect) problems.push(`正文里「${m.key}」的标签「${h.alias}」后的数字是 ${h.value}，与摘要的 ${m.expect} 不一致`);
       }
     }
-    if (presented < 4) problems.push(`正文只呈现了 ${presented}/8 个关键数字（F4.2 标签词汇表口径），要求至少 4 个`);
+    if (missingMetrics.length > 0) {
+      problems.push(`正文缺少必须呈现的关键数字：${missingMetrics.join('、')}（带计划场景 8 类全必须呈现，无计划场景只需 5 类）`);
+    }
+    // 近似标签拒收（F4.2 明文禁止裸「总数」；C-C 窄读）：
+    //   md 正文任一行，若出现「标签 + 数字」且该标签含「总数」、**不属于任一别名**、
+    //   且不含 {证据, 文件, 条目, 目录, 路径} → 判红「正文出现词表外标签的关键数字」。
+    const ALL_ALIASES = METRICS.flatMap((m) => m.aliases);
+    const EVIDENCE_WORDS = ['证据', '文件', '条目', '目录', '路径'];
+    const LABEL_CHAR = '[^\\s|,，、：:（）()\\[\\]{}#*`\\/\\\\=<>]';
+    const labelNumberCandidates = (line) => {
+      const out = [];
+      const cells = line.split('|').map((c) => c.trim());
+      for (let i = 0; i + 1 < cells.length; i += 1) {
+        if (!cells[i]) continue;
+        if (/^\d+$/.test(cells[i + 1])) out.push({ label: cells[i], number: Number(cells[i + 1]) });
+      }
+      const inline = new RegExp(`(${LABEL_CHAR}{1,24}?)[ \\t]*[:：]?[ \\t]*(\\d+)`, 'g');
+      for (const m of line.matchAll(inline)) out.push({ label: m[1], number: Number(m[2]) });
+      return out;
+    };
+    for (const line of BODY.split(/\r?\n/)) {
+      for (const cand of labelNumberCandidates(line)) {
+        const label = cand.label;
+        if (!label.includes('总数')) continue;
+        if (ALL_ALIASES.some((a) => label.includes(a))) continue;
+        if (EVIDENCE_WORDS.some((w) => label.includes(w))) continue;
+        problems.push(`正文出现词表外标签的关键数字：「${label} ${cand.number}」（裸「总数」不在 F4.2 词表内）`);
+      }
+    }
   }
   emit('AC-011', problems.length === 0, problems.join('; ') || '摘要键齐全、逐字相等，正文关键数字与摘要一致');
 }
@@ -806,7 +926,7 @@ const selectedMissing = Array.isArray(reg.selected_missing) ? reg.selected_missi
     if (!(vd.regression_layer === 'pass' || vd.regression_layer === 'not_applicable')) {
       problems.push(`overall=pass 但 verdict.regression_layer=${JSON.stringify(vd.regression_layer)}`);
     }
-    if (!isObj(reg) || reg.impact_complete !== true) {
+    if (rp.regression !== null && (!isObj(reg) || reg.impact_complete !== true)) {
       problems.push(`overall=pass 但 regression.impact_complete=${isObj(reg) ? JSON.stringify(reg.impact_complete) : 'null'}`);
     }
   }
@@ -820,6 +940,7 @@ const selectedMissing = Array.isArray(reg.selected_missing) ? reg.selected_missi
     problems.push('report.json 不可读');
   } else {
     if (typeof rp.schema_version !== 'number') problems.push('schema_version 缺失或不是 number');
+    else if (rp.schema_version !== 1) problems.push(`schema_version=${rp.schema_version}，F3 固定为 1`);
     if (typeof rp.generated_at !== 'string' || rp.generated_at === '') problems.push('generated_at 缺失或不是非空 string');
     const src = isObj(rp.source) ? rp.source : null;
     if (!src) problems.push('source 段缺失');
@@ -896,15 +1017,27 @@ const selectedMissing = Array.isArray(reg.selected_missing) ? reg.selected_missi
       problems.push('report_sha256 缺失或不是 64 位 hex');
     }
   }
-  const F3_TOKENS = ['schema_version', 'generated_at', 'artifacts', 'run_id', 'suite', 'requirement', 'environment',
-    'started_at', 'finished_at', 'results_sha256', 'evidence_manifest_sha256', 'regression_plan',
-    'total', 'passed', 'failed', 'blocked', 'skipped', 'duration_ms_total',
-    'case_layer', 'evidence_layer', 'regression_layer', 'overall',
-    'case_id', 'title', 'status', 'error', 'reproduction', 'evidence',
-    'files_present', 'files_missing', 'missing_paths', 'findings', 'kind', 'message',
-    'selected_planned', 'selected_executed', 'needs_review_planned', 'needs_review_executed', 'selected_missing',
-    'undecidable_changes', 'change_id', 'reason', 'impact_complete', 'report_sha256',
-    'missing_evidence', 'evidence_mismatch', 'count_mismatch', 'fingerprint_mismatch'];
+  // F-13：token 检查必须用**带路径写法**（`cases.total` / `evidence.files_present`），
+  //   不得用 `total` / `evidence` 这类裸 token（否则 `total` ⊂ `duration_ms_total`）。
+  const F3_TOKENS = [
+    'schema_version', 'generated_at',
+    'source.artifacts', 'source.run_id', 'source.suite', 'source.requirement', 'source.environment',
+    'source.started_at', 'source.finished_at', 'source.results_sha256', 'source.evidence_manifest_sha256',
+    'source.regression_plan',
+    'cases.total', 'cases.passed', 'cases.failed', 'cases.blocked', 'cases.skipped', 'cases.duration_ms_total',
+    'verdict.case_layer', 'verdict.evidence_layer', 'verdict.regression_layer', 'verdict.overall',
+    'failures[].case_id', 'failures[].title', 'failures[].status', 'failures[].error',
+    'failures[].reproduction', 'failures[].evidence',
+    'evidence.files_present', 'evidence.files_missing', 'evidence.missing_paths', 'evidence.findings',
+    'evidence.findings[].kind', 'evidence.findings[].message',
+    'regression.selected_planned', 'regression.selected_executed', 'regression.needs_review_planned',
+    'regression.needs_review_executed', 'regression.selected_missing', 'regression.undecidable_changes',
+    'regression.undecidable_changes[].change_id', 'regression.undecidable_changes[].reason',
+    'regression.impact_complete',
+    'report_sha256',
+    // 枚举字面量（不是路径，但必须是**完整的枚举值**，不得用裸子串）
+    'missing_evidence', 'evidence_mismatch', 'count_mismatch', 'fingerprint_mismatch',
+  ];
   if (schemaDoc.trim() === '') problems.push('references/report-schema.md 缺失或为空');
   else for (const t of F3_TOKENS) {
     if (!schemaDoc.includes(t)) problems.push(`references/report-schema.md 里没有列出 F3 必填字段 ${t}`);
@@ -915,7 +1048,6 @@ const selectedMissing = Array.isArray(reg.selected_missing) ? reg.selected_missi
 // ---------------------------------------------------------------- AC-014 漏跑点名
 {
   const problems = [];
-  const expectedMissing = planSelected.filter((id) => !caseIds.has(id));
   if (!isObj(rp)) problems.push('report.json 不可读');
   else {
     if (!Array.isArray(reg.selected_missing)) problems.push('regression.selected_missing 缺失');
@@ -927,27 +1059,59 @@ const selectedMissing = Array.isArray(reg.selected_missing) ? reg.selected_missi
   emit('AC-014', problems.length === 0, problems.join('; ') || `漏跑点名一致（${expectedMissing.join(',')}）`);
 }
 
-// ---------------------------------------------------------------- AC-015 漏跑导向失败
+// ---------------------------------------------------------------- AC-015 漏跑导向失败（F-14）
+// 触发条件用**重算**的 expectedMissing（与 AC-014 同口径），不看报告自述。
 {
   const problems = [];
-  if (isObj(rp) && selectedMissing.length > 0) {
-    if (vd.regression_layer !== 'fail') problems.push(`selected_missing 非空但 verdict.regression_layer=${JSON.stringify(vd.regression_layer)}，应为 fail`);
-    if (vd.overall === 'pass') problems.push('selected_missing 非空但 verdict.overall=pass');
+  if (isObj(rp) && expectedMissing.length > 0) {
+    if (vd.regression_layer !== 'fail') problems.push(`重算漏跑非空（[${expectedMissing.join(',')}]）但 verdict.regression_layer=${JSON.stringify(vd.regression_layer)}，应为 fail`);
+    if (vd.overall === 'pass') problems.push('重算漏跑非空但 verdict.overall=pass');
   }
-  emit('AC-015', problems.length === 0, problems.join('; ') || `selected_missing 非空 ⇒ regression_layer=${JSON.stringify(vd.regression_layer)}、overall=${JSON.stringify(vd.overall)}`);
+  emit('AC-015', problems.length === 0, problems.join('; ') || `重算漏跑=[${expectedMissing.join(',')}] ⇒ regression_layer=${JSON.stringify(vd.regression_layer)}、overall=${JSON.stringify(vd.overall)}`);
 }
 
-// ---------------------------------------------------------------- AC-016 needs_review
+// ---------------------------------------------------------------- AC-016 needs_review（F-03）
+// 判定口径（C-E）：**必须在待复核语境里点名** —— 同一段落或紧邻 2 行内
+//   同时出现「待复核 / 需复核 / 人工复核」与该 id（对计划里 needs_review 的每一个 id）。
 {
   const problems = [];
+  const REVIEW_WORD = /(待复核|需复核|人工复核)/;
+  const hasReviewContext = (id) => {
+    const lines = md.split(/\r?\n/);
+    const hitLines = [];
+    lines.forEach((line, i) => { if (line.includes(id)) hitLines.push(i); });
+    if (hitLines.length === 0) return false;
+    const paraRange = (i) => {
+      let s = i; while (s > 0 && lines[s - 1].trim() !== '') s -= 1;
+      let e = i; while (e < lines.length - 1 && lines[e + 1].trim() !== '') e += 1;
+      return [s, e];
+    };
+    for (const i of hitLines) {
+      for (let j = Math.max(0, i - 2); j <= Math.min(lines.length - 1, i + 2); j += 1) {
+        if (REVIEW_WORD.test(lines[j])) return true;
+      }
+      const [ps, pe] = paraRange(i);
+      for (let j = ps; j <= pe; j += 1) {
+        if (REVIEW_WORD.test(lines[j])) return true;
+      }
+    }
+    return false;
+  };
   if (!isObj(rp)) problems.push('report.json 不可读');
   else {
-    if (reg.needs_review_planned !== 1) problems.push(`regression.needs_review_planned=${JSON.stringify(reg.needs_review_planned)}，应为 1`);
-    if (reg.needs_review_executed !== 1) problems.push(`regression.needs_review_executed=${JSON.stringify(reg.needs_review_executed)}，应为 1`);
+    // 计数按**计划与执行产物重算**（不写死夹具的 1/1 —— 计划里 needs_review 有几条就算几条）
+    const expectReviewPlanned = planReview.length;
+    const expectReviewExecuted = planReview.filter((id) => caseIds.has(id)).length;
+    if (reg.needs_review_planned !== expectReviewPlanned) problems.push(`regression.needs_review_planned=${JSON.stringify(reg.needs_review_planned)}，按计划重算应为 ${expectReviewPlanned}`);
+    if (reg.needs_review_executed !== expectReviewExecuted) problems.push(`regression.needs_review_executed=${JSON.stringify(reg.needs_review_executed)}，按计划与执行产物重算应为 ${expectReviewExecuted}`);
     if (vd.regression_layer === 'pass') problems.push('needs_review 非空但 verdict.regression_layer=pass');
-    if (!md.includes('TC-003')) problems.push('report.md 里没有点名待复核用例 TC-003');
+    for (const id of planReview) {
+      if (!hasReviewContext(id)) {
+        problems.push(`report.md 里没有在待复核语境点名 ${id}（同一段落或紧邻 2 行内必须同时出现「待复核/需复核/人工复核」与 ${id}）`);
+      }
+    }
   }
-  emit('AC-016', problems.length === 0, problems.join('; ') || '待复核计数与点名均正确');
+  emit('AC-016', problems.length === 0, problems.join('; ') || '待复核计数与「待复核语境点名」均正确');
 }
 
 // ---------------------------------------------------------------- AC-017 判不了的变更
@@ -979,17 +1143,27 @@ const selectedMissing = Array.isArray(reg.selected_missing) ? reg.selected_missi
     const v = isObj(rnp.verdict) ? rnp.verdict : {};
     if (v.regression_layer !== 'not_applicable') problems.push(`verdict.regression_layer=${JSON.stringify(v.regression_layer)}，应为 not_applicable`);
   }
+  // 措辞扫描（F-07）：窗口从「同行 + 14 字」改为**跨行**（对全文做一次跨行匹配，
+  //   窗口 ≥ 30 字）；层名同义词表扩到 {回归, 对账, 选样}；
+  //   **允许表述白名单** {不适用, 未提供计划, 未提供, not_applicable, n/a} 出现在窗口里
+  //   → 不算肯定式断言（只禁肯定式断言）。
   const BODY = mdn.replace(/<!--\s*report-digest:[^\n]*?-->/g, '');
-  for (const line of BODY.split(/\r?\n/)) {
-    let idx = line.indexOf('回归');
+  const LAYER_WORDS = ['回归', '对账', '选样'];
+  const ALLOW_PHRASES = ['不适用', '未提供计划', '未提供', 'not_applicable', 'n/a'];
+  const WINDOW = 30;
+  for (const word of LAYER_WORDS) {
+    let idx = BODY.indexOf(word);
     while (idx >= 0) {
-      const window = line.slice(idx, idx + 14);
-      if (/\b(pass|fail|incomplete|unknown)\b/.test(window)) {
-        problems.push(`report.md 正文出现 regression_layer 的其它取值：「${window.trim()}」`);
-      } else if (/(通过|完整|覆盖)/.test(window)) {
-        problems.push(`report.md 正文出现断言回归状态的措辞：「${window.trim()}」`);
+      const window = BODY.slice(idx, idx + WINDOW);
+      const shown = window.replace(/\s+/g, ' ').trim();
+      if (!ALLOW_PHRASES.some((a) => window.includes(a))) {
+        if (/\b(pass|fail|incomplete|unknown)\b/.test(window)) {
+          problems.push(`report.md 正文出现 regression_layer 的其它取值：「${shown}」`);
+        } else if (/(通过|完整|覆盖)/.test(window)) {
+          problems.push(`report.md 正文出现断言回归状态的措辞：「${shown}」`);
+        }
       }
-      idx = line.indexOf('回归', idx + 2);
+      idx = BODY.indexOf(word, idx + word.length);
     }
   }
   emit('AC-018', problems.length === 0, problems.join('; ') || 'regression=null、regression_layer=not_applicable、正文无回归状态断言');
@@ -1017,13 +1191,14 @@ const selectedMissing = Array.isArray(reg.selected_missing) ? reg.selected_missi
   else {
     if (tv.evidence_layer !== 'fail') problems.push(`verdict.evidence_layer=${JSON.stringify(tv.evidence_layer)}，应为 fail`);
     if (tv.overall === 'pass') problems.push('verdict.overall=pass');
+    // F-17（C-H）：「点名被篡改的证据路径 **或** 点名『指纹不符』」**收紧**为
+    //   必须点名被篡改的证据路径（含 TC-002 与该文件名），与 D69 一致。
     const hit = tf.find((f) => isObj(f) && (f.kind === 'evidence_mismatch' || f.kind === 'fingerprint_mismatch')
       && typeof f.message === 'string' && f.message.trim() !== ''
-      && (f.message.includes('TC-002') || f.message.includes('step-1-response.json') || /指纹/.test(f.message)));
-    if (!hit) problems.push('evidence.findings 里没有 kind ∈ {evidence_mismatch, fingerprint_mismatch} 且 message 点名被篡改证据路径（或点名「指纹不符」）的条目');
+      && f.message.includes('TC-002') && f.message.includes('step-1-response.json'));
+    if (!hit) problems.push('evidence.findings 里没有 kind ∈ {evidence_mismatch, fingerprint_mismatch} 且 message **点名被篡改的证据路径**（含 TC-002 与 step-1-response.json）的条目');
     else {
-      const frag = hit.message.includes('step-1-response.json') ? 'step-1-response.json'
-        : (hit.message.includes('TC-002') ? 'TC-002' : String(hit.kind));
+      const frag = 'step-1-response.json';
       if (!mdt.includes(frag)) problems.push(`report.md 里没有出现该条 message 的关键片段「${frag}」`);
     }
   }
@@ -1035,9 +1210,12 @@ const selectedMissing = Array.isArray(reg.selected_missing) ? reg.selected_missi
   const problems = [];
   if (!isObj(rp)) problems.push('report.json 不可读');
   else {
+    // F-16：数字必须按**词边界**匹配（`(?<![0-9])6(?![0-9])`）——
+    //   否则「16」「56」里的 6 会被当成 meta 记的值。
+    const hasNum = (text, n) => new RegExp(`(?<![0-9])${n}(?![0-9])`).test(String(text));
     const hit = findings.find((f) => isObj(f) && f.kind === 'count_mismatch'
       && typeof f.message === 'string' && f.message.trim() !== ''
-      && /6/.test(f.message) && /5/.test(f.message)
+      && hasNum(f.message, 6) && hasNum(f.message, 5)
       && (f.message.includes('cases_total') || f.message.includes('总数')));
     if (!hit) problems.push('evidence.findings 里没有一条 kind=count_mismatch、message 同时含 6 与 5 且点名 cases_total（或「总数」）的条目');
     else {
@@ -1146,10 +1324,11 @@ const selectedMissing = Array.isArray(reg.selected_missing) ? reg.selected_missi
     if (reg.selected_planned !== reg.selected_executed + selectedMissing.length) {
       problems.push(`selected_planned=${JSON.stringify(reg.selected_planned)} ≠ selected_executed=${JSON.stringify(reg.selected_executed)} + selected_missing.length=${selectedMissing.length}`);
     }
-    // ⑤ 顶层野生数字
+    // ⑤ 顶层野生数字（F-18：schema_version 的**值**也必须查 —— F3 固定为 1）
     for (const [k, v] of Object.entries(rp)) {
       if (typeof v === 'number' && k !== 'schema_version') problems.push(`report.json 顶层出现野生数字字段 ${k}=${v}`);
     }
+    if (rp.schema_version !== 1) problems.push(`report.json 顶层 schema_version=${JSON.stringify(rp.schema_version)}，F3 固定为 1`);
   }
   emit('AC-023', problems.length === 0, problems.join('; ') || 'id 溯源、逐字段重算、顶层枚举全部通过');
 }
@@ -1193,7 +1372,8 @@ run_make() { # $1 = artifacts dir, $2 = out dir, $3 = plan file（空 = 不给�
 OUT_PLAN="$WORK/out-plan"
 OUT_NOPLAN="$WORK/out-noplan"
 OUT_TAMPER="$WORK/out-tamper"
-mkdir -p "$OUT_PLAN" "$OUT_NOPLAN" "$OUT_TAMPER"
+OUT_FPMETA="$WORK/out-fpmeta"
+mkdir -p "$OUT_PLAN" "$OUT_NOPLAN" "$OUT_TAMPER" "$OUT_FPMETA"
 
 ART_TAMPER="$WORK/art-tamper"
 cp -r "$ART" "$ART_TAMPER"
@@ -1201,23 +1381,50 @@ cp -r "$ART" "$ART_TAMPER"
 printf '{\n  "status": 500,\n  "case": "TC-002",\n  "tampered": true\n}\n' \
   > "$ART_TAMPER/evidence/TC-002/step-1-response.json"
 
+# F-09：篡改 meta 的两个指纹（改成 64 个 0）后的副本 —— 报告必须**重算**，不得抄被篡改的值
+ART_FPMETA="$WORK/art-fpmeta"
+cp -r "$ART" "$ART_FPMETA"
+node -e '
+const fs=require("fs");const f=process.argv[1];const o=JSON.parse(fs.readFileSync(f,"utf8"));
+o.results_sha256="0".repeat(64);o.evidence_manifest_sha256="0".repeat(64);
+fs.writeFileSync(f,JSON.stringify(o,null,2)+"\n");
+' "$ART_FPMETA/meta.json" 2>/dev/null
+
 RC_PLAN=0;   run_make "$ART"       "$OUT_PLAN"   "$PLAN" || RC_PLAN=$?
 RC_NOPLAN=0; run_make "$ART"       "$OUT_NOPLAN" ""      || RC_NOPLAN=$?
 RC_TAMPER=0; run_make "$ART_TAMPER" "$OUT_TAMPER" "$PLAN" || RC_TAMPER=$?
-printf 'make-report 退出码: 带计划=%s 不带计划=%s 被篡改=%s\n' "$RC_PLAN" "$RC_NOPLAN" "$RC_TAMPER"
+RC_FPMETA=0; run_make "$ART_FPMETA" "$OUT_FPMETA" "$PLAN" || RC_FPMETA=$?
+printf 'make-report 退出码: 带计划=%s 不带计划=%s 被篡改=%s meta指纹被篡改=%s\n' \
+  "$RC_PLAN" "$RC_NOPLAN" "$RC_TAMPER" "$RC_FPMETA"
 
 # ---------------------------------------------------------------- 报告侧判据（B/C/D/E 组，交给独立复算器）
 
 step "报告侧判据（AC-005 ~ AC-023）"
 JUDGE_OUT="$WORK/judge.out"
-if [ "$RC_PLAN" -ne 0 ] || [ "$RC_NOPLAN" -ne 0 ] || [ "$RC_TAMPER" -ne 0 ]; then
-  printf '被验实现跑报告失败（rc=%s/%s/%s）—— 报告侧判据不可判定\n' "$RC_PLAN" "$RC_NOPLAN" "$RC_TAMPER"
+# F-19：区分两种非 0 退出 ——
+#   ① 输入非法 / 用法错（rc=2）→ 报告侧判据记「不可判定」（现状保留）；
+#   ② **报告已产出**但结论为 fail / exit 非 0 → 仍应继续判报告侧判据（不得整体降级）。
+REPORT_SIDE_UNDEC=""
+for pair in "带计划:$RC_PLAN:$OUT_PLAN" "不带计划:$RC_NOPLAN:$OUT_NOPLAN" \
+            "被篡改:$RC_TAMPER:$OUT_TAMPER" "meta指纹被篡改:$RC_FPMETA:$OUT_FPMETA"; do
+  p_desc="${pair%%:*}"; p_rest="${pair#*:}"; p_rc="${p_rest%%:*}"; p_out="${p_rest#*:}"
+  if [ "$p_rc" -eq 2 ]; then
+    REPORT_SIDE_UNDEC="用法错（rc=2）"
+    break
+  fi
+  if [ "$p_rc" -ne 0 ] && [ ! -s "$p_out/report.json" ]; then
+    REPORT_SIDE_UNDEC="报告未产出（rc=$p_rc）"
+    break
+  fi
+done
+if [ -n "$REPORT_SIDE_UNDEC" ]; then
+  printf '被验实现跑报告失败（%s）—— 报告侧判据不可判定\n' "$REPORT_SIDE_UNDEC"
   for id in AC-005 AC-006 AC-007 AC-008 AC-010 AC-011 AC-012 AC-013 AC-014 AC-015 \
             AC-016 AC-017 AC-018 AC-019 AC-020 AC-021 AC-022 AC-023; do
-    undec "$id 报告未产出（make-report 退出码非 0）" "$id"
+    undec "$id 报告未产出（make-report 退出码非 0 且无 report.json）" "$id"
   done
 else
-  node "$WORK/judge.mjs" "$ART" "$PLAN" "$OUT_PLAN" "$OUT_NOPLAN" "$OUT_TAMPER" "$PKG" \
+  node "$WORK/judge.mjs" "$ART" "$PLAN" "$OUT_PLAN" "$OUT_NOPLAN" "$OUT_TAMPER" "$PKG" "$OUT_FPMETA" \
     > "$JUDGE_OUT" 2>"$WORK/judge.err"
   while IFS=$'\t' read -r jid jres jmsg; do
     [ -n "$jid" ] || continue
@@ -1226,6 +1433,10 @@ else
     else
       bad "$jid 报告侧判据" "$jid"
       printf '  · %s\n' "$jmsg" >> "$RES_DIR/$jid.res"
+    fi
+    # F-09：夹具自检的结论必须在门的输出里**标注**出来（不计入 problems，但要说清）
+    if [ "$jid" = "AC-008" ] && [ -n "$jmsg" ]; then
+      printf '  · %s\n' "$jmsg"
     fi
   done < "$JUDGE_OUT"
   if [ -s "$WORK/judge.err" ]; then
@@ -1254,12 +1465,18 @@ else
     DESC_EMPTY="$(node -e 'try{const o=JSON.parse(process.argv[1]);console.log(o.found&&!o.empty?"0":"1")}catch(e){console.log("1")}' "$FM_DESC")"
     [ "$DESC_EMPTY" = "0" ] && DESC_OK=1
   fi
-  CHK_OK=0
+  # F-10（C-B）：**逐脚本**判定 —— 两个脚本各自：首行匹配 `^#!.*node`、文件可执行、
+  #   `node --check` 通过；失败时点名是哪个脚本（不再跨脚本累加）。
+  A1_SCRIPT_PROBLEMS=""
   for f in "scripts/make-report.mjs" "scripts/check-report.mjs"; do
-    if [ -s "$TR/$f" ] && node --check "$TR/$f" >/dev/null 2>&1; then
-      head -1 "$TR/$f" 2>/dev/null | grep -q '^#!.*node' && CHK_OK=$((CHK_OK+1))
-      [ -x "$TR/$f" ] && CHK_OK=$((CHK_OK+1))
+    p="$TR/$f"
+    if [ ! -s "$p" ]; then
+      A1_SCRIPT_PROBLEMS="$A1_SCRIPT_PROBLEMS [$f 缺失或为空]"
+      continue
     fi
+    head -1 "$p" 2>/dev/null | grep -q '^#!.*node' || A1_SCRIPT_PROBLEMS="$A1_SCRIPT_PROBLEMS [$f 首行不是 '#!…node' 的 shebang]"
+    [ -x "$p" ] || A1_SCRIPT_PROBLEMS="$A1_SCRIPT_PROBLEMS [$f 不可执行]"
+    node --check "$p" >/dev/null 2>&1 || A1_SCRIPT_PROBLEMS="$A1_SCRIPT_PROBLEMS [$f 的 node --check 不通过]"
   done
   if [ -n "$A1_PROBLEMS" ]; then
     :
@@ -1267,8 +1484,8 @@ else
     A1_PROBLEMS="SKILL.md frontmatter 的 name 不是 test-report"
   elif [ "$DESC_OK" -ne 1 ]; then
     A1_PROBLEMS="SKILL.md frontmatter 的 description 为空值"
-  elif [ "$CHK_OK" -lt 2 ]; then
-    A1_PROBLEMS="两个脚本的首行不是 '#!' 且不可执行，或 node --check 不通过"
+  elif [ -n "$A1_SCRIPT_PROBLEMS" ]; then
+    A1_PROBLEMS="两个脚本未逐个满足（首行 shebang / 可执行 / node --check）: $A1_SCRIPT_PROBLEMS"
   fi
 fi
 if [ -z "$A1_PROBLEMS" ]; then ok "$A1" "$A1"; else bad "$A1" "$A1"; printf '  · %s\n' "$A1_PROBLEMS" >> "$RES_DIR/$A1.res"; fi
@@ -1287,6 +1504,8 @@ for d in $SKILL_DIRS; do
   NAME="$(basename "$d")"
   META="$d/skill-meta.json"
   if [ ! -s "$META" ]; then A2_PROBLEMS="$A2_PROBLEMS [$NAME 缺 skill-meta.json]"; continue; fi
+  # F-12：frontmatter 取**值**（剥首尾引号 / 支持块标量）—— 复用门自带的 frontmatter.mjs
+  FM_SKILL_JSON="$(node "$WORK/frontmatter.mjs" "$d/SKILL.md" name 2>/dev/null)"
   RES="$(node -e '
 const fs=require("fs");
 let o=null; try{o=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));}catch(e){console.log("PARSE_ERR");process.exit(0);}
@@ -1297,12 +1516,19 @@ if(o.name!==dir)problems.push("name="+o.name);
 if(typeof o.version!=="string"||!/^[0-9]+\.[0-9]+\.[0-9]+$/.test(o.version))problems.push("version="+o.version);
 if(!o.requires||typeof o.requires!=="object"||Array.isArray(o.requires))problems.push("requires 非法");
 else for(const [k,v] of Object.entries(o.requires)) if(typeof v!=="string"||!/^(>=)?[0-9]+\.[0-9]+\.[0-9]+$/.test(v)) problems.push("requires."+k+"="+v);
-let fm=""; try{fm=fs.readFileSync(process.argv[3]+"/SKILL.md","utf8").slice(0,2000);}catch(e){}
-const m=fm.match(/^---\s*$[\s\S]*?^name:\s*(\S+)\s*$/m);
-const skillName=m?m[1]:null;
+// F-12：frontmatter 的 name 取**值**（剥首尾引号 / 支持块标量）——
+//   复用门自带的 frontmatter.mjs（与 AC-001 同一套取值口径），不再用裸正则抓第一个 token。
+let fmObj={found:false,value:""};
+try{fmObj=JSON.parse(process.argv[4]||"{}");}catch(e){}
+let skillName=(fmObj&&fmObj.found)?String(fmObj.value||""):null;
+if(skillName===null){
+  let fm=""; try{fm=fs.readFileSync(process.argv[3]+"/SKILL.md","utf8").slice(0,2000);}catch(e){}
+  const m=fm.match(/^---\s*$[\s\S]*?^name:\s*(\S+)\s*$/m);
+  skillName=m?m[1]:null;
+}
 if(skillName!==o.name)problems.push("SKILL.md name="+skillName+" vs meta.name="+o.name);
 console.log(JSON.stringify({problems,requires:o.requires||{}}));
-' "$META" "$NAME" "$d" 2>/dev/null)"
+' "$META" "$NAME" "$d" "$FM_SKILL_JSON" 2>/dev/null)"
   P="$(node -e 'try{const o=JSON.parse(process.argv[1]);console.log((o.problems||[]).join(";"))}catch(e){console.log("PARSE_ERR")}' "$RES" 2>/dev/null)"
   REQ="$(node -e 'try{const o=JSON.parse(process.argv[1]);console.log(Object.keys(o.requires||{}).join(","))}catch(e){console.log("")}' "$RES" 2>/dev/null)"
   [ -n "$P" ] && A2_PROBLEMS="$A2_PROBLEMS [$NAME $P]"
@@ -1436,24 +1662,31 @@ BAD_ART2="$WORK/art-bad2"
 cp -r "$ART" "$BAD_ART2"
 printf '{"not":"an array"}\n' > "$BAD_ART2/results.json"
 
-check_bad_input() { # $1 = 描述, $2 = artifacts, $3 = out dir
-  local desc="$1" art="$2" out="$3"
+check_bad_input() { # $1 = 描述, $2 = artifacts, $3 = out dir, $4 = stderr 必须点名的坏点
+  local desc="$1" art="$2" out="$3" kw="$4"
   mkdir -p "$out"
-  node "$MAKE" --artifacts "$art" --out-dir "$out" >"$WORK/bad.log" 2>&1
+  node "$MAKE" --artifacts "$art" --out-dir "$out" >"$WORK/bad.out" 2>"$WORK/bad.err"
   local rc=$?
-  local msg; msg="$(head -3 "$WORK/bad.log" | tr '\n' ' ')"
-  [ "$rc" -ne 0 ] || A9_PROBLEMS="$A9_PROBLEMS [$desc: 退出码=0，期望非 0]"
-  if [ -s "$out/report.json" ] || [ -s "$out/report.md" ]; then
-    A9_PROBLEMS="$A9_PROBLEMS [$desc: 留下了半份报告]"
+  local msg; msg="$(head -3 "$WORK/bad.err" | tr '\n' ' ')"
+  # F-11：三种情形各要求 rc == 1（**输入非法**；用法错 = 2 另行判定）
+  [ "$rc" -eq 1 ] || A9_PROBLEMS="$A9_PROBLEMS [$desc: 退出码=$rc，要求 1（输入非法）]"
+  # F-11：错误信息必须**点名是什么坏了**
+  grep -q -- "$kw" "$WORK/bad.err" || A9_PROBLEMS="$A9_PROBLEMS [$desc: stderr 里没有点名「$kw」]"
+  # F-01（C-A）：**存在性**判定 —— 0 字节的 report.json 也算「留下了半份报告」
+  if [ -e "$out/report.json" ]; then
+    A9_PROBLEMS="$A9_PROBLEMS [$desc: 留下了 report.json（半份报告，$(wc -c <"$out/report.json" 2>/dev/null | tr -d ' ') 字节）]"
   fi
-  printf '  · %s → rc=%s %s\n' "$desc" "$rc" "$msg"
+  if [ -e "$out/report.md" ]; then
+    A9_PROBLEMS="$A9_PROBLEMS [$desc: 留下了 report.md（半份报告）]"
+  fi
+  printf '  · %s → rc=%s stderr=%s\n' "$desc" "$rc" "$msg"
 }
 if [ ! -f "$MAKE" ]; then
   A9_PROBLEMS="缺 scripts/make-report.mjs"
 else
-  check_bad_input "产物目录不存在" "$WORK/no-such-dir" "$WORK/out-bad1"
-  check_bad_input "meta.json 非法 JSON" "$BAD_ART" "$WORK/out-bad2"
-  check_bad_input "results.json 根节点非数组" "$BAD_ART2" "$WORK/out-bad3"
+  check_bad_input "产物目录不存在" "$WORK/no-such-dir" "$WORK/out-bad1" "产物目录"
+  check_bad_input "meta.json 非法 JSON" "$BAD_ART" "$WORK/out-bad2" "meta.json"
+  check_bad_input "results.json 根节点非数组" "$BAD_ART2" "$WORK/out-bad3" "results.json"
 fi
 if [ -z "$A9_PROBLEMS" ]; then ok "$A9" "$A9"; else bad "$A9" "$A9"; printf '  · %s\n' "$A9_PROBLEMS" >> "$RES_DIR/$A9.res"; fi
 
@@ -1514,50 +1747,30 @@ A25="AC-025"
 A25_PROBLEMS=""
 ART_DEF="$WORK/art-default"
 cp -r "$ART" "$ART_DEF"
-BEFORE_DEF="$(node "$WORK/fingerprint.mjs" 2>/dev/null; node -e '
-const fs=require("fs");const path=require("path");const crypto=require("crypto");
-const root=process.argv[1];const out=[];
-const walk=(d)=>{for(const e of fs.readdirSync(d,{withFileTypes:true})){const f=path.join(d,e.name);
- if(e.isDirectory()){ if(e.name==="report") continue; walk(f);} else out.push(path.relative(root,f)+" "+crypto.createHash("sha256").update(fs.readFileSync(f)).digest("hex"));}};
-walk(root);out.sort();process.stdout.write(out.join("\n"));
-' "$ART_DEF")"
+# F-05（C-J）：快照**不排除任何目录**；「report/」的排除只作用于「默认输出位置」那一支的判读
+#   （认定默认输出位置时，仍按「产物目录**根下**那一个 report/」排除）。
+BEFORE_DEF="$(node "$WORK/snapdir.mjs" "$ART_DEF" 2>/dev/null)"
 run_make "$ART_DEF" "" "$PLAN" 2>/dev/null
 node "$MAKE" --artifacts "$ART_DEF" --regression-plan "$PLAN" >"$WORK/def.log" 2>&1
 DEF_RC=$?
 if [ ! -s "$ART_DEF/report/report.json" ] || [ ! -s "$ART_DEF/report/report.md" ]; then
   A25_PROBLEMS="$A25_PROBLEMS [默认输出目录下没有 report/report.json 与 report/report.md（rc=$DEF_RC）]"
 fi
-AFTER_DEF="$(node -e '
-const fs=require("fs");const path=require("path");const crypto=require("crypto");
-const root=process.argv[1];const out=[];
-const walk=(d)=>{for(const e of fs.readdirSync(d,{withFileTypes:true})){const f=path.join(d,e.name);
- if(e.isDirectory()){ if(e.name==="report") continue; walk(f);} else out.push(path.relative(root,f)+" "+crypto.createHash("sha256").update(fs.readFileSync(f)).digest("hex"));}};
-walk(root);out.sort();process.stdout.write(out.join("\n"));
-' "$ART_DEF")"
-[ "$BEFORE_DEF" = "$AFTER_DEF" ] || A25_PROBLEMS="$A25_PROBLEMS [输入产物目录里除 report/ 外有文件被改动]"
+AFTER_DEF="$(node "$WORK/snapdir.mjs" "$ART_DEF" "report/" 2>/dev/null)"
+#   排除只作用于「产物目录**根下**那一个 report/」；嵌套的 report/ 目录不在排除范围内
+#   （前缀匹配 ⇒ 「logs/report/x」不会被排除）⇒ 散落文件照样会被抓到。
+[ "$BEFORE_DEF" = "$AFTER_DEF" ] || A25_PROBLEMS="$A25_PROBLEMS [输入产物目录里除根下 report/ 外有文件被改动（快照不排除任何目录）]"
 
 ART_OUT="$WORK/art-outside"
 cp -r "$ART" "$ART_OUT"
-BEFORE_OUT="$(node -e '
-const fs=require("fs");const path=require("path");const crypto=require("crypto");
-const root=process.argv[1];const out=[];
-const walk=(d)=>{for(const e of fs.readdirSync(d,{withFileTypes:true})){const f=path.join(d,e.name);
- if(e.isDirectory()){ if(e.name==="report") continue; walk(f);} else out.push(path.relative(root,f)+" "+crypto.createHash("sha256").update(fs.readFileSync(f)).digest("hex"));}};
-walk(root);out.sort();process.stdout.write(out.join("\n"));
-' "$ART_OUT")"
+BEFORE_OUT="$(node "$WORK/snapdir.mjs" "$ART_OUT" 2>/dev/null)"
 OUT_EXTRA="$WORK/out-extra"
 mkdir -p "$OUT_EXTRA"
 run_make "$ART_OUT" "$OUT_EXTRA" "$PLAN"
 if [ ! -s "$OUT_EXTRA/report.json" ] || [ ! -s "$OUT_EXTRA/report.md" ]; then
   A25_PROBLEMS="$A25_PROBLEMS [--out-dir 指定的目录里没有报告]"
 fi
-AFTER_OUT="$(node -e '
-const fs=require("fs");const path=require("path");const crypto=require("crypto");
-const root=process.argv[1];const out=[];
-const walk=(d)=>{for(const e of fs.readdirSync(d,{withFileTypes:true})){const f=path.join(d,e.name);
- if(e.isDirectory()){ if(e.name==="report") continue; walk(f);} else out.push(path.relative(root,f)+" "+crypto.createHash("sha256").update(fs.readFileSync(f)).digest("hex"));}};
-walk(root);out.sort();process.stdout.write(out.join("\n"));
-' "$ART_OUT")"
+AFTER_OUT="$(node "$WORK/snapdir.mjs" "$ART_OUT" 2>/dev/null)"
 [ "$BEFORE_OUT" = "$AFTER_OUT" ] || A25_PROBLEMS="$A25_PROBLEMS [输出目录在产物目录之外时，输入产物目录没有逐字未变]"
 if [ -z "$A25_PROBLEMS" ]; then ok "$A25" "$A25"; else bad "$A25" "$A25"; printf '  · %s\n' "$A25_PROBLEMS" >> "$RES_DIR/$A25.res"; fi
 
@@ -1609,7 +1822,7 @@ if [ -s "$TR_META/manifest.json" ]; then
   [ "$MY_REQ" = "REQ-010" ] || A28_PROBLEMS="$A28_PROBLEMS [feature-meta/test-report/manifest.json 的 req=$MY_REQ，要求 REQ-010]"
 fi
 # 根目录四件套与 feature-meta/regression-plan/ 子目录必须**未被改写**
-#   （判据写的是「逐字未变」；本门按**内容标识**核验：req 编号 / 判据条数 / 追溯矩阵编号集合）
+#   （判据写的是「逐字未变」；F-04：改成**逐字节 sha256 比对**，基线常量钉进门里）
 ROOT_MANIFEST="$FEATURE_META/manifest.json"
 if [ ! -s "$ROOT_MANIFEST" ]; then
   A28_PROBLEMS="$A28_PROBLEMS [缺 feature-meta/manifest.json]"
@@ -1617,6 +1830,28 @@ else
   ROOT_REQ="$(node -e 'try{console.log(String(require(process.argv[1]).req||""))}catch(e){console.log("__ERR__")}' "$ROOT_MANIFEST" 2>/dev/null)"
   [ "$ROOT_REQ" = "REQ-006" ] || A28_PROBLEMS="$A28_PROBLEMS [feature-meta/manifest.json 的 req=$ROOT_REQ（REQ-006 的既有追溯件不得被改写）]"
 fi
+# F-04：既有追溯件的**逐字节**基线（8 个文件）—— 任一缺失/内容变 → 判红并点名是哪个文件
+while read -r rel want; do
+  [ -n "$rel" ] || continue
+  f="$PKG/$rel"
+  if [ ! -f "$f" ]; then
+    A28_PROBLEMS="$A28_PROBLEMS [缺 $rel —— REQ-006 / REQ-011 的既有追溯件不得被改写或删除]"
+    continue
+  fi
+  got="$(sha256sum "$f" 2>/dev/null | cut -d' ' -f1)"
+  if [ "$got" != "$want" ]; then
+    A28_PROBLEMS="$A28_PROBLEMS [$rel 已被改写（sha256=$got，要求 $want）]"
+  fi
+done <<'QA010_ROOTMETA'
+feature-meta/manifest.json beea88f9be47330faf84798ac870303d449e5899c2ebe7d53f0a778a3a858441
+feature-meta/status.md 5a070a7f4affb70ce73d1756c89413baea80e9e68b8496f33ff071aa151d6797
+feature-meta/traceability.md 9ed77891c5beb70d4448eed4f487bdefec2fe34176437cfdb4a3e133c7f997e6
+feature-meta/verification-report.md 7f329694be1a6ec2a18c066110358fc58f1da630c77de1c073b93a1223e2b4cf
+feature-meta/regression-plan/manifest.json 742711bf8427645aae40083bad39b89ab4178bf768a9428f6aa056a3b381d338
+feature-meta/regression-plan/status.md c289bc65eb4b1d8f52098c497bea5395cb3b7b4a47b7b3c335572df7bc1f9cfb
+feature-meta/regression-plan/traceability.md 494ce2ad569d42678953942e1242985726dcdfa6ac0281e67f0f86e2c4b8fd9d
+feature-meta/regression-plan/verification-report.md ff9f7953203c1d1d43c40a0d081b76ea0d90347478be2477484ee32f53365c6a
+QA010_ROOTMETA
 RP_META="$FEATURE_META/regression-plan"
 for f in status.md traceability.md verification-report.md manifest.json; do
   [ -s "$RP_META/$f" ] || A28_PROBLEMS="$A28_PROBLEMS [缺 feature-meta/regression-plan/$f —— REQ-011 的既有追溯件不得被改写]"
@@ -1638,13 +1873,21 @@ if [ -s "$TR_META/traceability.md" ]; then
   [ "$MATRIX_ROWS" -eq "$EXPECT_ROWS" ] || A28_PROBLEMS="$A28_PROBLEMS [追溯矩阵行数=$MATRIX_ROWS，要求 $EXPECT_ROWS 行（== acceptance.md 的实际判据条数）]"
   [ "$MATRIX_IDS" = "$EXPECT_IDS" ] || A28_PROBLEMS="$A28_PROBLEMS [追溯矩阵的 AC 编号集合=[$MATRIX_IDS]，要求恰好 [$EXPECT_IDS]]"
 fi
-# 三份 md 各恰一处「N 条判据」，且 N == 实际条数
+# F-20（C-G）：三份 md 的判据条数与决策号范围必须是**取值唯一** ——
+#   判据条数的**取值集合** == {实际条数}；决策号范围的**取值集合** == {D48~D70}；
+#   同一取值被重复引用**不算**多处记载；出现**第二个不同取值**才判红（并点名）。
+#   ⚠️ 实现侧的追溯范围固定为 D48~D70；验收期追加的门侧裁定（如 D71）不在实现侧追溯范围内。
+EXPECT_DEC_MIN=48
+EXPECT_DEC_MAX=70
+EXPECT_DEC_SET="$(seq "$EXPECT_DEC_MIN" "$EXPECT_DEC_MAX" | sed 's/^/D/' | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
 for f in status.md traceability.md verification-report.md; do
   if [ ! -s "$TR_META/$f" ]; then continue; fi
-  OCC="$(grep -oE '[0-9]+[[:space:]]*条判据' "$TR_META/$f" 2>/dev/null | wc -l | tr -d ' ')"
-  NUM="$(grep -oE '[0-9]+[[:space:]]*条判据' "$TR_META/$f" 2>/dev/null | head -1 | grep -oE '[0-9]+' | head -1)"
-  [ "$OCC" = "1" ] || A28_PROBLEMS="$A28_PROBLEMS [$f 里「N 条判据」出现 $OCC 次，要求恰好 1 次]"
-  [ "$NUM" = "$AC_COUNT" ] || A28_PROBLEMS="$A28_PROBLEMS [$f 的条数声明=$NUM，与 acceptance.md 的实际条数 $AC_COUNT 不符]"
+  NUMSET="$(grep -oE '[0-9]+[[:space:]]*条判据' "$TR_META/$f" 2>/dev/null | grep -oE '[0-9]+' | sort -u | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
+  if [ -z "$NUMSET" ]; then
+    A28_PROBLEMS="$A28_PROBLEMS [$f 里没有记载判据条数]"
+  elif [ "$NUMSET" != "$AC_COUNT" ]; then
+    A28_PROBLEMS="$A28_PROBLEMS [$f 的判据条数取值集合=[$NUMSET]，要求恰好 {${AC_COUNT}}（出现第二个不同取值即判红）]"
+  fi
   MDS="$(node -e '
 const fs=require("fs");
 const text=fs.readFileSync(process.argv[1],"utf8");
@@ -1656,8 +1899,10 @@ for(const m of text.matchAll(/D(\d+)\s*[~～\-–]\s*D?(\d+)/g)){
 for(const m of text.matchAll(/\bD(\d+)\b/g)) set.add("D"+m[1]);
 console.log([...set].sort((x,y)=>Number(x.slice(1))-Number(y.slice(1))).join(" "));
 ' "$TR_META/$f" 2>/dev/null)"
-  [ "$MDS" = "$DEC_SET" ] || A28_PROBLEMS="$A28_PROBLEMS [$f 的决策号集合=[$MDS]，与 decisions.md 的实际集合=[$DEC_SET] 不符]"
+  [ "$MDS" = "$EXPECT_DEC_SET" ] || A28_PROBLEMS="$A28_PROBLEMS [$f 的决策号取值集合=[$MDS]，要求恰好 {${EXPECT_DEC_SET}}（出现第二个不同取值即判红）]"
 done
+printf '  · 实现侧追溯范围钉版: D%s~D%s（decisions.md 的实际集合=[%s]；验收期追加的**门侧裁定**不在实现侧追溯范围内）\n' \
+  "$EXPECT_DEC_MIN" "$EXPECT_DEC_MAX" "$DEC_SET"
 if [ -z "$A28_PROBLEMS" ]; then ok "$A28" "$A28"; else bad "$A28" "$A28"; printf '  · %s\n' "$A28_PROBLEMS" >> "$RES_DIR/$A28.res"; fi
 
 step "AC-029 组合门必须覆盖第 5 个 skill"
@@ -1684,22 +1929,60 @@ else
   SCEN="$(printf '%s' "$VERIFY_OUT" | grep -c '组合场景' || true)"
   [ "${SCEN:-0}" -ge 1 ] || A29_PROBLEMS="$A29_PROBLEMS [输出里没有组合场景的实跑记录]"
   printf '%s' "$VERIFY_OUT" | grep -q '组合场景失败' && A29_PROBLEMS="$A29_PROBLEMS [组合场景失败]"
-  # ③ 之补（OI-7 裁定）：至少有一条组合场景**真的经过 test-report** ——「装了」不等于「用上了」。
-  #   机械口径（三条同时成立才算数）：
-  #     ① 组合场景的输出行里点名 test-report / make-report；
-  #     ② 该场景**真的产出了报告产物**（临时根里出现非空的 report.json），或直接断言了报告里的结论；
-  #     ③ 组合门对它的断言是**实跑的**（断言了 verdict/overall 的值），而不是只查文件存在。
+  # ③ 之补（OI-7 裁定 / F-06）：至少有一条组合场景**真的经过 test-report** ——「装了」不等于「用上了」。
+  #   口径（F-06：**文本只作辅助证据，主判据是临时根的产物**）：
+  #     ① 临时根里存在**非空** report.json（产物实况）；
+  #     ② 该 report.json 的 verdict.* / cases.* **自洽**（结构完整、数字自洽、结论与数字不矛盾）；
+  #     ③ 组合场景的输出行里点名 test-report / make-report（**辅助**证据，不得单独作为通过依据）；
+  #     ④ 文本里断言的 verdict.overall 与产物里的值一致（文本与产物互证）。
   SCEN_TR="$(printf '%s' "$VERIFY_OUT" | grep -E '组合场景' | grep -E 'test-report|make-report' | head -1)"
   if [ -z "$SCEN_TR" ]; then
     A29_PROBLEMS="$A29_PROBLEMS [没有一条组合场景真的经过 test-report（只装不跑 ⇒ 判红）]"
   else
-    REPORT_ART="$(find "$VERIFY_ROOT" -path "$VERIFY_ROOT/skills" -prune -o -type f -name report.json -size +0c -print 2>/dev/null | head -1)"
+    REPORT_ARTS="$(find "$VERIFY_ROOT" -path "$VERIFY_ROOT/skills" -prune -o -type f -name report.json -size +0c -print 2>/dev/null)"
+    REPORT_ART=""
+    ART_PROB=""
+    while IFS= read -r cand; do
+      [ -n "$cand" ] || continue
+      probe="$(node -e '
+const fs=require("fs");
+let o=null;
+try{o=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));}catch(e){console.log("report.json 不是合法 JSON");process.exit(0);}
+if(!o||typeof o!=="object"){console.log("report.json 根节点不是对象");process.exit(0);}
+const v=(o.verdict&&typeof o.verdict==="object")?o.verdict:{};
+const c=(o.cases&&typeof o.cases==="object")?o.cases:{};
+const problems=[];
+for(const k of ["case_layer","evidence_layer","regression_layer","overall"]) if(typeof v[k]!=="string") problems.push("verdict."+k+" 缺失");
+for(const k of ["total","passed","failed","blocked","skipped"]) if(typeof c[k]!=="number") problems.push("cases."+k+" 缺失");
+if(problems.length===0){
+  if(c.total!==c.passed+c.failed+c.blocked+c.skipped) problems.push("cases.total≠通过+失败+阻塞+跳过");
+  if(v.case_layer==="fail"&&c.failed===0) problems.push("verdict.case_layer=fail 但 cases.failed=0");
+  if(v.case_layer==="pass"&&(c.failed>0||c.blocked>0)) problems.push("verdict.case_layer=pass 但有 failed/blocked");
+  if(v.overall==="pass"&&(v.case_layer!=="pass"||v.evidence_layer!=="pass")) problems.push("verdict.overall=pass 但有层不过");
+  if(c.total<=0) problems.push("cases.total<=0 —— 组合场景没有真的跑出用例");
+}
+console.log(problems.length===0?"OK":problems.join("; "));
+' "$cand" 2>/dev/null)"
+      if [ "$probe" = "OK" ]; then REPORT_ART="$cand"; ART_PROB="OK"; break; fi
+      if [ -z "$ART_PROB" ]; then ART_PROB="$probe"; REPORT_ART="$cand"; fi
+    done <<QA010_ARTS
+$REPORT_ARTS
+QA010_ARTS
+    if [ -z "$REPORT_ART" ]; then
+      A29_PROBLEMS="$A29_PROBLEMS [组合场景声称经过 test-report，但临时根里没有真的产出**非空** report.json —— 只装不跑 ⇒ 判红]"
+    elif [ "$ART_PROB" != "OK" ]; then
+      A29_PROBLEMS="$A29_PROBLEMS [临时根产出的 report.json 不合格: $ART_PROB]"
+    fi
     VERDICT_ASSERT="$(printf '%s' "$SCEN_TR" | grep -cE 'verdict\.overall|verdict\.' || true)"
     if [ "${VERDICT_ASSERT:-0}" -eq 0 ]; then
       A29_PROBLEMS="$A29_PROBLEMS [经过 test-report 的组合场景没有断言报告里的结论（verdict/overall），只是查了文件存在]"
     fi
-    if [ -z "$REPORT_ART" ] && [ "${VERDICT_ASSERT:-0}" -eq 0 ]; then
-      A29_PROBLEMS="$A29_PROBLEMS [组合场景声称经过 test-report，但临时根里没有真的产出 report.json]"
+    TXT_OVERALL="$(printf '%s' "$SCEN_TR" | grep -oE 'verdict\.overall=[a-z_]+' | head -1 | cut -d= -f2)"
+    if [ -n "$TXT_OVERALL" ] && [ -n "$REPORT_ART" ] && [ "$ART_PROB" = "OK" ]; then
+      JSON_OVERALL="$(node -e 'try{console.log(String(require(process.argv[1]).verdict.overall||""))}catch(e){console.log("")}' "$REPORT_ART" 2>/dev/null)"
+      if [ -n "$JSON_OVERALL" ] && [ "$JSON_OVERALL" != "$TXT_OVERALL" ]; then
+        A29_PROBLEMS="$A29_PROBLEMS [组合场景文本说 verdict.overall=$TXT_OVERALL，但临时根产物里是 $JSON_OVERALL]"
+      fi
     fi
   fi
   TR_INSTALL="$VERIFY_ROOT/skills/test-execute"
@@ -1793,6 +2076,10 @@ else
   inject_shim() {
     local mpkg="$1" code="$2"
     local entry="$mpkg/skills/test-report/scripts/make-report.mjs"
+    # ⚠️ 包装层必须**保留原文件的权限位**（`cat >` 新建的文件会拿到 umask 默认值 644）——
+    #    否则包装层自身「不可执行」，AC-001 的**逐脚本**判定（F-10）会把每个变异体都判红，
+    #    负控 M0 也会被误报成「已检出」⇒ 门自己把自己的工装当成了变异缺陷。
+    local mode; mode="$(stat -c '%a' "$entry" 2>/dev/null || echo 755)"
     mv "$entry" "$mpkg/skills/test-report/scripts/make-report.real.mjs" 2>/dev/null || return 1
     cat > "$entry" <<SHIMEOF
 #!/usr/bin/env node
@@ -1819,6 +2106,7 @@ if (code === 0) {
 }
 process.exit(code);
 SHIMEOF
+    chmod "$mode" "$entry" 2>/dev/null || true
     return 0
   }
 

@@ -8,5 +8,6 @@
   "created_at": "2026-11-13T10:10:00+08:00",
   "demand_dir": "BA/demands/REQ-002-suite-foundation/REQ-010-test-report",
   "criteria_count": 29,
-  "decision_range": "D48~D70"
+  "decision_range": "D48~D70",
+  "decision_range_note": "D48~D70 = 实现侧追溯范围（AC-028 ③ 按此做「取值唯一」核）；D71 是验收期的门侧裁定，不在实现侧追溯范围内"
 }
