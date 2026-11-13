@@ -10,7 +10,11 @@
  *      - test-execute 的 offline 夹具 → 断言 4 passed / 1 failed / 1 blocked / 0 skipped；
  *      - cycle-state.mjs init → run-suite.mjs --cycle → 断言该轮次的 execute 阶段已推进，
  *        且 stages.execute.runs[] 记入了本次 run_id
- *        （这条链路经过 test-execute → test-case-design 的**硬跨 skill 依赖**）。
+ *        （这条链路经过 test-execute → test-case-design 的**硬跨 skill 依赖**）；
+ *      - test-execute 的 offline 夹具 → **test-report** 的 make-report.mjs → 断言报告里的
+ *        三层结论（用例层 / 证据层 / 对账层）与总体结论
+ *        （这条链路经过 test-execute → test-report 的**硬跨 skill 依赖**；
+ *          「装齐 5 个」只是**装了**，不等于**用上了**）。
  *
  * 退出码：0 = 全通过 / 1 = 有问题 / 2 = 用法错误。
  *
@@ -325,6 +329,101 @@ function scenarioCycle(root, work) {
 }
 
 /**
+ * 组合场景三：test-execute 的 offline 夹具 → test-report 出报告 → 断言三层结论。
+ *
+ * 这条链路**真的经过**第 5 个 skill（test-report）：执行产物先落地，再由
+ * make-report.mjs 读它、实查证据、算出三层结论 —— 断言的是报告里的
+ * `verdict.*` 与 `cases.*`，不是「文件存在」。
+ *
+ * @param {string} root 临时根
+ * @param {string} work 工作目录
+ * @returns {{ok: boolean, message: string}} 场景结论
+ */
+function scenarioReport(root, work) {
+  const skillsDir = path.join(root, 'skills');
+  const offlineDir = path.join(skillsDir, 'test-execute', 'examples', 'offline');
+  const suite = path.join(offlineDir, 'test-assets', 'suites', 'REQ-DEMO-demo', 'suite.json');
+  const runner = path.join(skillsDir, 'test-execute', 'scripts', 'run-suite.mjs');
+  const reporter = path.join(skillsDir, 'test-report', 'scripts', 'make-report.mjs');
+  const missing = [];
+  if (!fs.existsSync(suite)) missing.push(path.relative(root, suite));
+  if (!fs.existsSync(runner)) missing.push(path.relative(root, runner));
+  if (!fs.existsSync(reporter)) missing.push(path.relative(root, reporter));
+  if (missing.length > 0) {
+    return { ok: false, message: `临时根里缺这些必需文件: ${missing.join(' / ')}` };
+  }
+
+  const outputDir = path.join(work, 'exec-report');
+  const run = runNode(
+    runner,
+    [suite, '--project-root', offlineDir, '--output-dir', outputDir, '--run-id', 'verify-report'],
+    work,
+  );
+  if (run.code !== 0) {
+    const detail = runOutputDetail(run);
+    return {
+      ok: false,
+      message: `报告链路的执行环节失败（退出码 ${run.code}）${detail === '' ? '' : `\n${detail}`}`,
+    };
+  }
+
+  const reportDir = path.join(work, 'report-out');
+  const reported = runNode(reporter, ['--artifacts', outputDir, '--out-dir', reportDir], work);
+  if (reported.code !== 0) {
+    const detail = runOutputDetail(reported);
+    return {
+      ok: false,
+      message: `test-report 出报告失败（退出码 ${reported.code}）${detail === '' ? '' : `\n${detail}`}`,
+    };
+  }
+
+  const reportFile = path.join(reportDir, 'report.json');
+  if (!fs.existsSync(reportFile)) return { ok: false, message: 'test-report 没有产出 report.json' };
+  let report = null;
+  try {
+    report = JSON.parse(fs.readFileSync(reportFile, 'utf8'));
+  } catch {
+    return { ok: false, message: 'test-report 产出的 report.json 不是合法 JSON' };
+  }
+  const verdict = report && report.verdict ? report.verdict : {};
+  const cases = report && report.cases ? report.cases : {};
+
+  // offline 夹具的执行结果 → 报告里应当得出的三层结论（逐字断言，不是「文件存在」）
+  const expectVerdict = {
+    case_layer: 'fail',
+    evidence_layer: 'pass',
+    regression_layer: 'not_applicable',
+    overall: 'fail',
+  };
+  const expectCases = { total: 6, passed: 4, failed: 1, blocked: 1, skipped: 0 };
+  const problems = [];
+  for (const [key, want] of Object.entries(expectVerdict)) {
+    if (verdict[key] !== want) problems.push(`verdict.${key}=${JSON.stringify(verdict[key])}，应为 ${want}`);
+  }
+  for (const [key, want] of Object.entries(expectCases)) {
+    if (cases[key] !== want) problems.push(`cases.${key}=${JSON.stringify(cases[key])}，应为 ${want}`);
+  }
+  if (problems.length > 0) {
+    return { ok: false, message: `test-report 的报告结论与执行产物对不上: ${problems.join('; ')}` };
+  }
+
+  const mdFile = path.join(reportDir, 'report.md');
+  if (!fs.existsSync(mdFile) || !/report-digest/.test(fs.readFileSync(mdFile, 'utf8'))) {
+    return { ok: false, message: 'test-report 没有产出带机器可读摘要行的 report.md' };
+  }
+
+  return {
+    ok: true,
+    message:
+      `test-report 的报告链路（make-report.mjs 读 test-execute 的执行产物）→ ` +
+      `verdict.case_layer=${verdict.case_layer}、verdict.evidence_layer=${verdict.evidence_layer}、` +
+      `verdict.regression_layer=${verdict.regression_layer}、verdict.overall=${verdict.overall}；` +
+      `cases.total=${cases.total}、cases.passed=${cases.passed}、cases.failed=${cases.failed}、` +
+      `cases.blocked=${cases.blocked}、cases.skipped=${cases.skipped}（与执行产物逐字一致）`,
+  };
+}
+
+/**
  * 组合门主流程。
  * @param {string|undefined} rootArg 命令行给的安装根
  * @returns {number} 退出码
@@ -403,7 +502,11 @@ function runVerifyIn(root, work) {
 
   // ③ 实跑跨 skill 组合场景
   fs.mkdirSync(work, { recursive: true });
-  const scenarios = [scenarioOffline(root, work), scenarioCycle(root, work)];
+  const scenarios = [
+    scenarioOffline(root, work),
+    scenarioCycle(root, work),
+    scenarioReport(root, work),
+  ];
   let failed = 0;
   for (const scenario of scenarios) {
     if (scenario.ok) console.log(`[ok] 组合场景: ${scenario.message}`);

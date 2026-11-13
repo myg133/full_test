@@ -1,0 +1,7 @@
+{
+  "name": "test-report",
+  "version": "0.1.0",
+  "requires": {
+    "test-execute": ">=0.1.0"
+  }
+}

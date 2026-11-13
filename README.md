@@ -31,6 +31,7 @@ npx test-agent-skills install
 ├── test-execute/          # 本包安装的 skill
 ├── qa-toolchain/          # 本包安装的 skill
 ├── regression-plan/       # 本包安装的 skill
+├── test-report/           # 本包安装的 skill
 └── <你原有的其它 skill>     # 不受影响
 ```
 
@@ -117,6 +118,7 @@ test-agent-skills <command> [options]
 | `test-execute` | 用例集 → 执行与证据链：读执行配置与用例集、调度可插拔执行器、按断言逐步判定、产出带 sha256 指纹与脱敏留痕的证据链（入口命令：`node skills/test-execute/scripts/run-suite.mjs <suite.json>`） |
 | `qa-toolchain` | 项目级 `.tools/` 工具链自举：声明式清单、隔离安装（Python venv / Node 包）、幂等重装、显式降级（入口命令：`qa install` / `qa doctor` / `qa list`） |
 | `regression-plan` | 变更 → 回归选样：切分变更条目、按需求条目 / 用例 / 维度 / 方法判影响面、产出 `regression-plan.json`（哪些用例确定重跑、哪些需人工复核、哪些变更判不了）（入口命令：`node skills/regression-plan/scripts/plan-regression.mjs --changelog <file> --cases <file> --cycle-dir <dir>`） |
+| `test-report` | 执行产物 → 执行报告：只读消费 `meta.json` / `results.json` / `evidence/` 与可选的回归计划，产出 `report.json` + `report.md`，给出用例层 / 证据层 / 计划对账层三层结论、逐条点名漏跑的用例与判不了的变更，并绑定输入产物的指纹（入口命令：`node skills/test-report/scripts/make-report.mjs --artifacts <run_dir>`） |
 
 ### Skill 之间的版本配套
 
@@ -127,7 +129,8 @@ test-agent-skills <command> [options]
 ```
 
 `test-execute` 对 `test-case-design` 是**硬跨 skill 依赖**（轮次推进走的是
-`test-case-design/scripts/cycle-state.mjs`），`regression-plan` 消费它的维度库与方法库。
+`test-case-design/scripts/cycle-state.mjs`），`regression-plan` 消费它的维度库与方法库，
+`test-report` 消费 `test-execute` 的执行产物格式（`meta.json` / `results.json` / `evidence/` 与指纹口径）。
 
 ### 组合门（`verify`）
 
@@ -136,8 +139,9 @@ node bin/test-agent-skills.mjs verify --root /tmp/verify-root
 ```
 
 把包装到**临时根**（不碰真实安装根），校验 skill 之间的**版本配套**，
-再**实跑**跨 skill 组合场景：`test-execute` 的 offline 夹具（4 passed / 1 failed / 1 blocked / 0 skipped）
-与「轮次初始化 → 带轮次执行 → execute 阶段推进」这条硬跨 skill 依赖链路。
+再**实跑**跨 skill 组合场景：`test-execute` 的 offline 夹具（4 passed / 1 failed / 1 blocked / 0 skipped）、
+「轮次初始化 → 带轮次执行 → execute 阶段推进」这条硬跨 skill 依赖链路，
+以及「执行产物 → `test-report` 出报告 → 断言三层结论」这条**经过第 5 个 skill** 的链路。
 
 依赖版本不满足时，组合门报**版本问题**（点名哪个 skill、要求什么、实际什么），
 而不是让下游报业务错。
