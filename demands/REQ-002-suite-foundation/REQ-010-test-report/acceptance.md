@@ -238,8 +238,8 @@ $FX/ART/
 
 ### AC-010: `report_sha256` 必须可从报告自身重算
 - **前置条件**: §0.1 的执行产物目录
-- **测试步骤**: 取 `report.json`，按**明确的规范化口径**（剔除 `generated_at` 与 `report_sha256` 两字段后，对剩余内容做稳定序列化）重算 sha256，与报告里的 `report_sha256` 比对
-- **预期结果**: 两者**逐字相等**；口径必须写在 `references/report-schema.md` 里（否则无法核）；报告不得把自己算进去
+- **测试步骤**: 取 `report.json`，按 **demand.md F3.2 规定的规范化口径**（剔除 `generated_at` 与 `report_sha256` 两字段后，对剩余内容做**键名按码位升序**的稳定序列化：对象键排序、数组保序、无空白分隔符、数值用 JSON 表示、字符串用 JSON 转义）重算 sha256，与报告里的 `report_sha256` 比对
+- **预期结果**: 两者**逐字相等**；口径必须**同时**写在 `references/report-schema.md` 里（否则无法核）；报告不得把自己算进去
 - **判据形式**: 查绝对事实（可重算）；探针：让实现写死一个 `report_sha256` → 本条判红
 - **类型**: 功能
 
@@ -347,7 +347,7 @@ $FX/ART/
   - ② **id 溯源（md 侧）**：从 `report.md` **全文**抽取所有形如 `[A-Za-z][A-Za-z0-9]*-\d+` 的 token，凡**看起来是用例 id**（前缀与 `results.json`/`plan` 里出现的用例 id 前缀相同，如 `TC-`）的必须 ∈ `IDS`；凡**看起来是变更 id**（前缀与 `plan.changes[].id` 前缀相同，如 `C-`）的必须 ∈ `CHANGE_IDS`
   - ③ **数字可重算（用例层）**：`report.json` 的 `cases` 段**只允许** F3 声明的 6 个键 `total`/`passed`/`failed`/`blocked`/`skipped`/`duration_ms_total`；前 5 个必须逐字等于从 `results.json` 逐条重算的真值（`5/2/1/1/1`），`duration_ms_total` 必须等于各条 `duration_ms` 之和；出现第 7 个键 → 判红
   - ④ **数字可重算（回归层）**：`regression` 段内**每一个数字型字段**必须能由 `plan` 与 `results.json` 逐字段重算得出：`selected_planned` == `plan.selected.length`；`selected_executed` == |`plan.selected[].case_id` ∩ `results.json` 实际出现的 `case_id`|；`needs_review_planned` == `plan.needs_review.length`；`needs_review_executed` == |`plan.needs_review[].case_id` ∩ `results.json` 实际出现的 `case_id` 集|；`undecidable_changes.length` == `plan.undecidable_changes.length`；`impact_complete` == `plan.summary.impact_complete`；并检查 `selected_planned == selected_executed + selected_missing.length`
-  - ⑤ **顶层不得有野生数字**：`report.json` 的**顶层**不得出现「数字型叶子」字段（顶层数字字段不属于 `cases`/`regression`/`failures`/`source`/`verdict`/`evidence` 等已声明段，且不是 `report_sha256`/`generated_at` 这类字符串）；出现一个（如 `total: 42`）→ 判红并点名
+  - ⑤ **顶层不得有野生数字**：`report.json` 的**顶层**只允许**一个**数字型叶子字段 —— `schema_version`（值 `1`，F3 声明）；除此之外，顶层出现任何数字型叶子字段（如 `total: 42`）→ 判红并点名（**字符串**字段不受此限）
 - **预期结果**: ①~⑤ 全满足；出现一个输入里没有的 id、或一个重算不上的数字、或一个野生数字字段 → 判红并点名（是哪个 id / 哪个字段）
 - **判据形式**: 查绝对事实（集合运算 + 逐字段重算 + 顶层字段枚举）；探针：让实现在报告里写死一个 `total: 42` → 本条判红（`cases.total != 5`（③）**且**多出顶层数字字段（⑤）—— 两处同时命中）
 - **类型**: 诚实性
