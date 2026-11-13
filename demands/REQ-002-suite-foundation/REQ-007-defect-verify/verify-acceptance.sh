@@ -1718,18 +1718,33 @@ for f in status.md traceability.md verification-report.md; do
   elif [ "$NUMSET" != "$AC_COUNT" ]; then
     A29_PROBLEMS="$A29_PROBLEMS [$f 的判据条数取值集合=[$NUMSET]，要求恰好 {${AC_COUNT}}（出现第二个不同取值即判红）]"
   fi
-  MDS="$(node -e '
+  # 决策号取值核对（两道检查，缺一不可 —— 见 status.md 的门缺陷 F-01）：
+  #   ① 文件内**所有** D 编号（含范围展开与单独提及）的并集，必须恰好等于 decisions.md 的实际 D 集合；
+  #   ② 文件里出现的**每一个范围字面量**（如 D72~D96），它自身展开后的集合也必须恰好等于实际集合。
+  # 只做 ① 会被「同一文件别处提到 D97」掩盖 —— 例如 status.md 写着「决策号范围：D72~D96」，
+  # 同时交叉引用处写着「decisions.md D72~D97」，并集仍是 D72~D97 ⇒ 逃逸。
+  MP="$(node -e '
 const fs=require("fs");
 const text=fs.readFileSync(process.argv[1],"utf8");
-const set=new Set();
+const expKey=(process.argv[2]||"").split(" ").filter(Boolean).join(" ");
+const all=new Set();
+const rangeSets=[];
 for(const m of text.matchAll(/D(\d+)\s*[~～\-–]\s*D?(\d+)/g)){
   const a=Number(m[1]),b=Number(m[2]);
-  for(let i=Math.min(a,b);i<=Math.max(a,b);i++) set.add("D"+i);
+  const s=[];
+  for(let i=Math.min(a,b);i<=Math.max(a,b);i++){ s.push("D"+i); all.add("D"+i); }
+  rangeSets.push(s.join(" "));
 }
-for(const m of text.matchAll(/\bD(\d+)\b/g)) set.add("D"+m[1]);
-console.log([...set].sort((x,y)=>Number(x.slice(1))-Number(y.slice(1))).join(" "));
-' "$DV_META/$f" 2>/dev/null)"
-  [ "$MDS" = "$EXPECT_DEC_SET" ] || A29_PROBLEMS="$A29_PROBLEMS [$f 的决策号取值集合=[$MDS]，要求恰好 {${EXPECT_DEC_SET}}（出现第二个不同取值即判红）]"
+for(const m of text.matchAll(/\bD(\d+)\b/g)) all.add("D"+m[1]);
+const allKey=[...all].sort((x,y)=>Number(x.slice(1))-Number(y.slice(1))).join(" ");
+const problems=[];
+if(allKey!==expKey) problems.push("决策号取值集合=["+allKey+"]，要求恰好 {"+expKey+"}");
+for(const r of [...new Set(rangeSets)]){
+  if(r!==expKey) problems.push("出现了不等于实际集合的决策号范围 ["+r+"]，要求恰好 {"+expKey+"}（范围字面量自身必须等于 decisions.md 的实际集合，不能靠文件别处提到的 D 编号掩盖）");
+}
+console.log(problems.join(" ;; "));
+' "$DV_META/$f" "$EXPECT_DEC_SET" 2>/dev/null)"
+  [ -z "$MP" ] || A29_PROBLEMS="$A29_PROBLEMS [$f: $MP]"
 done
 printf '  · 实现侧追溯范围: 取 decisions.md 的实际决策号集合=[%s]（取值唯一；重复引用同一取值不算多处记载）\n' "$EXPECT_DEC_SET"
 if [ -z "$A29_PROBLEMS" ]; then ok "$A29" "$A29"; else bad "$A29" "$A29"; printf '  · %s\n' "$A29_PROBLEMS" >> "$RES_DIR/$A29.res"; fi
