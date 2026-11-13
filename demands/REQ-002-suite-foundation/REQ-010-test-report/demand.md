@@ -131,7 +131,7 @@ REQ-004 已经确立了"产物即证据"的纪律（`results_sha256` / `evidence
   },
   "cases": {
     "total": 0, "passed": 0, "failed": 0, "blocked": 0, "skipped": 0,
-    "duration_ms_total": 0
+    "duration_ms_total": 0   // 各条用例 duration_ms 之和
   },
   "verdict": {
     "case_layer": "pass|fail|incomplete",   // 用例层

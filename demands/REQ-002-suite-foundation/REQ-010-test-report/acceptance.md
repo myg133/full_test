@@ -35,7 +35,7 @@ $FX/ART/
 | `requirement` | `REQ-DEMO` |
 | `environment` | `mock-local` |
 | `started_at` / `finished_at` | ISO-8601 |
-| `duration_ms` | 整数 |
+| `duration_ms` | **725**（= 5 条用例 `duration_ms` 之和，见下注 ⚠️） |
 | `agent` | `demo-agent` |
 | `executor` | `{"name":"mock","version":"0.1.0"}` |
 | `tool_versions` | `{}` |
@@ -56,13 +56,17 @@ $FX/ART/
 
 字段名严格对齐 REQ-004 的 `references/evidence-chain.md` §3（**不得自造别名**）：
 
-| `case_id` | `status` | `title` | `requirement_refs` | `evidence[]` | `reproduction.steps` | `reproduction.command` | `error` |
-|---|---|---|---|---|---|---|---|
-| `TC-001` | `passed` | 健康检查通过 | `["R-1"]` | 1 份（`evidence/TC-001/step-1-response.json`） | `["GET /api/health"]` | `curl -X GET /api/health` | `null` |
-| `TC-002` | `failed` | 订单查询返回 500 | `["R-1"]` | 1 份（`evidence/TC-002/step-1-response.json`） | `["GET /api/orders"]` | `curl -X GET /api/orders` | `{type:"assertion", message:"期望 200，实际 500"}` |
-| `TC-003` | `blocked` | 列表用例缺少断言 | `["R-2"]` | 1 份（`evidence/TC-003/step-1-response.json`） | `["GET /api/items"]` | `curl -X GET /api/items` | `{type:"missing_assertion", message:"用例缺少可机械判定的断言"}` |
-| `TC-004` | `skipped` | 已废弃用例 | `["R-2"]` | **空数组 `[]`** | **`[]`（空）** | `""` | `null` |
-| `TC-005` | `passed` | 报表导出通过 | `["R-3"]` | 1 份（`evidence/TC-005/step-1-response.json`）—— ⚠️ **该文件故意不存在**（AC-007） | `["GET /api/reports"]` | `curl -X GET /api/reports` | `null` |
+| `case_id` | `status` | `title` | `requirement_refs` | `duration_ms` | `evidence[]` | `reproduction.steps` | `reproduction.command` | `error` |
+|---|---|---|---|---|---|---|---|---|
+| `TC-001` | `passed` | 健康检查通过 | `["R-1"]` | `120` | 1 份（`evidence/TC-001/step-1-response.json`） | `["GET /api/health"]` | `curl -X GET /api/health` | `null` |
+| `TC-002` | `failed` | 订单查询返回 500 | `["R-1"]` | `340` | 1 份（`evidence/TC-002/step-1-response.json`） | `["GET /api/orders"]` | `curl -X GET /api/orders` | `{type:"assertion", message:"期望 200，实际 500"}` |
+| `TC-003` | `blocked` | 列表用例缺少断言 | `["R-2"]` | `55` | 1 份（`evidence/TC-003/step-1-response.json`） | `["GET /api/items"]` | `curl -X GET /api/items` | `{type:"missing_assertion", message:"用例缺少可机械判定的断言"}` |
+| `TC-004` | `skipped` | 已废弃用例 | `["R-2"]` | `0` | **空数组 `[]`** | **`[]`（空）** | `""` | `null` |
+| `TC-005` | `passed` | 报表导出通过 | `["R-3"]` | `210` | 1 份（`evidence/TC-005/step-1-response.json`）—— ⚠️ **该文件故意不存在**（AC-007） | `["GET /api/reports"]` | `curl -X GET /api/reports` | `null` |
+
+⚠️ **`duration_ms` 口径消歧**：`cases.duration_ms_total` 必须等于**各条用例 `duration_ms` 之和**（= `725`）。
+本夹具刻意让 `meta.duration_ms` 也等于 `725` —— 这样「取 `meta.duration_ms`」与「自己求和」两种口径**结果相同**，
+实现方选哪条路都不会判红。**不得**让这两个值不同（那会让一个正确的实现因口径不同被判红）。
 
 每条结果另需：`started_at` / `finished_at`（ISO-8601）、`duration_ms`（整数）、`reproduction.expected`（字符串，可为 `""`）。
 `evidence[]` 每项为 `{path, sha256, bytes, media_type}`，其中 `sha256`/`bytes` 是该证据文件的**真实**指纹
@@ -130,6 +134,7 @@ $FX/ART/
 | 字段 | 真值 | 来源 |
 |---|---|---|
 | `cases.total` / `passed` / `failed` / `blocked` / `skipped` | `5` / `2` / `1` / `1` / `1` | 从 `results.json` 重算（**不是** `meta.json` 的 6/2/1/1/2） |
+| `cases.duration_ms_total` | `725` | 各条用例 `duration_ms` 之和（`meta.duration_ms` 也是 `725`，两口径同值） |
 | `verdict.case_layer` | `fail` | 有 failed |
 | `verdict.evidence_layer` | `fail` | `findings` 非空（见下） |
 | `verdict.regression_layer` | `fail` | `selected_missing` 非空 |
