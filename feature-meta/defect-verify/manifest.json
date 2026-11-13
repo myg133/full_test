@@ -1,0 +1,10 @@
+{
+  "req": "REQ-007",
+  "branch": "feature/REQ-007",
+  "agent_id": "worker",
+  "session_id": "mvs_14e6ca439b734744aa9423684db1964b",
+  "owner": "worker",
+  "base_branch": "develop",
+  "created_at": "2026-11-13T18:20:00+08:00",
+  "demand_dir": "BA/demands/REQ-002-suite-foundation/REQ-007-defect-verify"
+}
