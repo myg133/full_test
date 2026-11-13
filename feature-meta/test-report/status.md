@@ -50,8 +50,8 @@
     → **29 PASS / 0 FAIL**（快跑与完整模式一致；完整模式含 4 个变异体全部检出、负控未检出）
   - 上游回归（REQ-011 主验收 / REQ-006 主验收 / REQ-002A / REQ-002B）→ 全绿
 - 需求文档（只读）：`BA/demands/REQ-002-suite-foundation/REQ-010-test-report/`
-  （`acceptance.md` 判据集 29 条 / `decisions.md` D48~D70 / `verify-acceptance.sh`，
-  sha256 钉版值 `9b6ae5cf493e8284b563ab8dc3ee62d017de743dc1263159651c9d030b9cf2e9`）
+  （`acceptance.md` 判据集 29 条 / `decisions.md` D48~D71 / `verify-acceptance.sh`，
+  sha256 钉版值 `6bb2a8096d14cc4573ec2fdfb3f35242037d7716b3ecc92bad8667b1d17c50bb`）
 - 上游基线：REQ-004（`test-execute`）、REQ-011（`regression-plan`）、REQ-006（`test-case-design`）；
   本 REQ **不改**既有 4 个 skill 的任何文件。
 - ⚠️ 前置状态说明：根 `feature-meta/manifest.json` 在 BA 分配本 REQ 的提交

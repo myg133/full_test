@@ -25,7 +25,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { parseArgs, UsageError } from './lib/cli.mjs';
 import { loadArtifacts, loadPlan, InputError } from './lib/artifacts.mjs';
-import { buildReport } from './lib/analyze.mjs';
+import { buildReport, needsReviewCaseIds } from './lib/analyze.mjs';
 import { renderMarkdown } from './lib/render.mjs';
 
 /**
@@ -85,7 +85,7 @@ function main() {
       planPath: options.regressionPlan === null ? null : path.resolve(options.regressionPlan),
       generatedAt: new Date().toISOString(),
     });
-    markdown = renderMarkdown(report);
+    markdown = renderMarkdown(report, { needsReviewCaseIds: needsReviewCaseIds(plan) });
   } catch (err) {
     console.error(`[error] 生成报告失败：${err && err.message ? err.message : String(err)}`);
     return 1;

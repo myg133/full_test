@@ -5,7 +5,8 @@
 //   2. md 含**一行**机器可读摘要 `<!-- report-digest: key=value; ... -->`，
 //      每个键是 report.json 的点号路径，值逐字相等（数组用逗号连接、顺序敏感）；
 //   3. 正文的关键数字按「标签 + 数字」呈现，标签取自 F4.2 的固定词汇表；
-//   4. md 必须**点名**：漏跑的用例 id、失败的用例 id 与错误摘要、判不了的变更 id 与原因。
+//   4. md 必须**点名**：漏跑的用例 id、失败的用例 id 与错误摘要、判不了的变更 id 与原因、
+//      待人工复核的用例 id（AC-016：待复核不能只有条数，必须在待复核语境里点到 id）。
 //
 // ⚠️ 措辞纪律：正文里**不写**「回归」二字 —— 回归层是可选层，
 //    不给计划时报告不得出现任何断言回归状态的措辞（AC-018）。
@@ -139,9 +140,10 @@ function renderFailures(failures) {
 /**
  * 渲染计划对账段。
  * @param {object} regression 回归段
+ * @param {string[]} needsReviewCaseIds 待人工复核的用例 id（逐条点名）
  * @returns {string[]} 文本行
  */
-function renderRegression(regression) {
+function renderRegression(regression, needsReviewCaseIds) {
   const lines = [];
   lines.push(`- 计划选样：${regression.selected_planned} 条`);
   lines.push(`- 已执行选样：${regression.selected_executed} 条`);
@@ -154,6 +156,13 @@ function renderRegression(regression) {
   if (regression.selected_missing.length > 0) {
     lines.push('漏跑明细：', '');
     for (const caseId of regression.selected_missing) lines.push(`- ${caseId}`);
+    lines.push('');
+  }
+  // 待复核用例必须**逐条点名**（AC-016）——只有条数的话，读者看不出是哪几条要人工复核。
+  // 名单行只写 id 与「待复核」语境，**不写数字**（避免数字被当成别的指标的条数）。
+  if (needsReviewCaseIds.length > 0) {
+    lines.push('待复核明细：', '');
+    for (const caseId of needsReviewCaseIds) lines.push(`- ${caseId}：待复核用例`);
     lines.push('');
   }
   if (regression.undecidable_changes.length > 0) {
@@ -169,10 +178,12 @@ function renderRegression(regression) {
 /**
  * 渲染完整的 markdown 报告。
  * @param {object} report 报告对象
+ * @param {{needsReviewCaseIds?: string[]}} [options] 附加渲染输入（待复核用例 id —— 供 md 点名用）
  * @returns {string} markdown 文本
  */
-export function renderMarkdown(report) {
+export function renderMarkdown(report, options = {}) {
   const { source, cases, verdict, failures, evidence, regression } = report;
+  const needsReviewCaseIds = Array.isArray(options.needsReviewCaseIds) ? options.needsReviewCaseIds : [];
   const lines = [];
   lines.push('# 执行报告', '');
   lines.push(`- 运行标识：${source.run_id}`);
@@ -235,7 +246,7 @@ export function renderMarkdown(report) {
 
   if (regression !== null) {
     lines.push('## 五、计划对账', '');
-    for (const line of renderRegression(regression)) lines.push(line);
+    for (const line of renderRegression(regression, needsReviewCaseIds)) lines.push(line);
   }
 
   lines.push(`## ${regression !== null ? '六' : '五'}、指纹`, '');

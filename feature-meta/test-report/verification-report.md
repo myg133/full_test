@@ -4,18 +4,18 @@
 - 分支：`feature/REQ-010`
 - 交付物：`skills/test-report/`（skill）、`bin/verify-suite.mjs`（组合门扩展）、
   `skills/test-report/skill-meta.json`（版本与依赖声明）、`README.md`、`feature-meta/test-report/`
-- 验收判据集共 29 条判据（AC-001~AC-029）；决策号范围 D48~D70。
+- 验收判据集共 29 条判据（AC-001~AC-029）；决策号范围 D48~D71。
 - 验收脚本（BA 的资产，本 REQ 未改动）：
   `BA/demands/REQ-002-suite-foundation/REQ-010-test-report/verify-acceptance.sh`
-  的 sha256 钉版值：`9b6ae5cf493e8284b563ab8dc3ee62d017de743dc1263159651c9d030b9cf2e9`
+  的 sha256 钉版值：`6bb2a8096d14cc4573ec2fdfb3f35242037d7716b3ecc92bad8667b1d17c50bb`
   —— 本报告的结论与该指纹绑定（同一批变异体在不同版本的脚本上结论可以不同）。
 
 ## 一、分层验收结论
 
 | 层次 | 命令 | 结论 |
 |---|---|---|
-| 主验收（快跑模式） | `REQ010_NO_MUT=1 QA010_SCRIPT_SHA=9b6ae5cf… bash BA/demands/REQ-002-suite-foundation/REQ-010-test-report/verify-acceptance.sh .` | `结论: 29 PASS / 0 FAIL`（退出码 0） |
-| 主验收（完整模式） | `QA010_SCRIPT_SHA=9b6ae5cf… bash BA/demands/REQ-002-suite-foundation/REQ-010-test-report/verify-acceptance.sh .` | `结论: 29 PASS / 0 FAIL`（退出码 0）；`变异体套件: 检出 4/4（有效变异体）`；负控 M0 `未检出` |
+| 主验收（快跑模式） | `REQ010_NO_MUT=1 QA010_SCRIPT_SHA=6bb2a809… bash BA/demands/REQ-002-suite-foundation/REQ-010-test-report/verify-acceptance.sh .` | `结论: 29 PASS / 0 FAIL`（退出码 0） |
+| 主验收（完整模式） | `QA010_SCRIPT_SHA=6bb2a809… bash BA/demands/REQ-002-suite-foundation/REQ-010-test-report/verify-acceptance.sh .` | `结论: 29 PASS / 0 FAIL`（退出码 0）；`变异体套件: 检出 4/4（有效变异体）`；负控 M0 `未检出` |
 | 上游基线回归（REQ-011） | `REQ011_NO_MUT=1 QA011_SCRIPT_SHA=8fc6117d… bash BA/demands/REQ-002-suite-foundation/REQ-011-regression-plan/verify-acceptance.sh .` | `结论: 28 PASS / 0 FAIL / 0 不可判定`（退出码 0） |
 | 上游基线回归（REQ-006） | `bash BA/demands/REQ-002-suite-foundation/REQ-006-security-stress-observability/verify-acceptance.sh skills/test-case-design` | `结论: 42 PASS / 0 FAIL`（退出码 0） |
 | 上游基线回归（REQ-002A） | `bash BA/demands/REQ-002-suite-foundation/REQ-002A-schema-v2/verify-regression-002a.sh skills/test-case-design` | `结论: 19 PASS / 0 FAIL`（退出码 0） |

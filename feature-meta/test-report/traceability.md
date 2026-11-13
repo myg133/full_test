@@ -16,10 +16,10 @@
   - `feature-meta/test-report/`（本 REQ 的交付侧追溯件）
 - 验收脚本（BA 的资产，本 REQ 未改动）：
   `BA/demands/REQ-002-suite-foundation/REQ-010-test-report/verify-acceptance.sh`
-  的 sha256 钉版值：`9b6ae5cf493e8284b563ab8dc3ee62d017de743dc1263159651c9d030b9cf2e9`
+  的 sha256 钉版值：`6bb2a8096d14cc4573ec2fdfb3f35242037d7716b3ecc92bad8667b1d17c50bb`
 - 需求文档（只读）：`BA/demands/REQ-002-suite-foundation/REQ-010-test-report/`
-  （`acceptance.md` 判据集 29 条 / `decisions.md` D48~D70）
-- 决策号范围：D48~D70
+  （`acceptance.md` 判据集 29 条 / `decisions.md` D48~D71）
+- 决策号范围：D48~D71
 
 > 本 REQ 的验收判据集共 29 条判据（AC-001~AC-029），下表逐条给出交付位置与自验方式。
 
@@ -40,7 +40,7 @@
 | AC-013 report.json 的必填字段集必须完整 | `skills/test-report/references/report-schema.md` §2 + `scripts/check-report.mjs` | 逐字段查路径、类型与枚举；并查 schema 文档**列出**了全部必填字段名与 `kind` 枚举 | PASS |
 | AC-014 漏跑必须逐条点名 | `skills/test-report/scripts/lib/analyze.mjs`（`reconcile` 的 `selected_missing`）+ `lib/render.mjs`（明细渲染） | 把 `selected_missing` 与「计划 `selected[]` 减去实际出现的 `case_id`」比对；并断言 md 逐字出现漏跑的用例 id | PASS |
 | AC-015 漏跑必须导向失败结论 | `skills/test-report/scripts/lib/analyze.mjs`（`deriveVerdict`） | 断言 `selected_missing` 非空时对账层为 `fail` 且 `overall != pass` | PASS |
-| AC-016 needs_review 非空时不得判回归通过 | `skills/test-report/scripts/lib/analyze.mjs`（`deriveVerdict` 的 `needs_review_planned > 0 → incomplete`） | 断言两个待复核计数都是数字、对账层不为 `pass`、md 点名待复核的用例 id | PASS |
+| AC-016 needs_review 非空时不得判回归通过 | `skills/test-report/scripts/lib/analyze.mjs`（`deriveVerdict` 的 `needs_review_planned > 0 → incomplete`）+ `lib/render.mjs`（待复核明细名单逐条点名 id） | 断言两个待复核计数都是数字、对账层不为 `pass`；md 的「待复核明细」名单**逐条点名**待复核用例 id（`TC-003`），且该 id 与「待复核」出现在同一行或紧邻 2 行内（待复核语境） | PASS |
 | AC-017 判不了的变更必须呈现且不得判通过 | `skills/test-report/scripts/lib/analyze.mjs`（`reconcile` 原样搬运 `undecidable_changes`）+ `lib/render.mjs` | 断言条目数、变更 id、原因逐字等于计划；影响面完整性为 `false`；`overall != pass`；md 点名变更 id | PASS |
 | AC-018 未提供计划时不得编造回归层结论 | `skills/test-report/scripts/lib/analyze.mjs`（`reconcile(null)` → `null`）+ `lib/render.mjs`（不渲染对账段、正文不写「回归」二字） | 不给 `--regression-plan` 跑一次：断言 `regression` 段为 `null`、对账层为 `not_applicable`、md 正文无断言对账状态的措辞 | PASS |
 | AC-019 blocked 不得计入 passed | `skills/test-report/scripts/lib/analyze.mjs`（`recountCases` 的四分支互斥） | 断言 `blocked` 与 `passed` 各自等于重算值（互不吞并），且存在 blocked 时 `overall != pass` | PASS |

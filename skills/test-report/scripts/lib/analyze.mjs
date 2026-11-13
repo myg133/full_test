@@ -190,6 +190,20 @@ export function reconcile(plan, results) {
 }
 
 /**
+ * 提取计划里**待人工复核**的用例 id（供 md 点名用）。
+ *
+ * ⚠️ 这些 id **不进** `report.json`（报告的回归段字段集是冻结的）——
+ *    它们是**输入**（回归计划）的内容，md 渲染时直接从计划取。
+ * @param {object|null} plan 回归计划
+ * @returns {string[]} 待复核用例 id（按计划里的顺序，幂等）
+ */
+export function needsReviewCaseIds(plan) {
+  if (!isPlainObject(plan)) return [];
+  const list = Array.isArray(plan.needs_review) ? plan.needs_review.filter(isPlainObject) : [];
+  return list.map((entry) => String(entry.case_id));
+}
+
+/**
  * 推导三层结论与总体结论。
  * @param {object} counts 重算的计数
  * @param {object} evidence 实查结果
