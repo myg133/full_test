@@ -1,0 +1,39 @@
+{
+  "req": "REQ-007",
+  "branch": "demand",
+  "agent_id": "ba-local-ba",
+  "session_id": "mvs_744b60ef3d984cffbcd54448ac77bd8c",
+  "owner": "ba-local-ba",
+  "base_branch": "develop",
+  "created_at": "2026-11-13T17:10:00+08:00",
+  "demand_dir": "BA/demands/REQ-002-suite-foundation/REQ-007-defect-verify",
+  "criteria_count": 29,
+  "criteria_range": "AC-001~AC-029",
+  "criteria_groups": {
+    "A_交付物形状": 4,
+    "B_输入解析与缺陷单校验": 4,
+    "C_派生规则": 6,
+    "D_复现用例形状与可执行": 5,
+    "E_诚实性": 4,
+    "F_幂等与只读": 3,
+    "G_轮次与组合门": 3
+  },
+  "decision_range": "D72~D96",
+  "decision_count": 25,
+  "decision_range_note": "实现侧追溯范围 = decisions.md 的实际 D 集合（D72~D96）。D72~D96 裁定的是**契约语义**（输入合法性两层划分、归一化口径、编号段、写入权口径、追溯范围动态取等），直接约束实现侧行为 ⇒ 全部在实现侧追溯范围内。门侧 AC-029 ③ 按此做「取值唯一」核，**动态取** decisions.md，不写死。",
+  "acceptance_script": "verify-acceptance.sh",
+  "acceptance_script_sha256": "961ed0db5608733f8fd9739b817e636d2ac53e7c709574f93cb21a0d09b57e12",
+  "acceptance_script_env": {
+    "QA007_SCRIPT_SHA": "期望的脚本自身 sha256；不匹配即 0 PASS / 1 FAIL 退出",
+    "REQ007_NO_MUT": "1 = 跳过变异体套件（快跑 / 嵌套运行用）",
+    "QA007_KEEP_WORK": "1 = 保留工作目录（调试）",
+    "QA007_WORK_ROOT": "工作目录的父目录（默认 ${TMPDIR:-/tmp}）"
+  },
+  "target_package": "feature-REQ-007",
+  "target_branch": "feature/REQ-007",
+  "mutations": {
+    "positive_controls": 5,
+    "negative_control": 1,
+    "detection_metric": "新增失败键（变异运行的失败键 减去 基线失败键；基线失败键只取 ^FAIL 行，不用对称差）"
+  }
+}
