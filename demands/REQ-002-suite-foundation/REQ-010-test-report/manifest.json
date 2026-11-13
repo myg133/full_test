@@ -8,6 +8,6 @@
   "created_at": "2026-11-13T10:10:00+08:00",
   "demand_dir": "BA/demands/REQ-002-suite-foundation/REQ-010-test-report",
   "criteria_count": 29,
-  "decision_range": "D48~D70",
-  "decision_range_note": "D48~D70 = 实现侧追溯范围（AC-028 ③ 按此做「取值唯一」核）；D71 是验收期的门侧裁定，不在实现侧追溯范围内"
+  "decision_range": "D48~D71",
+  "decision_range_note": "实现侧追溯范围 = decisions.md 的实际 D 集合（D48~D71）。D71 是验收期对**契约语义**的裁定（AC-016「点名 = 待复核语境」、F4.2 词表为别名表、AC-028③ 取值唯一等），直接约束实现侧行为，故在实现侧追溯范围内；AC-028 ③ 按此做「取值唯一」核"
 }

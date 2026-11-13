@@ -422,7 +422,7 @@ $FX/ART/
 
 ### AC-028: 交付侧记账必须与实际一致
 - **前置条件**: 被验包目录 + `feature-meta/test-report/` 追溯件
-- **测试步骤**: ① `feature-meta/test-report/` 下 `status.md` / `traceability.md` / `verification-report.md` / `manifest.json` 四件齐全且非空；② `traceability.md` 的**追溯矩阵行数**与本文件判据条数（**29**）相等，且编号集合恰为 AC-001~AC-029；③ 三份 md 记载的判据条数与决策号范围必须**取值唯一** —— 同一 md 里出现的判据条数**取值集合** == {实际条数}、决策号范围**取值集合** == {D48~D70}；同一取值被重复引用**不算**多处记载，出现**第二个不同取值**才判红并点名；④ 决策号范围固定为 **D48~D70**（**实现侧**追溯范围；验收期追加的**门侧裁定**不在实现侧追溯范围内）；⑤ **`feature-meta/test-report/manifest.json`** 的 `req` 为 `REQ-010`
+- **测试步骤**: ① `feature-meta/test-report/` 下 `status.md` / `traceability.md` / `verification-report.md` / `manifest.json` 四件齐全且非空；② `traceability.md` 的**追溯矩阵行数**与本文件判据条数（**29**）相等，且编号集合恰为 AC-001~AC-029；③ 三份 md 记载的判据条数与决策号范围必须**取值唯一** —— 同一 md 里出现的判据条数**取值集合** == {实际条数}、决策号范围**取值集合** == {`decisions.md` 的实际 D 集合}；同一取值被重复引用**不算**多处记载，出现**第二个不同取值**才判红并点名；④ 决策号范围 == `decisions.md` 的实际 D 集合（当前 **D48~D71**；验收期对**契约语义**的裁定同样约束实现侧，故在实现侧追溯范围内 —— 交付侧记账停在 D48~D70 属于**记账不诚实**）；⑤ **`feature-meta/test-report/manifest.json`** 的 `req` 为 `REQ-010`
 - **预期结果**: 五项全满足；任一不符 → 判红并点名
 - **判据形式**: 查绝对事实（追溯件的实际内容 vs 契约的实际内容）；**不得**改写 REQ-011 / REQ-006 的既有追溯件（`feature-meta/` **根目录**四件套与 `feature-meta/regression-plan/` 子目录必须**逐字节未变**（sha256 钉版）—— 包括根 `feature-meta/manifest.json` 的 `req` 仍是 `REQ-006`、`feature-meta/regression-plan/manifest.json` 的 `req` 仍是 `REQ-011`）
 - **类型**: 追溯

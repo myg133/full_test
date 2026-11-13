@@ -1874,12 +1874,13 @@ if [ -s "$TR_META/traceability.md" ]; then
   [ "$MATRIX_IDS" = "$EXPECT_IDS" ] || A28_PROBLEMS="$A28_PROBLEMS [追溯矩阵的 AC 编号集合=[$MATRIX_IDS]，要求恰好 [$EXPECT_IDS]]"
 fi
 # F-20（C-G）：三份 md 的判据条数与决策号范围必须是**取值唯一** ——
-#   判据条数的**取值集合** == {实际条数}；决策号范围的**取值集合** == {D48~D70}；
+#   判据条数的**取值集合** == {实际条数}；决策号范围的**取值集合** == {decisions.md 的实际 D 集合}；
 #   同一取值被重复引用**不算**多处记载；出现**第二个不同取值**才判红（并点名）。
-#   ⚠️ 实现侧的追溯范围固定为 D48~D70；验收期追加的门侧裁定（如 D71）不在实现侧追溯范围内。
-EXPECT_DEC_MIN=48
-EXPECT_DEC_MAX=70
-EXPECT_DEC_SET="$(seq "$EXPECT_DEC_MIN" "$EXPECT_DEC_MAX" | sed 's/^/D/' | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
+# ⚠️ 决策号集合**动态取 decisions.md**（不写死）：验收期的 D71 是对**契约语义**的裁定
+#   （AC-016「点名 = 待复核语境」、F4.2 词表是别名表、AC-028③ 取值唯一……），
+#   它直接约束实现侧行为 → 实现侧的追溯范围必须含 D71（当前 D48~D71）。
+#   写死 D48~D70 会同时：① 丢掉「决策号集合变了能被发现」的能力；② 让交付侧的追溯记账不诚实。
+EXPECT_DEC_SET="$DEC_SET"
 for f in status.md traceability.md verification-report.md; do
   if [ ! -s "$TR_META/$f" ]; then continue; fi
   NUMSET="$(grep -oE '[0-9]+[[:space:]]*条判据' "$TR_META/$f" 2>/dev/null | grep -oE '[0-9]+' | sort -u | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
@@ -1901,8 +1902,8 @@ console.log([...set].sort((x,y)=>Number(x.slice(1))-Number(y.slice(1))).join(" "
 ' "$TR_META/$f" 2>/dev/null)"
   [ "$MDS" = "$EXPECT_DEC_SET" ] || A28_PROBLEMS="$A28_PROBLEMS [$f 的决策号取值集合=[$MDS]，要求恰好 {${EXPECT_DEC_SET}}（出现第二个不同取值即判红）]"
 done
-printf '  · 实现侧追溯范围钉版: D%s~D%s（decisions.md 的实际集合=[%s]；验收期追加的**门侧裁定**不在实现侧追溯范围内）\n' \
-  "$EXPECT_DEC_MIN" "$EXPECT_DEC_MAX" "$DEC_SET"
+printf '  · 实现侧追溯范围: 取 decisions.md 的实际决策号集合=[%s]（取值唯一；重复引用同一取值不算多处记载）\n' \
+  "$EXPECT_DEC_SET"
 if [ -z "$A28_PROBLEMS" ]; then ok "$A28" "$A28"; else bad "$A28" "$A28"; printf '  · %s\n' "$A28_PROBLEMS" >> "$RES_DIR/$A28.res"; fi
 
 step "AC-029 组合门必须覆盖第 5 个 skill"
