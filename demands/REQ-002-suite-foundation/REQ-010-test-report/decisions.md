@@ -22,6 +22,10 @@
 | D63 | 漏跑判定中 `skipped` 的处理：算「执行过判定」但不算「跑通」 | 已采纳 |
 | D64 | 指纹必须**重算**，不得只抄 `meta.json` 的记录值 | 已采纳 |
 | D65 | 「先自测门、再派 Dev」的流程改进（来自 REQ-011 的教训） | 已采纳 |
+| D66 | md 必须带机器可读摘要行 `report-digest`（12 个必需键） | 已采纳 |
+| D67 | 「数字不得凭空」用键集白名单 + 逐字段重算判，不用「扫描 md 全部数字」 | 已采纳 |
+| D68 | 报告的字段形状**固定**，判据引用 F3 而不是「schema 说什么就查什么」 | 已采纳 |
+| D69 | 证据层结论必须**结构化**呈现（`evidence.findings[]`），不靠散文 | 已采纳 |
 
 ---
 
@@ -261,3 +265,31 @@ REQ-011 已裁定二者**解耦**（L-4：`cycle_id` 由输入派生，AC-020 �
 **附带口径**（避免歧义）：`regression.needs_review_executed` 是**数字**（交集条数），
 不是数组；`regression.selected_missing` 才是数组。`cases.duration_ms_total` 是
 `cases` 段的第 6 个键（各条 `duration_ms` 之和）。
+
+## D69　证据层结论必须**结构化**呈现（`evidence.findings[]`），不靠散文
+
+**背景**：AC-020（证据被改）与 AC-021（`meta` 计数造假）都要求"报告必须显示**具体原因**"，
+但 F3 最初的 `report.json` 里**没有任何字段承载这类结论** ——
+`evidence` 段只有 `files_present`/`files_missing`/`missing_paths`，
+放不下"计数造假"和"指纹不符"。于是这两条判据只能落到 md 的散文上。
+
+**问题**：散文判红有两个致命缺陷 ——
+① **不可靠**：「meta 记录的用例数与实际不符」可以写成 20 种措辞，
+门要么逐字匹配（假阳性满天飞），要么放得过宽（变异体逃逸）；
+② **不可定位**：报告说"证据链有问题"，读者仍不知道是哪一条、差多少。
+
+**决策**：`report.json` 的 `evidence` 段增 `findings[]`，每条 `{kind, message}`：
+`kind` ∈ `missing_evidence` / `evidence_mismatch` / `count_mismatch` / `fingerprint_mismatch`；
+`message` 非空且**必须点名**（缺失路径 / 被改的证据路径 / 哪个计数 + meta 值 + 实际值）。
+`findings` 非空 ⇒ `evidence_layer == "fail"`；`report.md` 必须逐条渲染 `findings`。
+
+**理由**：这是 D66 在**证据层**的同构做法 —— 把"要说清楚"从散文约束变成**数据契约**。
+代价是 `report.json` 多一个字段（实现方要多写一段聚合逻辑）；
+换来的是 AC-020 / AC-021 从"散文措辞赛跑"变成**集合判定**。
+
+**附带**：AC-007 因此加严 —— 不只看 `missing_paths` 点名，还要 `findings` 里有
+`missing_evidence` 且 `message` 点名该路径。
+
+**口径消歧**：§0.6 的基线真值表把 `evidence.files_present`/`files_missing` 钉死为 `3`/`1`，
+并写明**不采用**"排除 blocked/skipped 的证据"那个口径 ——
+夹具把 `TC-003`（blocked）的证据文件**造出来**，就是为了让这两个数字只剩一种合理解释。

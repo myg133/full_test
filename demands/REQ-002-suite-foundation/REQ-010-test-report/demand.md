@@ -140,7 +140,10 @@ REQ-004 已经确立了"产物即证据"的纪律（`results_sha256` / `evidence
     "overall": "pass|fail|incomplete"       // 总体结论（见 F3.1）
   },
   "failures": [ /* 每条 failed/blocked 用例：case_id / title / status / error / reproduction / evidence */ ],
-  "evidence": { "files_present": 0, "files_missing": 0, "missing_paths": [] },
+  "evidence": {
+    "files_present": 0, "files_missing": 0, "missing_paths": [],
+    "findings": [ /* 证据层发现，每条 {kind, message}；kind ∈ missing_evidence|evidence_mismatch|count_mismatch|fingerprint_mismatch */ ]
+  },
   "regression": {                        // 未提供计划时为 null
     "selected_planned": 0, "selected_executed": 0, "selected_missing": [],
     "needs_review_planned": 0, "needs_review_executed": 0,
@@ -214,6 +217,14 @@ REQ-004 已经确立了"产物即证据"的纪律（`results_sha256` / `evidence
 2. **证据不自洽不出可信结论**：证据链校验失败时 `evidence_layer = "fail"`，`overall` 不得为 `pass`；md 必须显示校验失败的具体原因。
 3. **计数以重算为准**：`meta.json` 的五个计数与 `results.json` 实际分布不符 → 报告必须显示"计数不符"并判 `evidence_layer = "fail"`。
 4. **证据文件必须实查**：报告要**逐条核对** `evidence/` 下的文件是否存在（`results.json` 说了有不算数）；缺失必须列出路径。
+4.1 **证据层结论必须结构化**：证据层发现的每一件事都进 `evidence.findings[]`，每条含 `kind`（枚举）与非空 `message`：
+   - `missing_evidence` —— 证据文件**缺失**（`results.json` 声称有、文件实况没有）；
+   - `evidence_mismatch` —— 证据文件**存在但内容与记录不符**（实算 sha256 ≠ 记录值）；
+   - `count_mismatch` —— `meta.json` 的某个计数与 `results.json` 重算值**不符**（`message` 必须点名是哪个计数、meta 记的是多少、实际是多少）；
+   - `fingerprint_mismatch` —— 重算的 `results_sha256` / `evidence_manifest_sha256` 与 `meta.json` 记录值**不符**。
+
+   `findings` 非空 ⇒ `evidence_layer == "fail"`。**md 必须渲染 `findings`**（逐条出现 `kind` 与 `message`）——
+   散文里"证据链校验失败"这种笼统措辞**不算**呈现。
 5. **不编造**：报告里的每个数字都能从输入产物重算；`reproduction` 逐字取自 `results.json`，**不得改写或摘要失真**。
 6. **报告自身可核**：自带 `report_sha256`，且**绑定**输入产物的两个指纹。
 

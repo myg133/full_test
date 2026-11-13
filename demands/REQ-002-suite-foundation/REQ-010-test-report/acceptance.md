@@ -123,6 +123,35 @@ $FX/ART/
 2. **TC-004 是 `skipped`** —— 它的 `evidence` 必须是**空数组**、且**不得**出现在 `selected` 里。
 3. **TC-006 只在计划里、不在执行产物里** —— 这是漏跑用例的**唯一**来源；不得让 `selected` 里的其它用例也缺跑（否则「漏跑点名」这一条就分不清是漏了 TC-006 还是漏了别的）。
 
+### §0.6 基线真值表（夹具跑出来的**唯一**正确结论）
+
+门与实现都以此为准。**给了计划**时：
+
+| 字段 | 真值 | 来源 |
+|---|---|---|
+| `cases.total` / `passed` / `failed` / `blocked` / `skipped` | `5` / `2` / `1` / `1` / `1` | 从 `results.json` 重算（**不是** `meta.json` 的 6/2/1/1/2） |
+| `verdict.case_layer` | `fail` | 有 failed |
+| `verdict.evidence_layer` | `fail` | `findings` 非空（见下） |
+| `verdict.regression_layer` | `fail` | `selected_missing` 非空 |
+| `verdict.overall` | `fail` | F3.1：有 failed ⇒ fail |
+| `failures[]` 的 case_id | `["TC-002","TC-003"]` | failed + blocked |
+| `evidence.missing_paths` | `["evidence/TC-005/step-1-response.json"]` | 实查 |
+| `evidence.files_present` / `files_missing` | `3` / `1` | 实查（口径见下方注） |
+| `evidence.findings[]` 的 `kind` 集合 | 至少含 `missing_evidence` 与 `count_mismatch` | TC-005 缺失 + meta 计数不符 |
+| `regression.selected_planned` / `selected_executed` | `3` / `2` | 计划 3 条，执行命中 2 条 |
+| `regression.selected_missing` | `["TC-006"]` | 差集 |
+| `regression.needs_review_planned` / `needs_review_executed` | `1` / `1` | TC-003 命中 |
+| `regression.undecidable_changes` | 恰 1 条，`change_id == "C-3"`，`reason` 逐字等于计划里的 reason | 原样搬运 |
+| `regression.impact_complete` | `false` | 取自计划 |
+
+**不给计划**时：`regression == null`、`regression_layer == "not_applicable"`，其余同上。
+
+⚠️ `files_present` 的口径：`results.json` 声称的证据条目里**实查存在**的份数（`TC-001` 1 份 + `TC-002` 1 份 + `TC-003` 1 份 = **3**），
+`files_missing` = 声称的证据条目里**实查缺失**的份数（`TC-005` = **1**）。
+⚠️ 这里刻意留了**口径分歧空间**：`TC-003`（blocked）的证据文件**存在**，所以无论按"声称条数"还是"实存条数"算，
+`files_present` 都是 3 —— 唯一能让它变成 2 的口径是"排除 blocked/skipped 的证据"，本 REQ **不采用**那个口径。
+（夹具把 `TC-003` 的证据文件造出来，就是为了消掉这个歧义；实现方不得自行改口径。）
+
 ---
 
 ## A 组：交付物形状（AC-001 ~ AC-004）
@@ -175,8 +204,8 @@ $FX/ART/
 
 ### AC-007: 证据文件必须实查（不信 `results.json` 的自述）
 - **前置条件**: §0.1 的执行产物目录（`TC-005` 的证据文件**故意缺失**）
-- **测试步骤**: 逐条遍历 `results.json` 的 `evidence[]`，检查每个 `path` 相对产物目录**真实存在**且 sha256 与记录一致；统计存在/缺失数
-- **预期结果**: 报告的 `evidence.missing_paths` 必须**点名** `evidence/TC-005/step-1-response.json`；缺失数 ≥ 1；缺失文件必须影响 `evidence_layer`（不得判 `pass`）
+- **测试步骤**: 逐条遍历 `results.json` 的 `evidence[]`，检查每个 `path` 相对产物目录**真实存在**且 sha256 与记录一致；检查 `report.json` 的 `evidence.missing_paths`、`evidence.files_present`、`evidence.files_missing`、`evidence.findings[]`
+- **预期结果**: `missing_paths` 必须**点名** `evidence/TC-005/step-1-response.json`；`files_missing == 1`、`files_present == 3`；`findings[]` 至少含一条 `kind == "missing_evidence"` 且其 `message` 非空、**点名该缺失路径**；`evidence_layer` 必须为 `fail`（不得判 `pass`）
 - **判据形式**: 查绝对事实（文件系统实况）；探针：让实现只信 `results.json` 的自述、不查文件 → 本条判红
 - **类型**: 功能
 
@@ -221,7 +250,7 @@ $FX/ART/
 
 ### AC-013: `report.json` 的必填字段集必须完整
 - **前置条件**: 同上
-- **测试步骤**: ① `references/report-schema.md` 必须存在且非空，其中**必须列出** `demand.md` F3 声明的必填字段清单（**缺一个 → 判红**，不得"schema 里没写就不查"）；② 逐个检查 `report.json` 的**路径**存在、类型正确：`schema_version`（number）、`generated_at`（string）、`source.{artifacts,run_id,suite,requirement,environment,started_at,finished_at,results_sha256,evidence_manifest_sha256,regression_plan}`（string；`regression_plan` 未给计划时为 `null`）、`cases.{total,passed,failed,blocked,skipped,duration_ms_total}`（number）、`verdict.{case_layer,evidence_layer,regression_layer,overall}`（string 且取值在枚举内：`case_layer ∈ {pass,fail,incomplete}`、`evidence_layer ∈ {pass,fail,unknown}`、`regression_layer ∈ {pass,fail,incomplete,not_applicable,unknown}`、`overall ∈ {pass,fail,incomplete}`）、`failures[]` 每项含 `case_id`/`title`/`status`/`error`/`reproduction`/`evidence`、`evidence.{files_present,files_missing,missing_paths}`（前两个 number，第三个 string[]）、`regression`（给计划时为对象，含 `selected_planned`/`selected_executed`/`needs_review_planned`/`needs_review_executed`（number）、`selected_missing`（string[]）、`undecidable_changes`（对象数组，每项含 `change_id`/`reason`）、`impact_complete`（boolean）；未给计划时为 `null`）、`report_sha256`（64 位 hex）；③ `references/report-schema.md` 里必须写明 `report_sha256` 的**规范化口径**（剔除 `generated_at` 与 `report_sha256` 后的稳定序列化方式），否则 AC-010 无法核
+- **测试步骤**: ① `references/report-schema.md` 必须存在且非空，其中**必须列出** `demand.md` F3 声明的必填字段清单（**缺一个 → 判红**，不得"schema 里没写就不查"）；② 逐个检查 `report.json` 的**路径**存在、类型正确：`schema_version`（number）、`generated_at`（string）、`source.{artifacts,run_id,suite,requirement,environment,started_at,finished_at,results_sha256,evidence_manifest_sha256,regression_plan}`（string；`regression_plan` 未给计划时为 `null`）、`cases.{total,passed,failed,blocked,skipped,duration_ms_total}`（number）、`verdict.{case_layer,evidence_layer,regression_layer,overall}`（string 且取值在枚举内：`case_layer ∈ {pass,fail,incomplete}`、`evidence_layer ∈ {pass,fail,unknown}`、`regression_layer ∈ {pass,fail,incomplete,not_applicable,unknown}`、`overall ∈ {pass,fail,incomplete}`）、`failures[]` 每项含 `case_id`/`title`/`status`/`error`/`reproduction`/`evidence`、`evidence.{files_present,files_missing,missing_paths,findings}`（前两个 number，`missing_paths` 为 string[]，`findings` 为对象数组，每项含 `kind`（枚举 `missing_evidence`/`evidence_mismatch`/`count_mismatch`/`fingerprint_mismatch`）与非空 `message`）、`regression`（给计划时为对象，含 `selected_planned`/`selected_executed`/`needs_review_planned`/`needs_review_executed`（number）、`selected_missing`（string[]）、`undecidable_changes`（对象数组，每项含 `change_id`/`reason`）、`impact_complete`（boolean）；未给计划时为 `null`）、`report_sha256`（64 位 hex）；③ `references/report-schema.md` 里必须写明 `report_sha256` 的**规范化口径**（剔除 `generated_at` 与 `report_sha256` 后的稳定序列化方式），否则 AC-010 无法核
 - **预期结果**: ①②③ 全满足；缺字段、类型错、枚举越界或 schema 未列出 F3 字段 → 判红并点名缺哪个
 - **判据形式**: 查绝对事实（按 F3 的固定字段清单逐字段核 + schema 文档实查）；探针：让实现删掉 `verdict.evidence_layer` 字段 → 本条判红
 - **类型**: 功能
@@ -279,16 +308,16 @@ $FX/ART/
 - **类型**: 诚实性
 
 ### AC-020: 证据链不自洽不得出可信结论
-- **前置条件**: 把 `$FX/ART` 复制一份，在副本里把某个**证据文件的内容改掉**（不改 `results.json` 里的 sha256）⇒ 证据链自校验必然失败
-- **测试步骤**: 跑 `make-report.mjs --artifacts <被篡改的副本>`；检查 `verdict.evidence_layer`、`verdict.overall`、`report.md` 的失败原因
-- **预期结果**: `evidence_layer == "fail"`；`overall != "pass"`；`report.md` 必须显示**具体原因**（证据被改动 / 证据丢失 / 指纹不符 / 计数造假 —— 点名是哪一类），不得只写"证据链校验失败"
+- **前置条件**: 把 `$FX/ART` 复制一份，在副本里把某个**证据文件的内容改掉**（`TC-002` 的 `evidence/TC-002/step-1-response.json`，**不改 `results.json` 里的 sha256**）⇒ 该证据的实算 sha256 与记录值不符
+- **测试步骤**: 跑 `make-report.mjs --artifacts <被篡改的副本>`；检查 `verdict.evidence_layer`、`verdict.overall`、`report.json` 的 `evidence.findings[]`、`report.md`
+- **预期结果**: `evidence_layer == "fail"`；`overall != "pass"`；`evidence.findings[]` 至少含一条 `kind ∈ {"evidence_mismatch","fingerprint_mismatch"}`，其 `message` **点名被篡改的证据路径**（含 `TC-002` 与该文件名）或点名"指纹不符"；`report.md` 必须出现该条 `message` 的**关键片段**（路径片段或 `kind` 名）—— 只写"证据链校验失败"**不算**
 - **判据形式**: 查绝对事实（真实退出码 + 报告内容）；探针：让实现跳过证据链校验（假定产物可信）→ 本条判红
 - **类型**: 诚实性
 
 ### AC-021: `meta.json` 计数与 `results.json` 不符必须被发现
 - **前置条件**: §0.1 的夹具（**故意**：`meta` 写 6/2/1/1/2，实际是 5/2/1/1/1）
-- **测试步骤**: 跑 `make-report.mjs --artifacts $FX/ART`；检查 `verdict.evidence_layer` 与 `report.md`
-- **预期结果**: 报告必须**显示计数不符**（点名 `meta` 的哪个计数与实际不符）；`evidence_layer == "fail"`（或至少 `overall != "pass"`）；但 `cases.*` 仍必须按 `results.json` 重算（AC-005 的真值 5/2/1/1/1）
+- **测试步骤**: 跑 `make-report.mjs --artifacts $FX/ART`；检查 `verdict.evidence_layer`、`evidence.findings[]`、`report.md`
+- **预期结果**: `evidence.findings[]` 至少含一条 `kind == "count_mismatch"`，其 `message` **点名是哪个计数**（含 `cases_total` 或"总数"字样）**且同时含 meta 记的值 `6` 与重算真值 `5`**；`evidence_layer == "fail"`（或至少 `overall != "pass"`）；`report.md` 必须出现该条 `message` 的关键片段；但 `cases.*` 仍必须按 `results.json` 重算（AC-005 的真值 5/2/1/1/1）
 - **判据形式**: 查绝对事实；探针：让实现完全无视 `meta` 的计数差异（既不报也不判失败）→ 本条判红
 - **类型**: 诚实性
 

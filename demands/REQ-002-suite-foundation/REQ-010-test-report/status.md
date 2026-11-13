@@ -11,7 +11,7 @@
 | 项 | 状态 |
 |---|---|
 | 需求文档 | 完成（`demand.md`：三层结论模型 / 输出契约 / 回归对账 / 诚实性红线） |
-| 决策记录 | 完成（D48~D65，共 **18 条**） |
+| 决策记录 | 完成（D48~D69，共 **22 条**） |
 | 验收标准 | 完成（AC-001~AC-029，共 **29 条**，自包含） |
 | 验收脚本 | **编写中**（目标：29 条判据 + ≥4 个变异体套件 + sha 钉版自检） |
 | 门的自测 | **未开始**（D65：先自测门、再派 Dev） |
@@ -36,7 +36,7 @@
 | 验收脚本 | `verify-acceptance.sh`（本目录，**待写**） |
 | 当前 sha256 | （待定） |
 | 契约判据 | `acceptance.md`（AC-001~AC-029，共 **29 条**） |
-| 决策记录 | `decisions.md`（D48~D65） |
+| 决策记录 | `decisions.md`（D48~D69） |
 | 被验对象 | `<package>/skills/test-report/` + `<package>/bin/verify-suite.mjs` |
 
 ## 关键设计要点（供 Dev 参考）
@@ -51,4 +51,7 @@
 - **幂等**：除 `generated_at` 外逐字相同（D58）
 - **回归对账可选**：不给计划不编造（D52）；`needs_review` 非空 → 回归层不得 pass（D53）；`impact_complete=false` → overall 不得 pass（D54）
 - **不得假定 `cycle_id` == 轮次目录名**（D61，承接 REQ-011 L-4）
+- **证据层结论结构化**：`evidence.findings[]`（`kind` + `message`）承载证据层的每一条发现（D69）——
+  md 散文不承担这个责任（AC-007 / AC-020 / AC-021 全部基于 `findings[]` 判定）
+- **md 必须带 `report-digest` 摘要行**（12 个必需键）—— md 数字比对的唯一落点（D66）
 - **组合门必须装齐 5 个 skill**（D62）
