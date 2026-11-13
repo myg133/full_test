@@ -341,7 +341,7 @@ $FX/ART/
 - **前置条件**: §0.1 的执行产物 + §0.3 的计划（**须带 `--regression-plan $FX/PLAN`**）
 - **输入集合（判据自带，不从报告里取）**:
   - `IDS`（用例 id 集）= `results.json` 各条 `case_id` ∪ `plan.selected[].case_id` ∪ `plan.needs_review[].case_id` ∪ `plan.changes[].case_refs[]`
-  - `CHANGE_IDS`（变更 id 集）= `plan.changes[].change_id` ∪ `plan.undecidable_changes[].change_id`
+  - `CHANGE_IDS`（变更 id 集）= `plan.changes[].id` ∪ `plan.undecidable_changes[].change_id`（⚠️ `changes[]` 的字段名是 **`id`**，不是 `change_id` —— 与上游 `regression-plan-schema.md` 一致）
 - **测试步骤**:
   - ① **id 溯源（json 侧）**：`report.json` 的 `failures[].case_id` 每一个必须 ∈ `IDS`；`regression.selected_missing[]` 每一个必须 ∈ `plan.selected[].case_id`；`regression.undecidable_changes[].change_id` 每一个必须 ∈ `CHANGE_IDS`
   - ② **id 溯源（md 侧）**：从 `report.md` **全文**抽取所有形如 `[A-Za-z][A-Za-z0-9]*-\d+` 的 token，凡**看起来是用例 id**（前缀与 `results.json`/`plan` 里出现的用例 id 前缀相同，如 `TC-`）的必须 ∈ `IDS`；凡**看起来是变更 id**（前缀与 `plan.changes[].id` 前缀相同，如 `C-`）的必须 ∈ `CHANGE_IDS`
@@ -395,17 +395,22 @@ $FX/ART/
 
 ### AC-028: 交付侧记账必须与实际一致
 - **前置条件**: 被验包目录 + `feature-meta/test-report/` 追溯件
-- **测试步骤**: ① `feature-meta/test-report/` 下 `status.md` / `traceability.md` / `verification-report.md` / `manifest.json` 四件齐全且非空；② `traceability.md` 的**追溯矩阵行数**与本文件判据条数（**29**）相等，且编号集合恰为 AC-001~AC-029；③ 三份 md 各**恰一处**记载判据条数与决策号范围；④ 决策号范围与 `decisions.md` 的实际 D 集合一致；⑤ `feature-meta/manifest.json` 的 `req` 为 `REQ-010`
+- **测试步骤**: ① `feature-meta/test-report/` 下 `status.md` / `traceability.md` / `verification-report.md` / `manifest.json` 四件齐全且非空；② `traceability.md` 的**追溯矩阵行数**与本文件判据条数（**29**）相等，且编号集合恰为 AC-001~AC-029；③ 三份 md 各**恰一处**记载判据条数与决策号范围；④ 决策号范围与 `decisions.md` 的实际 D 集合一致（**D48~D69**）；⑤ **`feature-meta/test-report/manifest.json`** 的 `req` 为 `REQ-010`
 - **预期结果**: 五项全满足；任一不符 → 判红并点名
-- **判据形式**: 查绝对事实（追溯件的实际内容 vs 契约的实际内容）；**不得**改写 REQ-011 / REQ-006 的既有追溯件（`feature-meta/` 根目录四件套与 `feature-meta/regression-plan/` 子目录必须**逐字未变**）
+- **判据形式**: 查绝对事实（追溯件的实际内容 vs 契约的实际内容）；**不得**改写 REQ-011 / REQ-006 的既有追溯件（`feature-meta/` **根目录**四件套与 `feature-meta/regression-plan/` 子目录必须**逐字未变** —— 包括根 `feature-meta/manifest.json` 的 `req` 仍是 `REQ-006`、`feature-meta/regression-plan/manifest.json` 的 `req` 仍是 `REQ-011`）
 - **类型**: 追溯
+- **说明**: ⑤ 指的是**本 REQ 自己的** `feature-meta/test-report/manifest.json`；
+  根 `feature-meta/manifest.json` 属于 REQ-006 的既有追溯件，**必须逐字未变** —— 两者不是同一个文件。
 
 ### AC-029: 组合门必须覆盖第 5 个 skill
-- **前置条件**: 被验包目录 + REQ-011 交付的组合门（`bin/test-agent-skills.mjs verify`）
-- **测试步骤**: 跑组合门，检查：① 临时根**装齐 5 个 skill**（含 `test-report`）；② 依赖图校验通过；③ 跨 skill 组合场景**实跑**并产出结果；④ 版本错配时**报版本问题**（不是下游业务错）
-- **预期结果**: 四项全满足；漏装 `test-report` → 判红；组合场景没真跑（只是查文件存在）→ 判红
-- **判据形式**: 查绝对事实（组合门的真实退出码与输出）；探针：让组合门漏装 `test-report` → 本条判红
+- **前置条件**: 被验包目录 + REQ-011 交付的组合门（`bin/test-agent-skills.mjs verify` / `bin/verify-suite.mjs`）
+- **测试步骤**: 跑组合门，检查：① 临时根**装齐 5 个 skill**（含 `test-report`）；② 依赖图校验通过；③ 跨 skill 组合场景**实跑**并产出结果，且**至少有一条场景真的经过 `test-report`**（如「执行产物 → `make-report.mjs` → 三层结论」）；④ 版本错配时**报版本问题**（不是下游业务错）
+- **预期结果**: 四项全满足；漏装 `test-report` → 判红；组合场景没真跑（只是查文件存在）→ 判红；**组合场景里没有任何一条经过 `test-report`**（只装不跑）→ 判红
+- **判据形式**: 查绝对事实（组合门的真实退出码与输出）；探针：让组合门漏装 `test-report` → 本条判红；探针：让组合门装了 `test-report` 但**不跑任何经过它的场景** → 本条判红
 - **类型**: 功能
+- **说明**: ③ 是本条的**增量** —— REQ-011 交付的两个组合场景（offline 夹具、cycle-state → run-suite）都**不涉及** `test-report`；
+  「装齐 5 个」只是**装了**，不等于**用上了**。D62 要求组合门"自动覆盖第 5 个 skill"，
+  覆盖 = 至少有一条组合场景的**链路里真的跑过它**。
 
 ---
 

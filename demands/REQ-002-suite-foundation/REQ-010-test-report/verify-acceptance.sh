@@ -83,6 +83,10 @@ fi
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/qa-010-XXXXXX")"
 cleanup() {
   # ⚠️ 本机 rm 是 shim（可恢复删除）：清理失败**不得**改变判定，也不断言回收站为空。
+  if [ "${QA010_KEEP_WORK:-0}" = "1" ]; then
+    printf '[debug] 工作目录已保留: %s\n' "$WORK"
+    return 0
+  fi
   rm -rf "$WORK" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
@@ -132,6 +136,8 @@ cat > "$WORK/fingerprint.mjs" <<'FIXFP'
 // results 指纹 = 各结果行（按顺序）后再接各条结果的证据条目行；
 // 证据清单指纹 = 全部证据条目行连接。
 import { createHash } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 
 export const sha256Hex = (data) => createHash('sha256').update(data).digest('hex');
 
@@ -175,8 +181,6 @@ export function resultsFingerprint(results) {
 
 // 目录内容的 sha256 清单（用于被验实现指纹与副本前后比对）
 export function dirFingerprint(root) {
-  const fs = require('node:fs');
-  const path = require('node:path');
   const lines = [];
   const walk = (dir) => {
     let entries = [];
@@ -194,6 +198,11 @@ export function dirFingerprint(root) {
   walk(root);
   lines.sort();
   return lines.join('\n');
+}
+
+// 命令行用法: node fingerprint.mjs <dir> —— 打印该目录内容的 sha256 清单
+if (process.argv[1] && /fingerprint\.mjs$/.test(process.argv[1]) && process.argv[2]) {
+  process.stdout.write(`${dirFingerprint(process.argv[2])}\n`);
 }
 FIXFP
 
@@ -398,11 +407,11 @@ cat > "$WORK/mkfixture.mjs" <<'FIXMK'
 //    先在临时目录造出那个文件、算完指纹，再**移走**（move，不是 remove）。
 import fs from 'node:fs';
 import path from 'node:path';
-import { resultsFingerprint, evidenceManifestFingerprint } from './fingerprint.mjs';
+import { resultsFingerprint, evidenceManifestFingerprint, sha256Hex } from './fingerprint.mjs';
 
 const [artDir, planFile] = process.argv.slice(2);
 const ISO = '2026-11-13T00:00:00Z';
-const sha256 = (data) => require('node:crypto').createHash('sha256').update(data).digest('hex');
+const sha256 = sha256Hex;
 
 const BODIES = {
   'evidence/TC-001/step-1-response.json': '{\n  "status": 200,\n  "case": "TC-001"\n}\n',
@@ -510,12 +519,14 @@ for (const p of Object.keys(BODIES)) {
   fs.mkdirSync(path.join(artDir, path.dirname(p)), { recursive: true });
   fs.writeFileSync(path.join(artDir, p), BODIES[p]);
 }
-// TC-005：先造出来算指纹（内容已定），再**移走**（move，不是 remove）—— 文件实况必须不存在。
+// TC-005：先在**证据路径上**真的造出那个文件（内容已定，指纹算得出），
+//          再用 **move（rename，不是 remove）** 把它移出产物目录 —— 文件实况必须不存在。
 const stash = path.join(artDir, '..', 'stash-TC-005');
 fs.mkdirSync(stash, { recursive: true });
-fs.writeFileSync(path.join(stash, 'step-1-response.json'), BODIES['evidence/TC-005/step-1-response.json']);
-fs.renameSync(path.join(stash, 'step-1-response.json'), path.join(stash, 'step-1-response.json.moved'));
-fs.rmdirSync(stash);
+const tc005 = path.join(artDir, 'evidence', 'TC-005', 'step-1-response.json');
+fs.mkdirSync(path.dirname(tc005), { recursive: true });
+fs.writeFileSync(tc005, BODIES['evidence/TC-005/step-1-response.json']);
+fs.renameSync(tc005, path.join(stash, 'step-1-response.json'));
 
 fs.writeFileSync(path.join(artDir, 'logs', 'runner.log'), 'mock runner log\n');
 fs.writeFileSync(path.join(artDir, 'meta.json'), `${JSON.stringify(meta, null, 2)}\n`);
@@ -753,21 +764,24 @@ const selectedMissing = Array.isArray(reg.selected_missing) ? reg.selected_missi
       'verdict.case_layer', 'verdict.evidence_layer', 'verdict.regression_layer', 'verdict.overall',
       'source.results_sha256', 'source.evidence_manifest_sha256', 'report_sha256'];
     for (const k of REQUIRED) if (!seen.has(k)) problems.push(`摘要缺必需键 ${k}`);
-    // ④ 正文关键数字（标签 + 数字 + 单位的机械口径；不用「扫描全部阿拉伯数字」）
+    // ④ 正文关键数字（对齐 demand.md F4.2 的标签词汇表）：
+    //    标签 + 数字（标签与数字之间**不得**夹中文；单位 条/个/项 **可省略**）。
+    //    ⚠️ 标签与数字之间的「间隔」里**不允许**出现字母/数字（否则「漏跑：TC-006（1 条）」里的
+    //    「006」会被当成漏跑条数 —— 那是误判）。这种写法按「未呈现」处理（不判红，只是不计入呈现数）。
     const BODY = md.replace(/<!--\s*report-digest:[^\n]*?-->/g, '');
     const METRICS = [
-      { key: 'cases.total', expect: counts.total, label: '(总用例|用例总数|总数|共计|总计)' },
-      { key: 'cases.passed', expect: counts.passed, label: '(通过)' },
-      { key: 'cases.failed', expect: counts.failed, label: '(失败)' },
-      { key: 'cases.blocked', expect: counts.blocked, label: '(阻塞|阻断)' },
-      { key: 'cases.skipped', expect: counts.skipped, label: '(跳过)' },
-      { key: 'regression.selected_missing', expect: selectedMissing.length, label: '(漏跑|未执行|未跑)' },
-      { key: 'regression.needs_review_planned', expect: Number(reg.needs_review_planned || 0), label: '(待复核|需复核|人工复核)' },
-      { key: 'regression.undecidable_changes', expect: Array.isArray(reg.undecidable_changes) ? reg.undecidable_changes.length : 0, label: '(判不了|无法判定|不可判定)' },
+      { key: 'cases.total', expect: counts.total, label: '(?:用例总数|总数|共计|总计)' },
+      { key: 'cases.passed', expect: counts.passed, label: '(?:通过)' },
+      { key: 'cases.failed', expect: counts.failed, label: '(?:失败)' },
+      { key: 'cases.blocked', expect: counts.blocked, label: '(?:阻塞|阻断)' },
+      { key: 'cases.skipped', expect: counts.skipped, label: '(?:跳过)' },
+      { key: 'regression.selected_missing', expect: selectedMissing.length, label: '(?:漏跑|未执行|未跑)' },
+      { key: 'regression.needs_review_planned', expect: Number(reg.needs_review_planned || 0), label: '(?:待复核|需复核|人工复核)' },
+      { key: 'regression.undecidable_changes', expect: Array.isArray(reg.undecidable_changes) ? reg.undecidable_changes.length : 0, label: '(?:判不了|无法判定|不可判定)' },
     ];
     let presented = 0;
     for (const m of METRICS) {
-      const re = new RegExp(`${m.label}[^0-9A-Za-z\\u4e00-\\u9fa5]{0,10}?(\\d+)\\s*[条个项]`, 'g');
+      const re = new RegExp(`${m.label}[^0-9A-Za-z\\u4e00-\\u9fa5]{0,10}?(\\d+)\\s*[条个项]?`, 'g');
       const hits = [...BODY.matchAll(re)].map((x) => Number(x[1]));
       if (hits.length === 0) continue;
       presented += 1;
@@ -775,7 +789,7 @@ const selectedMissing = Array.isArray(reg.selected_missing) ? reg.selected_missi
         if (h !== m.expect) problems.push(`正文里「${m.key}」标签后的数字是 ${h}，与摘要的 ${m.expect} 不一致`);
       }
     }
-    if (presented < 4) problems.push(`正文只呈现了 ${presented}/8 个关键数字（标签+数字+单位的机械口径），要求至少 4 个`);
+    if (presented < 4) problems.push(`正文只呈现了 ${presented}/8 个关键数字（F4.2 标签词汇表口径），要求至少 4 个`);
   }
   emit('AC-011', problems.length === 0, problems.join('; ') || '摘要键齐全、逐字相等，正文关键数字与摘要一致');
 }
@@ -1149,8 +1163,10 @@ ART="$FX/ART"
 PLAN="$FX/PLAN/regression-plan.json"
 mkdir -p "$FX"
 FIXINFO="$(node "$WORK/mkfixture.mjs" "$ART" "$PLAN" 2>&1)"
-if [ -z "$FIXINFO" ]; then
+FIX_OK="$(printf '%s' "$FIXINFO" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const o=JSON.parse(s);console.log((o&&typeof o.results_sha256==="string"&&o.results_sha256.length===64)?"1":"0")}catch(e){console.log("0")}})')"
+if [ "${FIX_OK:-0}" != "1" ]; then
   echo "夹具生成失败 —— 不可判定，不判通过" >&2
+  printf '%s\n' "$FIXINFO" | head -5 >&2
   exit 1
 fi
 printf '夹具指纹（独立实现自算）: %s\n' "$FIXINFO"
@@ -1475,13 +1491,13 @@ process.stdout.write(JSON.stringify(o));
     M1="$(node -e '
 const fs=require("fs");
 let t=fs.readFileSync(process.argv[1],"utf8");
-if(process.argv[3]) t=t.split(process.argv[3]).join("<TS>");
+if(process.argv[2]) t=t.split(process.argv[2]).join("<TS>");
 process.stdout.write(t);
 ' "$ID1/report.md" "$TS1")"
     M2="$(node -e '
 const fs=require("fs");
 let t=fs.readFileSync(process.argv[1],"utf8");
-if(process.argv[3]) t=t.split(process.argv[3]).join("<TS>");
+if(process.argv[2]) t=t.split(process.argv[2]).join("<TS>");
 process.stdout.write(t);
 ' "$ID2/report.md" "$TS2")"
     if [ "$M1" != "$M2" ]; then
@@ -1805,10 +1821,10 @@ SHIMEOF
     "AC-005"
   )
   MUT_CODE=(
-    "const b = report.cases.blocked; report.cases.passed = report.cases.passed + b; report.cases.blocked = 0;"
-    "report.regression.selected_missing = [];"
-    "report.verdict.overall = 'pass';"
-    "report.cases.total = 42;"
+    "if (report.cases) { const b = report.cases.blocked; report.cases.passed = report.cases.passed + b; report.cases.blocked = 0; }"
+    "if (report.regression) report.regression.selected_missing = [];"
+    "if (report.verdict) report.verdict.overall = 'pass';"
+    "if (report.cases) report.cases.total = 42;"
   )
   MUT_REQUIRED=4
 
