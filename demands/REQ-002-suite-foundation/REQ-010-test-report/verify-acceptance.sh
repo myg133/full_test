@@ -1863,12 +1863,12 @@ SHIMEOF
     #   ⚠️ 两种「无效」要分开说：入口脚本**不存在** = **实现未交付**（不是门侧问题）；
     #      入口存在但命中数 ≠ 1 = **门侧锚点不可达**（不唯一）。
     if [ ! -f "$ENTRY" ]; then
-      STATUS="无效变异（**实现缺失**：$ENTRY_REL 不存在 —— 变异体无法注入；这是实现未交付，不是门侧问题）"
+      STATUS="**实现缺失**：$ENTRY_REL 不存在 —— 变异体无法注入；这是实现未交付，不是门侧问题"
       MUT_MISSING_IMPL=1
     else
       HITS="$(node "$WORK/pkgfiles.mjs" "$MUTPKG" "$ENTRY_REL" 2>/dev/null | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log(JSON.parse(s).length)}catch(e){console.log(0)}})')"
       if [ "${HITS:-0}" -ne 1 ]; then
-        STATUS="无效变异（门侧锚点不可达：入口锚点命中 $HITS 次，要求恰好 1 次）"
+        STATUS="门侧锚点不可达：入口锚点命中 $HITS 次，要求恰好 1 次"
       fi
     fi
     # 自证 ②：产物里的锚点路径恰好出现 1 次（锚点 0 次或 >1 次即无效变异）
@@ -1876,22 +1876,22 @@ SHIMEOF
       ACNT="$(node "$WORK/pathcount.mjs" "$OUT_PLAN/report.json" "$ANCHOR" 2>/dev/null)"
       case "$ACNT" in ''|*[!0-9]*) ACNT=0 ;; esac
       if [ "$ACNT" -ne 1 ]; then
-        STATUS="无效变异（产物里的锚点路径 $ANCHOR 命中 $ACNT 次，要求恰好 1 次）"
+        STATUS="门侧锚点不可达：产物里的锚点路径 $ANCHOR 命中 $ACNT 次，要求恰好 1 次"
       fi
     fi
     # 注入：把入口脚本换成包装层（原实现 move 到 make-report.real.mjs）
     if [ "$STATUS" = "有效" ]; then
       BEFORE_SHA="$(sha256sum "$ENTRY" 2>/dev/null | cut -d' ' -f1)"
-      inject_shim "$MUTPKG" "$CODE" || STATUS="无效变异（包装层注入失败）"
+      inject_shim "$MUTPKG" "$CODE" || STATUS="包装层注入失败"
       AFTER_SHA="$(sha256sum "$ENTRY" 2>/dev/null | cut -d' ' -f1)"
       if [ "$STATUS" = "有效" ]; then
         if [ -z "$BEFORE_SHA" ] || [ "$BEFORE_SHA" = "$AFTER_SHA" ]; then
-          STATUS="无效变异（注入前后 sha256 没变）"
+          STATUS="注入前后 sha256 没变（注入未生效）"
         fi
       fi
       # 自证 ③：结构合法（node --check 通过 + 脚本能正常跑完）
       if [ "$STATUS" = "有效" ]; then
-        node --check "$ENTRY" >/dev/null 2>&1 || STATUS="无效变异（变异后 node --check 不通过）"
+        node --check "$ENTRY" >/dev/null 2>&1 || STATUS="变异后 node --check 不通过"
       fi
       if [ "$STATUS" = "有效" ]; then
         MUTART="$WORK/mutart-$i"
@@ -1901,7 +1901,7 @@ SHIMEOF
         node "$ENTRY" --artifacts "$MUTART" --regression-plan "$PLAN" --out-dir "$MUTOUT" >/dev/null 2>&1
         MRC=$?
         if [ "$MRC" -ne 0 ] || [ ! -s "$MUTOUT/report.json" ]; then
-          STATUS="无效变异（变异后脚本没正常跑完：rc=$MRC）—— 崩溃造成的判红是假检出"
+          STATUS="变异后脚本没正常跑完：rc=$MRC —— 崩溃造成的判红是假检出"
         fi
       fi
     fi
@@ -1932,14 +1932,14 @@ SHIMEOF
   cp -r "$PKG"/. "$CTRLPKG"/ 2>/dev/null
   CTRL_STATUS="有效"
   if [ ! -f "$CTRLPKG/skills/test-report/scripts/make-report.mjs" ]; then
-    CTRL_STATUS="无效变异（**实现缺失**：skills/test-report/scripts/make-report.mjs 不存在 —— 变异体无法注入；这是实现未交付，不是门侧问题）"
+    CTRL_STATUS="**实现缺失**：skills/test-report/scripts/make-report.mjs 不存在 —— 变异体无法注入；这是实现未交付，不是门侧问题"
     MUT_MISSING_IMPL=1
   elif ! inject_shim "$CTRLPKG" "report.meta_note = 'mutant-control';"; then
-    CTRL_STATUS="无效变异（包装层注入失败）"
+    CTRL_STATUS="包装层注入失败"
   fi
   if [ "$CTRL_STATUS" = "有效" ]; then
     node --check "$CTRLPKG/skills/test-report/scripts/make-report.mjs" >/dev/null 2>&1 \
-      || CTRL_STATUS="无效变异（变异后 node --check 不通过）"
+      || CTRL_STATUS="变异后 node --check 不通过"
   fi
   if [ "$CTRL_STATUS" = "有效" ]; then
     CTRLOUT="$WORK/ctrlout"
@@ -1948,7 +1948,7 @@ SHIMEOF
       --out-dir "$CTRLOUT" >/dev/null 2>&1
     CRC=$?
     if [ "$CRC" -ne 0 ] || [ ! -s "$CTRLOUT/report.json" ]; then
-      CTRL_STATUS="无效变异（变异后脚本没正常跑完：rc=$CRC）"
+      CTRL_STATUS="变异后脚本没正常跑完：rc=$CRC"
     fi
   fi
   if [ "$CTRL_STATUS" != "有效" ]; then
