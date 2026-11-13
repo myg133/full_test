@@ -165,7 +165,8 @@ R1/R2 执行完会产出失败用例，报告（`test-report`）会把它们列�
 
 #### F2.2 `case_refs` 分支
 
-- `case_refs` **非空** → 逐个在**传入的用例集**（`cases.json`）里找；
+- `case_refs` **非空** → **先按 id 去重**（D97：同一缺陷的 `case_refs` 内重复 id 先去重再判），
+  再逐个在**传入的用例集**（`cases.json`）里找；
 - **全部找到** → 处置 `reused`，`reused_case_refs` 记下每条用例的 **suite + case_id**；
 - **任一找不到** → 处置 `unresolved`，`reason` **点名那个找不到的 id**；
   **不得部分复用**（D73：一条缺陷要么复用成功，要么说不知道 —— 半条复用等于假装复用了）。
@@ -212,7 +213,7 @@ R1/R2 执行完会产出失败用例，报告（`test-report`）会把它们列�
 |---|---|---|
 | `id` | 扩展段新号 | **原 id**（逐字沿用） |
 | `title` | `复现 <BUG-id>：<缺陷 title>` | 原用例的 `title`（沿用） |
-| `requirement_refs` | 该缺陷对应的 `R-<n>` | 该缺陷对应的 `R-<n>`（**改写**，见 D76） |
+| `requirement_refs` | 该缺陷对应的 `R-<n>` | **引用这条用例的全部缺陷**各自对应的 `R-<n>`（**改写**，见 D76；共享时多个，见 D97） |
 | `dimension` | `functional` | 原用例的 `dimension` |
 | `priority` | `P0` | 原用例的 `priority` |
 | `method` | `["M1.1"]`（**缺省约定**，见下） | 原用例的 `method` |
@@ -220,14 +221,19 @@ R1/R2 执行完会产出失败用例，报告（`test-report`）会把它们列�
 | `preconditions` | `[]` | 原用例的 `preconditions` |
 | `steps` | 由 `reproduction.steps` 派生（见 F3.3） | **原用例的 `steps`（逐字沿用）** |
 | `data` | `{"command": <reproduction.command>, "expected_failure": <reproduction.expected_failure>}` | 原用例的 `data` |
-| `tags` | `["defect-verify", "<BUG-id>"]` | 原用例的 `tags` ∪ `["defect-verify", "<BUG-id>"]`（去重，原 tags 在前） |
-| `defect_refs` | `["<BUG-id>"]` | `["<BUG-id>"]` |
+| `tags` | `["defect-verify", "<BUG-id>"]` | 原用例的 `tags` ∪ `["defect-verify", <全部引用它的缺陷 id>]`（去重，原 tags 在前） |
+| `defect_refs` | `["<BUG-id>"]`（派生只属于一条缺陷） | **引用它的全部缺陷 id**（D97：共享时长度 > 1） |
 | `origin` | `"derived"` | `"reused"` |
 | `source_case_id` | `null` | 原用例的 `id` |
 | `source_suite` | `null` | 传入的 suite 标识 |
 
 - `defect_refs` / `origin` / `source_case_id` / `source_suite` 是**额外字段** —— 上游
   `validate-cases.mjs` **不拦** cases[] 的额外字段，`test-execute` 的 `loadCases()` 也**容忍**（已核实）。
+- ⚠️ **共享场景（D97）**：多条缺陷引用**同一条**已有用例时，产物里该用例**只出现一次**
+  （否则会出现同 id 的重复用例，撞上游「用例 ID 重复」硬拦，产物不可执行）；
+  该用例的 `defect_refs` / `tags` / `requirement_refs` 含**全部**引用它的缺陷，
+  而每条缺陷**各自**的 `disposition` 仍独立为 `reused`。
+  派生（`derived`）的用例**只属于一条缺陷**（`defect_refs` 恰好 1 个元素）。
 - ⚠️ **`method: ["M1.1"]` 是缺省约定，不是宣称做过完整方法学**：
   复现用例的目标是"把已知缺陷重跑一遍"，不是重新做一遍测试设计。
   这个约定必须写进 `references/derivation-rules.md`，并注明它是缺省值。
