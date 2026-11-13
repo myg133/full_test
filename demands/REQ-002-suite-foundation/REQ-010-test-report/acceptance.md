@@ -245,7 +245,7 @@ $FX/ART/
 
 ### AC-011: `report.md` 的数字必须与 `report.json` 逐字相等
 - **前置条件**: 同上（**须带 `--regression-plan $FX/PLAN`**，以覆盖全部数字类型）
-- **测试步骤**: ① `report.md` 必须含**一行机器可读摘要**，格式为 `<!-- report-digest: key=value; key=value; ... -->`（单行、每个键值对之间用 `; ` 分隔）；② 摘要里的每个键都必须能在 `report.json` 里找到**同名路径**（点号路径，如 `cases.total` / `verdict.overall` / `regression.selected_missing`），且**值逐字相等**（数组用逗号连接其元素，顺序敏感）；③ 摘要必须**至少**覆盖这些键：`cases.total` / `cases.passed` / `cases.failed` / `cases.blocked` / `cases.skipped` / `verdict.case_layer` / `verdict.evidence_layer` / `verdict.regression_layer` / `verdict.overall` / `source.results_sha256` / `source.evidence_manifest_sha256` / `report_sha256`；④ md **正文**里出现的关键数字（总数 / 各状态数 / 漏跑条数 / 待复核条数 / 判不了条数）必须与摘要一致
+- **测试步骤**: ① `report.md` 必须含**一行机器可读摘要**，格式为 `<!-- report-digest: key=value; key=value; ... -->`（单行、每个键值对之间用 `; ` 分隔）；② 摘要里的每个键都必须能在 `report.json` 里找到**同名路径**（点号路径，如 `cases.total` / `verdict.overall` / `regression.selected_missing`），且**值逐字相等**（数组用逗号连接其元素，顺序敏感）；③ 摘要必须**至少**覆盖这些键：`cases.total` / `cases.passed` / `cases.failed` / `cases.blocked` / `cases.skipped` / `verdict.case_layer` / `verdict.evidence_layer` / `verdict.regression_layer` / `verdict.overall` / `source.results_sha256` / `source.evidence_manifest_sha256` / `report_sha256`；④ md **正文**里出现的关键数字必须按 **demand.md F4.2 的标签词汇表**呈现（「标签 + 数字」，标签与数字之间**不得**夹中文，单位 `条`/`个`/`项` 可省），且数字值必须与摘要一致：总数 / 各状态数 / 漏跑条数 / 待复核条数 / 判不了条数
 - **预期结果**: ①②③④ 全满足；**任何**一个数字对不上、或摘要缺必需键 → 判红并点名是哪个键
 - **判据形式**: 查绝对事实（两份产物的实际内容互比）；探针：让实现在 md 的摘要里写死一个计数 → 本条判红
 - **说明**: 摘要行是 md 的**渲染契约**（D50）——"md 是 json 的渲染、数字逐字相等"若没有可机械抽取的落点，就只能靠人眼比对，那等于没有约束。

@@ -1751,25 +1751,12 @@ else
   }
 
   # ③ 注入包装层（shim）：原实现 move 到 make-report.real.mjs，包装层跑完原实现后篡改产物
-  #    $1 = 变异体包目录, $2 = 篡改代码, $3 = 是否同步重算 report_sha256（1/0）
+  #    $1 = 变异体包目录, $2 = 篡改代码
+  #    ⚠️ 包装层**不**重算 report_sha256：报告内容一变，sha 的重算值就变 ⇒ AC-010 必然变红。
+  #    正控本来就要变红，多红一条不影响检出；负控则按约定把 AC-010 从「新增失败键」里排除。
   inject_shim() {
-    local mpkg="$1" code="$2" resha="$3"
+    local mpkg="$1" code="$2"
     local entry="$mpkg/skills/test-report/scripts/make-report.mjs"
-    local resha_js=""
-    if [ "$resha" = "1" ]; then
-      resha_js="    if (typeof report.report_sha256 === 'string') {
-      const clone = JSON.parse(JSON.stringify(report));
-      delete clone.generated_at;
-      delete clone.report_sha256;
-      const stable = (v) => {
-        if (v === null) return 'null';
-        if (Array.isArray(v)) return '[' + v.map(stable).join(',') + ']';
-        if (typeof v === 'object') return '{' + Object.keys(v).sort().map((k) => JSON.stringify(k) + ':' + stable(v[k])).join(',') + '}';
-        return JSON.stringify(v);
-      };
-      report.report_sha256 = crypto.createHash('sha256').update(stable(clone), 'utf8').digest('hex');
-    }"
-    fi
     mv "$entry" "$mpkg/skills/test-report/scripts/make-report.real.mjs" 2>/dev/null || return 1
     cat > "$entry" <<SHIMEOF
 #!/usr/bin/env node
@@ -1777,7 +1764,6 @@ else
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -1792,7 +1778,6 @@ if (code === 0) {
   if (fs.existsSync(file)) {
     const report = JSON.parse(fs.readFileSync(file, 'utf8'));
     ${code}
-${resha_js}
     fs.writeFileSync(file, JSON.stringify(report, null, 2) + '\n');
   }
 }
@@ -1854,7 +1839,7 @@ SHIMEOF
     # 注入：把入口脚本换成包装层（原实现 move 到 make-report.real.mjs）
     if [ "$STATUS" = "有效" ]; then
       BEFORE_SHA="$(sha256sum "$ENTRY" 2>/dev/null | cut -d' ' -f1)"
-      inject_shim "$MUTPKG" "$CODE" 0 || STATUS="无效变异（包装层注入失败）"
+      inject_shim "$MUTPKG" "$CODE" || STATUS="无效变异（包装层注入失败）"
       AFTER_SHA="$(sha256sum "$ENTRY" 2>/dev/null | cut -d' ' -f1)"
       if [ "$STATUS" = "有效" ]; then
         if [ -z "$BEFORE_SHA" ] || [ "$BEFORE_SHA" = "$AFTER_SHA" ]; then
@@ -1895,12 +1880,15 @@ SHIMEOF
 
   # ④ 负控 M0：打不到任何判据的**无害**篡改 —— 期望「未检出」。
   #    它检验的是探测器本身：若 M0 也被报成「已检出」，说明探测器恒真 ⇒ 本门失效（门侧缺陷，判红）。
+  #    ⚠️ 无害字段会改变 report.json 的内容 ⇒ report_sha256 的重算值随之改变 ⇒ AC-010 必然变红。
+  #       这是包装层「不重算 sha」的必然结果，与被验实现的 sha 口径无关；
+  #       按约定把 AC-010 从负控的「新增失败键」里**排除**（负控只看除 AC-010 外有没有新增失败键）。
   CTRL_NAME="负控 M0：新增无害字段（meta_note）"
   CTRLPKG="$WORK/mut-control"
   mkdir -p "$CTRLPKG"
   cp -r "$PKG"/. "$CTRLPKG"/ 2>/dev/null
   CTRL_STATUS="有效"
-  if ! inject_shim "$CTRLPKG" "report.meta_note = 'mutant-control';" 1; then
+  if ! inject_shim "$CTRLPKG" "report.meta_note = 'mutant-control';"; then
     CTRL_STATUS="无效变异（包装层注入失败）"
   fi
   if [ "$CTRL_STATUS" = "有效" ]; then
@@ -1922,12 +1910,13 @@ SHIMEOF
     printf '负控 %s: 无效变异（%s）—— 探测器的灵敏度不可判定\n' "$CTRL_NAME" "$CTRL_STATUS"
   else
     CTRL_NEW="$(run_mutant_gate "$CTRLPKG")"
-    if [ -z "$CTRL_NEW" ]; then
+    CTRL_NEW_EFF="$(printf '%s\n' $CTRL_NEW | grep -v '^AC-010$' | grep -v '^$' | tr '\n' ' ' | sed 's/ $//')"
+    if [ -z "$CTRL_NEW_EFF" ]; then
       MUT_CONTROL_OK=1
-      printf '负控 %s: 未检出（新增失败键为空）—— 符合预期，探测器不是恒真\n' "$CTRL_NAME"
+      printf '负控 %s: 未检出（除 AC-010 外的新增失败键为空；AC-010 因无害字段改变 report_sha256 的重算值而红，按约定排除）—— 符合预期，探测器不是恒真\n' "$CTRL_NAME"
     else
-      MUT_CONTROL_FAILED="[$CTRL_NAME → 本不该让任何判据变红，却出现新增失败键 [$CTRL_NEW] —— 探测器疑似恒真]"
-      printf '负控 %s: 被报成「已检出」（新增失败键=[%s]）—— 门侧缺陷：探测器恒真\n' "$CTRL_NAME" "$CTRL_NEW"
+      MUT_CONTROL_FAILED="[$CTRL_NAME → 本不该让任何判据变红，却出现新增失败键 [$CTRL_NEW_EFF] —— 探测器疑似恒真]"
+      printf '负控 %s: 被报成「已检出」（新增失败键=[%s]）—— 门侧缺陷：探测器恒真\n' "$CTRL_NAME" "$CTRL_NEW_EFF"
     fi
   fi
 
@@ -1938,7 +1927,8 @@ SHIMEOF
     MUT_UNDEC=1
     MUT_NOTE="不可判定：有效变异体只有 $MUT_TOTAL/$MUT_REQUIRED（门侧注入问题：锚点不可达或注入不生效）；无效变异:$MUT_INVALID"
   elif [ -n "$MUT_INVALID" ]; then
-    MUT_NOTE="检出 $MUT_DETECTED/$MUT_TOTAL（有效变异体）；另有无效变异:$MUT_INVALID（不计入分母）"
+    MUT_UNDEC=1
+    MUT_NOTE="不可判定：$MUT_INVALID（门侧注入问题）"
   else
     MUT_NOTE="检出 $MUT_DETECTED/$MUT_TOTAL（有效变异体）"
   fi
@@ -1962,19 +1952,24 @@ if [ "$MUT_NOTE" = "跳过" ]; then
   printf '变异体套件: 已跳过（REQ010_NO_MUT=1）—— 不可判定，检出率结论以完整模式为准\n'
 elif [ -n "$MUT_ESCAPED" ]; then
   printf '变异体套件: %s —— 有变异体逃逸（真缺陷），整体判红\n' "$MUT_NOTE"
-elif [ "$MUT_UNDEC" -eq 1 ]; then
-  printf '结论补充: 不可判定 —— %s\n' "$MUT_NOTE"
-  printf '  （有效变异体不足是**门侧注入问题**，不算被验实现的失败；但退出码仍为 1）\n'
 elif [ -n "$MUT_CONTROL_FAILED" ]; then
   printf '变异体套件: %s\n' "$MUT_NOTE"
-  printf '门侧缺陷: %s —— 负控被报成「已检出」，本门的变异探测器恒真，整体判红\n' "$MUT_CONTROL_FAILED"
-elif [ -n "$MUT_INVALID" ]; then
-  printf '变异体套件: %s —— 有无效变异体（门侧注入问题），整体判红\n' "$MUT_NOTE"
+  printf '负控失败：探测器疑似恒真 ⇒ 本门失效（门侧缺陷）—— %s\n' "$MUT_CONTROL_FAILED"
+  printf '  （负控本该「未检出」；它被报成「已检出」说明检出判定恒真，本门结论不可采信）\n'
+elif [ "$MUT_UNDEC" -eq 1 ]; then
+  printf '不可判定: 1 项（变异体套件）—— %s\n' "$MUT_NOTE"
+  printf '  （这是**门侧注入问题**，不是被验实现的缺陷；退出码为 1，判据结论仍以上面的 PASS/FAIL 为准）\n'
 fi
 
+# 退出条件：
+#   - 逃逸（MUT_ESCAPED）      ⇒ 判红（真缺陷）
+#   - 负控失败（MUT_CONTROL_FAILED） ⇒ 判红（门侧缺陷：探测器恒真）
+#   - 不可判定（MUT_UNDEC）     ⇒ 退出码非 0，但不判红也不判绿（门侧注入问题）
+#   - 有效变异体必须全部检出（MUT_DETECTED == MUT_TOTAL）且数量达标（MUT_TOTAL >= MUT_REQUIRED）
 if [ "$FAIL" -eq 0 ] && [ "$UNDEC" -eq 0 ] && [ -z "$MUT_ESCAPED" ] && [ -z "$MUT_CONTROL_FAILED" ] \
-   && { [ "${REQ010_NO_MUT:-0}" = "1" ] || { [ "$MUT_UNDEC" -eq 0 ] && [ "$MUT_TOTAL" -eq 4 ] \
-        && [ "$MUT_DETECTED" -eq 4 ] && [ "$MUT_CONTROL_OK" -eq 1 ]; }; }; then
+   && { [ "${REQ010_NO_MUT:-0}" = "1" ] || { [ "$MUT_UNDEC" -eq 0 ] \
+        && [ "$MUT_TOTAL" -ge "$MUT_REQUIRED" ] && [ "$MUT_DETECTED" -eq "$MUT_TOTAL" ] \
+        && [ "$MUT_CONTROL_OK" -eq 1 ]; }; }; then
   exit 0
 fi
 exit 1
