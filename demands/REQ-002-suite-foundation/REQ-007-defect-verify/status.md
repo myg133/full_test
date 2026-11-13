@@ -84,6 +84,7 @@
 | 上游门不回归 | REQ-010 / REQ-011 / REQ-006 / REQ-002A / REQ-002B | **全绿**：29/0、28/0、42/0、19/0、41/0，全部 rc=0、0 条 FAIL |
 | 交付物形状 | 结构 / 可执行位 / 零三方依赖 / README 两处 / 追溯件四件套 / 根 manifest 逐字未变 / 既有 5 skill 未被改 / `package.json` files+version / 无 "internal-rt" 字样 | **全项符合** |
 | 组合门 | `node bin/test-agent-skills.mjs verify` | **6 个 skill 装齐、依赖图通过、4 个场景全过**（含 `scenarioDefectVerify` 实跑 `make-defect-cases.mjs` 并从产物反推断言） |
+| **合并物复跑** | 合并进 develop（`f541066`）后，对 `code/` 重跑主门 + 上游 5 门 | **六条全绿**：主门 **29/0**、REQ-010 **29/0**、REQ-011 **28/0**、REQ-006 **42/0**、002A **19/0**、002B **41/0**，全部 rc=0 ⇒「合并物 == 被独立验收物」 |
 
 **独立实现佐证**：T1 比对 Dev 交付与 BA 参考实现的相似度 —— 共同文件 8 个，**逐字雷同仅 1 个**
 （`skill-meta.json`，纯元数据且被契约写死）；最相似代码文件 `normalize.mjs` 25.2%、`derive.mjs` 28.9%，
