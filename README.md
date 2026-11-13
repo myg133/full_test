@@ -32,6 +32,7 @@ npx test-agent-skills install
 ├── qa-toolchain/          # 本包安装的 skill
 ├── regression-plan/       # 本包安装的 skill
 ├── test-report/           # 本包安装的 skill
+├── defect-verify/         # 本包安装的 skill
 └── <你原有的其它 skill>     # 不受影响
 ```
 
@@ -119,6 +120,7 @@ test-agent-skills <command> [options]
 | `qa-toolchain` | 项目级 `.tools/` 工具链自举：声明式清单、隔离安装（Python venv / Node 包）、幂等重装、显式降级（入口命令：`qa install` / `qa doctor` / `qa list`） |
 | `regression-plan` | 变更 → 回归选样：切分变更条目、按需求条目 / 用例 / 维度 / 方法判影响面、产出 `regression-plan.json`（哪些用例确定重跑、哪些需人工复核、哪些变更判不了）（入口命令：`node skills/regression-plan/scripts/plan-regression.mjs --changelog <file> --cases <file> --cycle-dir <dir>`） |
 | `test-report` | 执行产物 → 执行报告：只读消费 `meta.json` / `results.json` / `evidence/` 与可选的回归计划，产出 `report.json` + `report.md`，给出用例层 / 证据层 / 计划对账层三层结论、逐条点名漏跑的用例与判不了的变更，并绑定输入产物的指纹（入口命令：`node skills/test-report/scripts/make-report.mjs --artifacts <run_dir>`） |
+| `defect-verify` | 缺陷单 → 缺陷复现用例集：读缺陷单与已有用例集，给每条缺陷**有且只有一个**处置结论（`reused` 复用已有用例 / `derived` 派生 1 条新用例 / `unresolved` 显式说不知道并给理由），产出可被 `test-execute` 直接消费的 `defect-cases.json`，复现用例带 `defect-verify` 与缺陷 id 的 tag（便于按缺陷分批跑）（入口命令：`node skills/defect-verify/scripts/make-defect-cases.mjs --defects <file> --cases <file> --suite <suite> --cycle-dir <dir>`） |
 
 ### Skill 之间的版本配套
 
@@ -130,7 +132,8 @@ test-agent-skills <command> [options]
 
 `test-execute` 对 `test-case-design` 是**硬跨 skill 依赖**（轮次推进走的是
 `test-case-design/scripts/cycle-state.mjs`），`regression-plan` 消费它的维度库与方法库，
-`test-report` 消费 `test-execute` 的执行产物格式（`meta.json` / `results.json` / `evidence/` 与指纹口径）。
+`test-report` 消费 `test-execute` 的执行产物格式（`meta.json` / `results.json` / `evidence/` 与指纹口径），
+`defect-verify` 消费 `test-case-design` 的用例集格式、产出的复现用例由 `test-execute` 消费。
 
 ### 组合门（`verify`）
 
@@ -140,8 +143,10 @@ node bin/test-agent-skills.mjs verify --root /tmp/verify-root
 
 把包装到**临时根**（不碰真实安装根），校验 skill 之间的**版本配套**，
 再**实跑**跨 skill 组合场景：`test-execute` 的 offline 夹具（4 passed / 1 failed / 1 blocked / 0 skipped）、
-「轮次初始化 → 带轮次执行 → execute 阶段推进」这条硬跨 skill 依赖链路，
-以及「执行产物 → `test-report` 出报告 → 断言三层结论」这条**经过第 5 个 skill** 的链路。
+「轮次初始化 → 带轮次执行 → execute 阶段推进」这条硬跨 skill 依赖链路、
+「执行产物 → `test-report` 出报告 → 断言三层结论」这条**经过第 5 个 skill** 的链路，
+以及「缺陷单 + 已有用例集 → `defect-verify` 出复现用例集 → 断言处置结论自洽」
+这条**经过第 6 个 skill** 的链路。
 
 依赖版本不满足时，组合门报**版本问题**（点名哪个 skill、要求什么、实际什么），
 而不是让下游报业务错。

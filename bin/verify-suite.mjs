@@ -14,7 +14,12 @@
  *      - test-execute 的 offline 夹具 → **test-report** 的 make-report.mjs → 断言报告里的
  *        三层结论（用例层 / 证据层 / 对账层）与总体结论
  *        （这条链路经过 test-execute → test-report 的**硬跨 skill 依赖**；
- *          「装齐 5 个」只是**装了**，不等于**用上了**）。
+ *          「装齐 5 个」只是**装了**，不等于**用上了**）；
+ *      - 缺陷单 + 已有用例集 → **defect-verify** 的 make-defect-cases.mjs → 断言产出的
+ *        defect-cases.json 里处置结论自洽（每条缺陷有且只有一个 disposition；
+ *        derived 的缺陷有对应用例；reused 的缺陷有 reused_case_refs；cases[] 的 id 唯一）
+ *        （这条链路经过 test-case-design → defect-verify → test-execute 的**硬跨 skill 依赖**；
+ *          「装齐 6 个」只是**装了**，不等于**用上了**）。
  *
  * 退出码：0 = 全通过 / 1 = 有问题 / 2 = 用法错误。
  *
@@ -424,6 +429,173 @@ function scenarioReport(root, work) {
 }
 
 /**
+ * 组合场景四：缺陷单 + 已有用例集 → defect-verify 出缺陷复现用例集 → 断言处置结论自洽。
+ *
+ * 这条链路**真的经过**第 6 个 skill（defect-verify）：在临时根里造一份缺陷单 +
+ * 一份已有用例集 + 一个 R3 轮次目录，实跑 make-defect-cases.mjs，然后**从产物反推**
+ * 断言（不是只查文件存在，也不是只看输出文本）：
+ *   - defects[] 每条**有且只有一个**处置结论（derived / reused / unresolved）；
+ *   - derived 的缺陷在 cases[] 里**有**对应的用例；
+ *   - reused 的缺陷**有** reused_case_refs；
+ *   - cases[] 的 id **唯一**（共享场景下同一条用例只出现一次）。
+ *
+ * @param {string} root 临时根
+ * @param {string} work 工作目录
+ * @returns {{ok: boolean, message: string}} 场景结论
+ */
+function scenarioDefectVerify(root, work) {
+  const skillsDir = path.join(root, 'skills');
+  const maker = path.join(skillsDir, 'defect-verify', 'scripts', 'make-defect-cases.mjs');
+  if (!fs.existsSync(maker)) {
+    return { ok: false, message: `临时根里缺这个必需文件: ${path.relative(root, maker)}` };
+  }
+
+  const project = path.join(work, 'defect-verify-proj');
+  const cycleDir = path.join(project, 'test-assets', 'cycles', 'R3-VERIFY');
+  const inputsDir = path.join(project, 'inputs');
+  const defectsFile = path.join(inputsDir, 'defects.json');
+  const casesFile = path.join(inputsDir, 'cases.json');
+  const suite = 'REQ-VERIFY-coupon';
+
+  const mkCase = (id, title, action, expected, tags) => ({
+    id,
+    title,
+    requirement_refs: ['R-1'],
+    dimension: 'functional',
+    priority: 'P0',
+    method: ['M1.1'],
+    status: 'active',
+    preconditions: [],
+    steps: [{ action, expected }],
+    data: {},
+    tags,
+  });
+
+  const defects = {
+    schema_version: 1,
+    defects: [
+      {
+        id: 'BUG-901',
+        title: '满减券核销后实付金额多 0.01 元',
+        severity: 'high',
+        status: 'open',
+        case_refs: ['TC-001'],
+        reproduction: {
+          command: 'curl -X POST https://api.example.com/coupon/redeem',
+          steps: ['以满减券下单', '触发核销'],
+          expected_failure: '实付金额比预期多 0.01 元',
+        },
+      },
+      {
+        id: 'BUG-902',
+        title: '导出报表偶发空文件',
+        severity: 'low',
+        status: 'open',
+        reproduction: {
+          command: 'curl -X GET https://api.example.com/reports/export',
+          steps: ['触发报表导出', '下载导出文件'],
+          expected_failure: '导出文件为空',
+        },
+      },
+    ],
+  };
+
+  const cases = {
+    schema_version: 2,
+    meta: { source: 'REQ-VERIFY 需求文档', generated_at: '2026-01-01T00:00:00+08:00', case_count: 1 },
+    requirements: [{ id: 'R-1', title: '优惠券核销', source_ref: 'REQ-VERIFY §1', testable: true }],
+    open_questions: [],
+    coverage_matrix: [
+      { requirement: 'R-1', methods_applied: ['M1.1'], skipped: [], dimensions: ['functional'] },
+    ],
+    cases: [mkCase('TC-001', '优惠券核销用例', '以满减券下单', '实付金额正确', ['coupon'])],
+  };
+
+  const cycle = {
+    cycle_id: 'R3-VERIFY',
+    round: 'R3',
+    round_type: 'defect-verify',
+    requirement: 'REQ-VERIFY',
+    scopes: ['functional'],
+    scopes_skipped: [],
+    status: 'in_progress',
+    stages: { clarify: { status: 'done' }, design: { status: 'in_progress' } },
+    history: [],
+    trigger: { type: 'defect', ref: 'BUG-901' },
+  };
+
+  fs.mkdirSync(inputsDir, { recursive: true });
+  fs.mkdirSync(cycleDir, { recursive: true });
+  fs.writeFileSync(defectsFile, `${JSON.stringify(defects, null, 2)}\n`, 'utf8');
+  fs.writeFileSync(casesFile, `${JSON.stringify(cases, null, 2)}\n`, 'utf8');
+  fs.writeFileSync(path.join(cycleDir, 'cycle.json'), `${JSON.stringify(cycle, null, 2)}\n`, 'utf8');
+
+  const run = runNode(
+    maker,
+    ['--defects', defectsFile, '--cases', casesFile, '--suite', suite, '--cycle-dir', cycleDir],
+    work,
+  );
+  if (run.code !== 0) {
+    const detail = runOutputDetail(run);
+    return {
+      ok: false,
+      message: `defect-verify 出复现用例集失败（退出码 ${run.code}）${detail === '' ? '' : `\n${detail}`}`,
+    };
+  }
+
+  const productFile = path.join(cycleDir, 'defect-cases.json');
+  if (!fs.existsSync(productFile)) {
+    return { ok: false, message: 'defect-verify 没有产出 defect-cases.json' };
+  }
+  let product = null;
+  try {
+    product = JSON.parse(fs.readFileSync(productFile, 'utf8'));
+  } catch {
+    return { ok: false, message: 'defect-verify 产出的 defect-cases.json 不是合法 JSON' };
+  }
+
+  const productDefects = Array.isArray(product.defects) ? product.defects : [];
+  const productCases = Array.isArray(product.cases) ? product.cases : [];
+  const problems = [];
+  if (productDefects.length !== defects.defects.length) {
+    problems.push(`defects[] 条目数=${productDefects.length}，输入缺陷数=${defects.defects.length}`);
+  }
+  const counts = { derived: 0, reused: 0, unresolved: 0 };
+  for (const entry of productDefects) {
+    const disposition = entry && entry.disposition;
+    if (!['derived', 'reused', 'unresolved'].includes(disposition)) {
+      problems.push(`disposition=${JSON.stringify(disposition)} 不在 {derived,reused,unresolved} 里`);
+      continue;
+    }
+    counts[disposition] += 1;
+    if (disposition === 'derived') {
+      const hit = productCases.find((item) => item && item.id === entry.derived_case_id);
+      if (!hit) problems.push(`derived 的缺陷 ${entry.id} 没有对应的用例`);
+    }
+    if (disposition === 'reused' && !(Array.isArray(entry.reused_case_refs) && entry.reused_case_refs.length > 0)) {
+      problems.push(`reused 的缺陷 ${entry.id} 没有 reused_case_refs`);
+    }
+    if (disposition === 'unresolved' && !(typeof entry.reason === 'string' && entry.reason.trim() !== '')) {
+      problems.push(`unresolved 的缺陷 ${entry.id} 没有非空 reason`);
+    }
+  }
+  if (productCases.length === 0) problems.push('cases[] 为空（没有真的跑出复现用例）');
+  const ids = productCases.filter((item) => item && typeof item.id === 'string').map((item) => item.id);
+  if (new Set(ids).size !== ids.length) problems.push('cases[] 的 id 有重复');
+  if (problems.length > 0) {
+    return { ok: false, message: `defect-verify 的产物结构不自洽: ${problems.join('; ')}` };
+  }
+
+  return {
+    ok: true,
+    message:
+      `defect-verify 的复现用例链路（make-defect-cases.mjs 读缺陷单 + 已有用例集）→ ` +
+      `缺陷 ${productDefects.length} 条（复用 ${counts.reused} / 派生 ${counts.derived} / 未决 ${counts.unresolved}）、` +
+      `复现用例 ${productCases.length} 条（id 唯一：${ids.join(' / ')}）；产物: ${path.relative(root, productFile)}`,
+  };
+}
+
+/**
  * 组合门主流程。
  * @param {string|undefined} rootArg 命令行给的安装根
  * @returns {number} 退出码
@@ -506,6 +678,7 @@ function runVerifyIn(root, work) {
     scenarioOffline(root, work),
     scenarioCycle(root, work),
     scenarioReport(root, work),
+    scenarioDefectVerify(root, work),
   ];
   let failed = 0;
   for (const scenario of scenarios) {

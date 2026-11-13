@@ -1,0 +1,8 @@
+{
+  "name": "defect-verify",
+  "version": "0.1.0",
+  "requires": {
+    "test-case-design": ">=0.1.0",
+    "test-execute": ">=0.1.0"
+  }
+}
