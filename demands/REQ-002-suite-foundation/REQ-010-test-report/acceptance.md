@@ -142,14 +142,18 @@ $FX/ART/
 | `failures[]` 的 case_id | `["TC-002","TC-003"]` | failed + blocked |
 | `evidence.missing_paths` | `["evidence/TC-005/step-1-response.json"]` | 实查 |
 | `evidence.files_present` / `files_missing` | `3` / `1` | 实查（口径见下方注） |
-| `evidence.findings[]` 的 `kind` 集合 | 至少含 `missing_evidence` 与 `count_mismatch` | TC-005 缺失 + meta 计数不符 |
-| `regression.selected_planned` / `selected_executed` | `3` / `2` | 计划 3 条，执行命中 2 条 |
+| `evidence.findings[]` 的 `kind` 集合 | 至少含 `missing_evidence` 与 `count_mismatch` | TC-005 缺失 + meta 计数不符 || `regression.selected_planned` / `selected_executed` | `3` / `2` | 计划 3 条，执行命中 2 条 |
 | `regression.selected_missing` | `["TC-006"]` | 差集 |
 | `regression.needs_review_planned` / `needs_review_executed` | `1` / `1` | TC-003 命中 |
 | `regression.undecidable_changes` | 恰 1 条，`change_id == "C-3"`，`reason` 逐字等于计划里的 reason | 原样搬运 |
 | `regression.impact_complete` | `false` | 取自计划 |
 
 **不给计划**时：`regression == null`、`regression_layer == "not_applicable"`，其余同上。
+
+⚠️ **`findings[]` 的条数不作判据**：本夹具实际有**两处**计数不符（`cases_total` 6≠5、`cases_skipped` 2≠1），
+实现方可以合并成 1 条 `count_mismatch`（message 里同时出现 6/5/2/1），也可以拆成 2 条。
+**门只判「至少含一条点名 `cases_total` 或"总数"、且同时含 `6` 与 `5` 的 `count_mismatch`」**（AC-021），
+**不得**按条数判红（那是口径歧义，不是缺陷）。
 
 ⚠️ `files_present` 的口径：`results.json` 声称的证据条目里**实查存在**的份数（`TC-001` 1 份 + `TC-002` 1 份 + `TC-003` 1 份 = **3**），
 `files_missing` = 声称的证据条目里**实查缺失**的份数（`TC-005` = **1**）。
