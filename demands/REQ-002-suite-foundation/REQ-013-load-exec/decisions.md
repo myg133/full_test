@@ -114,6 +114,7 @@ B5+B7（**不设 `statusCallback` ⇒ HTTP 错误码全塌成 `-1`，且 CLI 根
 ### D194 URL 的 origin 替换规则（G10）
 
 **裁定**：执行时**只替换 URL 的 origin**（协议 + 主机 + 端口）为**本地桩地址**；**path 与 query 逐字保留**。
+（与 D201 的关系：「逐字 spawn」指的是**命令行形态**逐字，URL 的 origin 按本条换 ⇒ 二者**不冲突**。）
 
 **依据**：D2（计划里的 URL 来自环境文件的 `base_url` ⇒ 指向真实服务地址）；A1（只打本地桩，绝不打真实服务）。
 **约束**：
@@ -176,7 +177,10 @@ C4（全部失败时 `effectiveRps` 依然 5752）⇒ 靠退出码判 = **假绿
 
 ### D201 CLI 模式 = 逐字执行 argv，stdout 解析，能力降级必须标注
 
-**裁定**：`cli` 模式**逐字** spawn 计划里的 `argv`（不改一个字符）⇒ **执行的正是计划里那条命令**（`execution_mode = "cli_verbatim"`）。
+**裁定**：`cli` 模式**逐字** spawn 计划里的 `argv` —— 指的是**命令行形态逐字不变**
+（可执行名、参数名、参数顺序、参数个数**一个不改**）；**URL 的 origin 按 D194 换成桩地址**
+（path 与 query 逐字保留）—— ⚠️ **桩端口是随机分配的**，计划里的 `8080` **不可能**是桩端口
+⇒ 「逐字」与「换 origin」**不是两件冲突的事**，而是「命令行形态逐字 + URL 的 origin 按 D194 换」。
 stdout **按已知文本形态解析**；**解析不出来 ⇒ rc=1 + 点名**（**不得**编造数值）。
 
 **依据**：B1（CLI 只有文本 stdout）/ T5 实测的 stdout 形态（`Completed requests` / `Total errors` / `Mean latency` /

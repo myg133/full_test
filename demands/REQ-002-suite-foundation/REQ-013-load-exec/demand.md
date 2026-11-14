@@ -234,11 +234,15 @@ REQ-009（压测能力域）交了「负载模型」；REQ-012（A 阶段）交�
     ├── <套件名>.json              ← 本 REQ 的判定产物（每套件一个）
     └── evidence/<套件名>/
         ├── manifest.json          ← 逐个证据文件的 sha256
-        └── <step_index>/          ← 每条 invocation 一个子目录
-            ├── result.json        ← 该次执行的原始结果（api：Result 选定字段；cli：解析结果）
-            ├── stdout.txt         ← 该次执行的 stdout 原文（两种模式都写）
-            └── stub-observations.json ← 桩侧观测快照
+        └── <场景序号>/            ← 场景序号 = 该场景在计划里的下标（从 0 开始）
+            └── <step_index>/      ← 每条 invocation 一个子目录
+                ├── result.json    ← 该次执行的原始结果（api：Result 选定字段；cli：解析结果）
+                ├── stdout.txt     ← 该次执行的 stdout 原文（两种模式都写）
+                └── stub-observations.json ← 桩侧观测快照
 ```
+
+⚠️ **为什么证据落点必须按场景分层**：`step_index` 是**每个场景内**从 0 开始的（4 个场景 ⇒ 扁平落点会出现 3 个
+都叫 `0` 的目录 ⇒ **互相覆盖**）⇒ 故落点为 `evidence/<套件名>/<场景序号>/<step_index>/`。
 
 ⚠️ **结果产物绝不能叫 `suite.json`**（REQ-012 勘察 ⑦ 的同款红线：上游对 `suite.json` 的顶层字段集封闭）。
 
@@ -284,7 +288,7 @@ REQ-009（压测能力域）交了「负载模型」；REQ-012（A 阶段）交�
 | `thresholds` | object | **条件**：计划里有才有，**逐字**取自计划 |
 | `thresholds_source` | string | **条件**：计划里有才有，**逐字**取自计划 |
 
-#### F7.5 invocation 条目（**封闭 10 个**）
+#### F7.5 invocation 条目（**封闭 10 个；`python` runner 为 9 个**）
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
@@ -294,7 +298,7 @@ REQ-009（压测能力域）交了「负载模型」；REQ-012（A 阶段）交�
 | `argv` | array | **逐字**取自计划（**不改一个字符**） |
 | `executed_url` | string | 实际请求的 URL（origin 已换成桩） |
 | `executed_params` | object | **api 模式**：封闭 6 个（`maxSeconds` / `concurrency` / `requestsPerSecond` / `agentKeepAlive` / `timeout` / `method`）；**cli 模式**：**缺席** |
-| `observed` | object \| 缺席 | 客户端侧观测（F7.7）；`python` runner **缺席**（无输出契约，D203） |
+| `observed` | object \| 缺席 | 客户端侧观测（F7.7）；`python` runner **缺席**（无输出契约，D203）⇒ 该条目**共 9 键** |
 | `stub_observed` | object | 桩侧观测（F7.8） |
 | `thresholds` | array | 逐个阈值键的判定（F7.9）；**无阈值时为空数组** |
 | `verdict` | string | 本条 invocation 的判定（`met` / `not_met` / `undetermined`） |
@@ -324,7 +328,7 @@ REQ-009（压测能力域）交了「负载模型」；REQ-012（A 阶段）交�
 | `effective_rps` | number | 客户端侧有效吞吐（**注意**：`rps` 是同值别名，**只留一个**，B11） |
 | `percentiles` | object | 封闭 4 键：`"50"` / `"90"` / `"95"` / `"99"` |
 | `max_latency_ms` | number | — |
-| `min_latency_ms` | number | — |
+| `min_latency_ms` | number \| null | — ⚠️ **`cli` 模式为 `null`**（CLI 的 stdout 只有 50/90/95/99/100% 分位，**没有最小延迟** ⇒ 不得编造） |
 | `elapsed_seconds` | number | — |
 
 #### F7.8 `stub_observed` 段（**封闭 9 个**）
