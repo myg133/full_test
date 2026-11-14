@@ -110,6 +110,8 @@
 | **F5** | **`python` runner 的输出形态无契约**（D5） | 不解决 ⇒ `python` 场景的判定只能恒为「不可判定」 |
 | **F6** | **桩进程生命周期归属**（C8） | 不解决 ⇒ 桩残留 ⇒ 端口占用 ⇒ 后续套件起不来 |
 | **F7** | **判定不得依赖进程退出码**（C5/C4） | 不解决 ⇒ 桩挂了也「成功」⇒ 假绿 |
+| **F8** | ⭐⭐ **REQ-003 的 `qa-toolchain` 契约文档里，样例清单的 `verify.match` 大小写与 `loadtest` 的真实输出不匹配**：实测 `loadtest --version` 输出 **`Loadtest version: 8.2.1`**（**大写 L**），而文档样例写 `"match": "loadtest"`（**小写**）⇒ 按样例抄 ⇒ `qa install` 报「验证未通过」、`qa doctor` 判 `failed`（实测 rc=1）⇒ **工具被误判为不可用** ⇒ 直接阻塞 D206 | 改用 `"match": "Loadtest"` ⇒ `qa doctor` 全绿（实测 rc=0）。**这是上游样例的一处笔误**，机制本身没问题 |
+| **F9** | **工具链装得上**：`bun 1.4.4` 可用；`node <交付包>/bin/qa install --project <项目根>` ⇒ `loadtest@8.2.1` 落到 `.tools/node/node_modules/loadtest/`（含 `.bin/loadtest`），耗时 ~1s | 实测（F8 的修正版） |
 
 ---
 

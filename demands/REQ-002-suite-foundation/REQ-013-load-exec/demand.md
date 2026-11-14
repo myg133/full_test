@@ -114,12 +114,14 @@ REQ-009（压测能力域）交了「负载模型」；REQ-012（A 阶段）交�
 |---|---|---|
 | 1 | **只监听回环地址**（`127.0.0.1`）⇒ 物理上不可能被外部访问 | D187 |
 | 2 | **按 path 计数**（path 不含 query），并记录**延迟直方图**（按 ms 桶，**聚合**，不存全量样本） | D209 / C9 |
-| 3 | **支持注入**：延迟（`--stub-delay-ms`）与错误率（`--stub-error-rate`）⇒ 响应码按注入比例取 200 / 500 | D193 |
-| 4 | **默认行为**：`delay_ms = 0`、`error_rate = 0`、响应码恒 200 | D193 |
-| 5 | **观测端点**：桩暴露一个**只读观测接口**，返回计数 / 错误数 / 延迟直方图 / 合计 / 极值 | D209 |
-| 6 | **收尾必停**：正常结束、异常结束、**被中断**（SIGINT/SIGTERM）三条路径都**必须**停桩 | D196 |
-| 7 | **收尾必须让进程能退出**：停桩时**连同残留连接一起断开**（keep-alive 的空闲连接会拖住 `close()`） | D196 |
-| 8 | 桩的**配置面封闭**：只有「延迟注入」「错误率注入」「响应码」三项；**不含**任何真实业务逻辑 | D187 |
+| 3 | **每条 invocation 前重置计数**（桩支持「重置观测」接口）⇒ 每条 invocation 的桩侧观测是**本次增量**，不是累计 | F7.8 |
+| 4 | **记录绝对时序**：桩启动以来的毫秒偏移；每次重置后记录**首个请求到达时刻**与**末个请求到达时刻** ⇒ 可机械核「顺序执行、无重叠」 | F7.8 / D209 |
+| 5 | **支持注入**：延迟（`--stub-delay-ms`）与错误率（`--stub-error-rate`）⇒ 响应码按注入比例取 200 / 500 | D193 |
+| 6 | **默认行为**：`delay_ms = 0`、`error_rate = 0`、响应码恒 200 | D193 |
+| 7 | **观测端点**：桩暴露一个**只读观测接口**，返回计数 / 错误数 / 延迟直方图 / 合计 / 极值 / 时序 | D209 |
+| 8 | **收尾必停**：正常结束、异常结束、**被中断**（SIGINT/SIGTERM）三条路径都**必须**停桩 | D196 |
+| 9 | **收尾必须让进程能退出**：停桩时**连同残留连接一起断开**（keep-alive 的空闲连接会拖住 `close()`） | D196 |
+| 10 | 桩的**配置面封闭**：只有「延迟注入」「错误率注入」「响应码」「重置观测」四项；**不含**任何真实业务逻辑 | D187 |
 
 ### F4 执行（**两种模式**）
 
@@ -158,7 +160,7 @@ REQ-009（压测能力域）交了「负载模型」；REQ-012（A 阶段）交�
 
 | # | 规定 | 出处 |
 |---|---|---|
-| 1 | **顺序执行**：场景顺序 == 计划里的顺序；场景内的 invocation 顺序 == 数组顺序；**不并发** | D190 |
+| 1 | **顺序执行**：场景顺序 == 计划里的顺序；场景内的 invocation 顺序 == 数组顺序；**不并发**<br>⇒ **可核**：同套件内，前一条 invocation 的 `stub_observed.last_at_ms` ≤ 后一条的 `stub_observed.first_at_ms`（**无时间重叠**） | D190 |
 | 2 | **URL 只换 origin**（协议 + 主机 + 端口 → 桩地址）；**path 与 query 逐字保留** | D194 |
 | 3 | 替换后**必须**校验 host 是**回环地址**（`127.0.0.0/8` 或 `::1`）；**不通过 ⇒ rc=1 + 点名** | D194 |
 | 4 | 产物记录**替换前后的 URL**（origin 与 path 都逐字） | D194 / D208 |
@@ -315,17 +317,19 @@ REQ-009（压测能力域）交了「负载模型」；REQ-012（A 阶段）交�
 | `min_latency_ms` | number | — |
 | `elapsed_seconds` | number | — |
 
-#### F7.8 `stub_observed` 段（**封闭 7 个**）
+#### F7.8 `stub_observed` 段（**封闭 9 个**）
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| `requests` | integer ≥ 0 | 桩收到的请求数（**可能比 `total_requests` 多**，D198） |
-| `errors` | integer ≥ 0 | 桩返回的错误响应数 |
+| `requests` | integer ≥ 0 | 桩**本次**收到的请求数（**可能比 `total_requests` 多**，D198） |
+| `errors` | integer ≥ 0 | 桩**本次**返回的错误响应数 |
 | `error_rate` | number | `errors / requests`（`requests == 0` ⇒ `null`） |
 | `mean_ms` | number | 桩侧处理耗时均值 |
 | `min_ms` | number | — |
 | `max_ms` | number | — |
 | `histogram_ms` | object | ms 桶 → 次数（**聚合**，D209） |
+| `first_at_ms` | integer ≥ 0 | **本次**首个请求到达时刻（相对**桩启动**的毫秒偏移） |
+| `last_at_ms` | integer ≥ 0 | **本次**末个请求到达时刻（同一基准） |
 
 #### F7.9 阈值判定条目（**封闭 5 个**）
 
@@ -385,18 +389,53 @@ REQ-009（压测能力域）交了「负载模型」；REQ-012（A 阶段）交�
 ### 3.1 压测上下文（**来源**，入口不读）
 
 ```
-<项目根>/test-assets/
-├── environments/local.json         ← base_url = "http://127.0.0.1:8080/"
-├── load/
-│   ├── scenarios/
-│   │   ├── checkout.json           ← 场景 WL-001
-│   │   ├── order-query.json        ← 场景 WL-002（thresholds not_provided）
-│   │   └── health-check.json       ← 场景 WL-004（thresholds not_provided）
-│   └── suites/LOAD-001-checkout/
-│       ├── suite.json              ← environment = "local"
-│       └── scenario.json           ← 引用 checkout + order-query + health-check
-│   └── plans/LOAD-001-checkout.json ← REQ-012 的产物（入口真正读的东西）
+<项目根>/
+├── .gitignore                     ← 含 ".tools/*" 与 "!.tools/manifest.json" 两行
+├── .tools/
+│   ├── manifest.json              ← 工具清单（**逐字**见 3.1.1）；安装产物不进夹具
+│   └── node/node_modules/loadtest/  ← **安装产物**（验收前置，见 3.1.2）
+└── test-assets/
+    ├── environments/local.json    ← base_url = "http://127.0.0.1:8080/"
+    └── load/
+        ├── scenarios/
+        │   ├── checkout.json      ← 场景 WL-001
+        │   ├── order-query.json   ← 场景 WL-002（thresholds not_provided）
+        │   └── health-check.json  ← 场景 WL-004（thresholds not_provided）
+        ├── suites/LOAD-001-checkout/
+        │   ├── suite.json         ← environment = "local"
+        │   └── scenario.json      ← 引用 checkout + order-query + health-check
+        └── plans/LOAD-001-checkout.json  ← REQ-012 的产物（入口真正读的东西）
 ```
+
+#### 3.1.1 `.tools/manifest.json`（**逐字**）
+
+```json
+{
+  "version": 1,
+  "tools": [
+    {
+      "name": "loadtest",
+      "kind": "node",
+      "spec": "loadtest@8.2.1",
+      "purpose": "压测 runner",
+      "required_by": ["REQ-002.9"],
+      "install": { "bun": "bun add {spec}" },
+      "verify": { "command": "loadtest --version", "match": "Loadtest" }
+    }
+  ]
+}
+```
+
+⚠️ **`match` 必须是 `"Loadtest"`（大写 L）** —— `loadtest --version` 的真实输出是 `Loadtest version: 8.2.1`
+（实测）⇒ 写成小写 `"loadtest"` ⇒ `qa doctor` 判 `failed`（实测）⇒ 工具被判「不可用」⇒ D206 会拒绝执行。
+（REQ-003 文档里的样例清单用的是小写，**属上游样例的一处笔误**，见 `PROBE-FACTS.md` F8。）
+
+#### 3.1.2 验收前置（**不是夹具的一部分**，但**必须先满足**）
+
+`loadtest` **必须已安装**到 `<项目根>/.tools/node/node_modules/loadtest/`（含 `.bin/loadtest`），
+安装方式：`node <交付包>/bin/qa install --project <项目根>`（REQ-003 的 `qa-toolchain`）。
+
+⚠️ **门本身不装工具**（与 REQ-009 / REQ-012 的「不装工具」纪律一致）⇒ 工具缺失时门**必须明确报错**（AC-033）。
 
 ### 3.2 计划产物（**逐字**规定）
 
@@ -470,6 +509,8 @@ REQ-009（压测能力域）交了「负载模型」；REQ-012（A 阶段）交�
 | 11 | `verdict.undetermined_keys` 含 `"max_concurrency"` |
 | 12 | `evidence/LOAD-001-checkout/` 下有 `manifest.json`，列出每个证据文件的 sha256 |
 | 13 | `results_sha256` 可被第三方**复算**一致 |
+| 14 | **顺序执行可核**：同套件内前一条 invocation 的 `stub_observed.last_at_ms` ≤ 后一条的 `stub_observed.first_at_ms`（无重叠） |
+| 15 | **桩侧观测是本次增量**：各 invocation 的 `stub_observed.requests` 之和 ≥ 桩侧总请求数，且**没有哪条**等于累计值（即不是累计口径） |
 
 ---
 
