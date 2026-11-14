@@ -19,7 +19,16 @@
  *        defect-cases.json 里处置结论自洽（每条缺陷有且只有一个 disposition；
  *        derived 的缺陷有对应用例；reused 的缺陷有 reused_case_refs；cases[] 的 id 唯一）
  *        （这条链路经过 test-case-design → defect-verify → test-execute 的**硬跨 skill 依赖**；
- *          「装齐 6 个」只是**装了**，不等于**用上了**）。
+ *          「装齐 6 个」只是**装了**，不等于**用上了**）；
+ *      - 安全上下文 + 功能用例集 + 依赖扫描结果 → **security-plan** 的 make-security-plan.mjs
+ *        → 断言产出的威胁模型 / 权限矩阵 / 安全用例集**逐项自洽**
+ *        （OWASP 十类逐类有交代、四类实战补充逐类显式判定、越权缺口与越权威胁双向对应、
+ *          用例 id 全局唯一且不与输入集冲突、方法号确实存在于方法库、
+ *          产物能被上游的**加载层**消费）
+ *        （这条链路经过 test-case-design（方法库 / 维度库）→ security-plan；
+ *          ⚠️ **不断言** run-suite.mjs --dry-run 能跑通 ——
+ *          `security` 执行器在 test-execute 的 not_implemented 里，dry-run 会先抛错；
+ *          「能被消费」只证到**加载层**）。
  *
  * 退出码：0 = 全通过 / 1 = 有问题 / 2 = 用法错误。
  *
@@ -596,6 +605,584 @@ function scenarioDefectVerify(root, work) {
 }
 
 /**
+ * 组合场景五：安全上下文 + 功能用例集 + 扫描结果 → security-plan 出安全测试计划 → 断言逐项自洽。
+ *
+ * 这条链路**真的经过**第 7 个 skill（security-plan）：在临时根里造一份安全上下文 +
+ * 一份功能用例集 + 一份 bandit 扫描结果 + 一个最小项目根，实跑 make-security-plan.mjs，
+ * 然后**从产物反推**断言（不是只查文件存在）：
+ *   - OWASP 十类**逐类有交代**（covered ⇒ threat_refs 非空且恰为该类全部威胁；
+ *     不适用 ⇒ 非空理由 + 指向一条 category 等于该类的未决问题）；
+ *   - 四类实战补充逐类显式判定，且「covered ⇒ 被引用威胁的 supplement_refs 含该键」；
+ *   - 每个资产 / 边界 / 入口点都至少被一条威胁引用（不悬空、不漏）；
+ *   - 权限矩阵：角色 / 资源集合与上下文相等、每个 (role, resource) 至少一条、
+ *     允许缺口 ⇒ decision=allow 且指向越权类威胁、越权类威胁**双向**被缺口引用；
+ *   - 套件：目录名合规、suite.json 顶层字段集 ⊆ 9（无 threat_model）、suite 名 == 目录名、
+ *     scope/executor == security、environment / cases_file 真实存在；
+ *   - 用例：cases.json 顶层**恰好 7 个**、id 合 ^TC-\d{3}$ 且跨套件唯一且不与输入集冲突、
+ *     dimension=security、status 恒为 active、方法号**确实存在于方法库**、
+ *     tags 含 security 与威胁 id；
+ *   - 产物能被上游的**加载层**消费（loadSuite / loadCases / selectCases），
+ *     并且过上游 validate-cases.mjs（退出码 0）。
+ *
+ * ⚠️ 这里**不断言** `run-suite.mjs --dry-run` 能跑通：`security` 执行器在
+ * test-execute/executors/index.json 的 not_implemented 里，且执行器查找在 dry-run
+ * 分支**之前** ⇒ dry-run 会先抛错。安全用例的**执行属后续 REQ**。
+ *
+ * @param {string} root 临时根
+ * @param {string} work 工作目录
+ * @returns {{ok: boolean, message: string}} 场景结论
+ */
+function scenarioSecurityPlan(root, work) {
+  const skillsDir = path.join(root, 'skills');
+  const maker = path.join(skillsDir, 'security-plan', 'scripts', 'make-security-plan.mjs');
+  const validator = path.join(skillsDir, 'test-case-design', 'scripts', 'validate-cases.mjs');
+  const loader = path.join(skillsDir, 'test-execute', 'scripts', 'lib', 'suite-loader.mjs');
+  const methodsFile = path.join(skillsDir, 'test-case-design', 'references', 'methods.json');
+  const missing = [];
+  for (const file of [maker, validator, loader, methodsFile]) {
+    if (!fs.existsSync(file)) missing.push(path.relative(root, file));
+  }
+  if (missing.length > 0) {
+    return { ok: false, message: `临时根里缺这些必需文件: ${missing.join(' / ')}` };
+  }
+
+  // --- 夹具：安全上下文 / 功能用例集 / bandit 扫描结果 / 最小项目根 ---
+  const project = path.join(work, 'security-plan-proj');
+  const inputsDir = path.join(project, 'inputs');
+  const envDir = path.join(project, 'test-assets', 'environments');
+  fs.mkdirSync(inputsDir, { recursive: true });
+  fs.mkdirSync(envDir, { recursive: true });
+
+  const context = {
+    schema_version: 1,
+    service: { name: 'order-api', description: '订单服务' },
+    assets: [
+      { id: 'AS-1', name: '用户口令哈希', sensitivity: 'critical', description: '口令散列' },
+      { id: 'AS-2', name: '订单数据', sensitivity: 'high', description: '订单明细' },
+      { id: 'AS-3', name: '访问日志', sensitivity: 'medium', description: '审计日志' },
+    ],
+    trust_boundaries: [
+      { id: 'TB-1', name: '公网到应用', from: '互联网', to: '应用网关', controls: ['TLS 终止', 'WAF 规则'] },
+      { id: 'TB-2', name: '应用到数据层', from: '应用进程', to: '数据库', controls: ['参数化查询'] },
+    ],
+    entry_points: [
+      { id: 'EP-1', name: '登录接口', kind: 'http', asset_refs: ['AS-1'], boundary_refs: ['TB-1'], description: 'POST /api/login' },
+      { id: 'EP-2', name: '订单详情接口', kind: 'http', asset_refs: ['AS-2'], boundary_refs: ['TB-1'], description: 'GET /api/orders/{id}' },
+      { id: 'EP-3', name: '日志写入', kind: 'file', asset_refs: ['AS-3'], boundary_refs: ['TB-2'], description: '写访问日志' },
+    ],
+    roles: [
+      { id: 'ROLE-1', name: '匿名访客' },
+      { id: 'ROLE-2', name: '登录用户' },
+      { id: 'ROLE-3', name: '管理员' },
+    ],
+    resources: [
+      { id: 'RES-1', name: '订单', asset_refs: ['AS-2'] },
+      { id: 'RES-2', name: '用户账号', asset_refs: ['AS-1'] },
+    ],
+  };
+  const functionalCases = {
+    schema_version: 2,
+    meta: { source: 'REQ-VERIFY 需求文档', generated_at: '2026-01-01T00:00:00+08:00', case_count: 2 },
+    requirements: [
+      { id: 'R-1', title: '登录', source_ref: 'REQ-VERIFY §1', testable: true },
+      { id: 'R-2', title: '订单查询', source_ref: 'REQ-VERIFY §2', testable: true },
+    ],
+    open_questions: [],
+    coverage_matrix: [
+      { requirement: 'R-1', methods_applied: ['M1.1'], skipped: [], dimensions: ['functional'] },
+      { requirement: 'R-2', methods_applied: ['M1.1'], skipped: [], dimensions: ['functional'] },
+    ],
+    defects: [],
+    cases: [
+      {
+        id: 'TC-001', title: '登录成功返回令牌', requirement_refs: ['R-1'], dimension: 'functional',
+        priority: 'P0', method: ['M1.1'], status: 'active', preconditions: [],
+        steps: [{ action: 'POST /api/login', expected: '返回 200 与访问令牌' }], data: {}, tags: ['auth'],
+      },
+      {
+        id: 'TC-002', title: '查询订单详情', requirement_refs: ['R-2'], dimension: 'functional',
+        priority: 'P0', method: ['M1.1'], status: 'active', preconditions: [],
+        steps: [{ action: 'GET /api/orders/{id}', expected: '返回订单明细' }], data: {}, tags: ['order'],
+      },
+    ],
+  };
+  const scan = {
+    results: [
+      {
+        filename: 'app/handlers/upload.py', test_id: 'B301', test_name: 'blacklist',
+        issue_severity: 'HIGH', issue_confidence: 'HIGH',
+        issue_text: "Possible hardcoded password: 'secret123'", line_number: 42,
+      },
+      {
+        filename: 'app/handlers/xml.py', test_id: 'B320', test_name: 'bad_telemetry',
+        issue_severity: 'MEDIUM', issue_confidence: 'MEDIUM',
+        issue_text: 'Consider possible security implications of xml parsing', line_number: 17,
+      },
+    ],
+    errors: [],
+  };
+  // ⚠️ 环境**不写** driver：写了会覆盖 suite.json 的 executor，误配对到 api/mock 执行器，
+  //    「能跑通」就变成了假象（安全用例的执行属后续 REQ）。
+  const environment = {
+    name: 'local',
+    base_url: 'http://127.0.0.1:8080',
+    timeout_ms: 5000,
+    retries: 0,
+    credentials: { username_env: 'ORDER_API_USER', password_env: 'ORDER_API_PASS' },
+  };
+
+  const contextFile = path.join(inputsDir, 'context.json');
+  const casesFile = path.join(inputsDir, 'cases.json');
+  const scanFile = path.join(inputsDir, 'bandit.json');
+  fs.writeFileSync(contextFile, `${JSON.stringify(context, null, 2)}\n`, 'utf8');
+  fs.writeFileSync(casesFile, `${JSON.stringify(functionalCases, null, 2)}\n`, 'utf8');
+  fs.writeFileSync(scanFile, `${JSON.stringify(scan, null, 2)}\n`, 'utf8');
+  fs.writeFileSync(path.join(envDir, 'local.json'), `${JSON.stringify(environment, null, 2)}\n`, 'utf8');
+
+  // --- 实跑 ---
+  const run = runNode(
+    maker,
+    ['--context', contextFile, '--cases', casesFile, '--scan', scanFile, '--out-dir', project],
+    work,
+  );
+  if (run.code !== 0) {
+    const detail = runOutputDetail(run);
+    return {
+      ok: false,
+      message: `security-plan 出安全测试计划失败（退出码 ${run.code}）${detail === '' ? '' : `\n${detail}`}`,
+    };
+  }
+
+  const securityRoot = path.join(project, 'test-assets', 'security');
+  const modelFile = path.join(securityRoot, 'threat-model.json');
+  const matrixFile = path.join(securityRoot, 'matrix.json');
+  for (const file of [modelFile, matrixFile]) {
+    if (!fs.existsSync(file)) {
+      return { ok: false, message: `security-plan 没有产出 ${path.relative(root, file)}` };
+    }
+  }
+  let model = null;
+  let matrix = null;
+  try {
+    model = JSON.parse(fs.readFileSync(modelFile, 'utf8'));
+    matrix = JSON.parse(fs.readFileSync(matrixFile, 'utf8'));
+  } catch (err) {
+    return { ok: false, message: `security-plan 的产物不是合法 JSON（${err.message}）` };
+  }
+
+  const problems = [];
+  const OWASP_CODES = ['A01', 'A02', 'A03', 'A04', 'A05', 'A06', 'A07', 'A08', 'A09', 'A10'];
+  const SUPPLEMENT_KEYS = ['file_upload', 'ssrf', 'xxe', 'deserialization'];
+  const THREAT_FIELDS = [
+    'id', 'name', 'category', 'owasp', 'asset_refs', 'boundary_refs', 'entry_point_refs',
+    'severity', 'source', 'scan_refs', 'supplement_refs', 'rationale',
+  ];
+  const CASES_TOP_LEVEL = [
+    'schema_version', 'meta', 'requirements', 'open_questions', 'coverage_matrix', 'defects', 'cases',
+  ];
+  const SUITE_ALLOWED = [
+    'suite', 'requirement', 'scope', 'environment', 'cases_file', 'executor',
+    'base_url_from', 'tags', 'report',
+  ];
+
+  // --- 威胁模型 ---
+  const threats = Array.isArray(model.threats) ? model.threats : [];
+  const threatById = new Map(threats.map((threat) => [threat.id, threat]));
+  if (threats.length === 0) problems.push('threats 为空');
+  const assetIds = new Set((model.assets || []).map((item) => item.id));
+  const boundaryIds = new Set((model.trust_boundaries || []).map((item) => item.id));
+  const entryIds = new Set((model.entry_points || []).map((item) => item.id));
+  const usedAssets = new Set();
+  const usedBoundaries = new Set();
+  const usedEntries = new Set();
+  for (const threat of threats) {
+    const fields = Object.keys(threat);
+    for (const key of THREAT_FIELDS) {
+      if (!fields.includes(key)) problems.push(`威胁 ${threat.id} 缺字段 ${key}`);
+    }
+    for (const key of fields) {
+      if (!THREAT_FIELDS.includes(key)) problems.push(`威胁 ${threat.id} 出现未声明的字段 ${key}`);
+    }
+    if (!/^TH-\d+$/.test(String(threat.id))) problems.push(`威胁 id 不合规: ${threat.id}`);
+    if (!OWASP_CODES.includes(threat.owasp)) problems.push(`威胁 ${threat.id} 的 owasp 非法: ${threat.owasp}`);
+    if (!Array.isArray(threat.asset_refs) || threat.asset_refs.length === 0) {
+      problems.push(`威胁 ${threat.id} 的 asset_refs 为空`);
+    }
+    if (!Array.isArray(threat.entry_point_refs) || threat.entry_point_refs.length === 0) {
+      problems.push(`威胁 ${threat.id} 的 entry_point_refs 为空`);
+    }
+    for (const ref of threat.asset_refs || []) {
+      if (!assetIds.has(ref)) problems.push(`威胁 ${threat.id} 的 asset_refs 悬空: ${ref}`);
+      else usedAssets.add(ref);
+    }
+    for (const ref of threat.boundary_refs || []) {
+      if (!boundaryIds.has(ref)) problems.push(`威胁 ${threat.id} 的 boundary_refs 悬空: ${ref}`);
+      else usedBoundaries.add(ref);
+    }
+    for (const ref of threat.entry_point_refs || []) {
+      if (!entryIds.has(ref)) problems.push(`威胁 ${threat.id} 的 entry_point_refs 悬空: ${ref}`);
+      else usedEntries.add(ref);
+    }
+    const hasScan = String(threat.source || '').includes('scan');
+    const scanRefs = Array.isArray(threat.scan_refs) ? threat.scan_refs : [];
+    if (hasScan !== (scanRefs.length > 0)) {
+      problems.push(`威胁 ${threat.id} 的 source 与 scan_refs 不自洽`);
+    }
+  }
+  for (const id of assetIds) {
+    if (!usedAssets.has(id)) problems.push(`资产 ${id} 没有被任何威胁引用（漏检）`);
+  }
+  for (const id of boundaryIds) {
+    if (!usedBoundaries.has(id)) problems.push(`信任边界 ${id} 没有被任何威胁引用（漏检）`);
+  }
+  for (const id of entryIds) {
+    if (!usedEntries.has(id)) problems.push(`入口点 ${id} 没有被任何威胁引用（漏检）`);
+  }
+
+  // --- OWASP 十类 ---
+  const coverage = model.owasp_coverage || {};
+  const coverageKeys = Object.keys(coverage).sort();
+  if (coverageKeys.length !== 10 || OWASP_CODES.some((code) => !coverageKeys.includes(code))) {
+    problems.push(`owasp_coverage 的键集不是 A01~A10（实际 ${coverageKeys.join(' / ')}）`);
+  }
+  const questions = Array.isArray(model.open_questions) ? model.open_questions : [];
+  const questionById = new Map(questions.map((question) => [question.id, question]));
+  for (const code of OWASP_CODES) {
+    const entry = coverage[code];
+    if (!entry) {
+      problems.push(`owasp_coverage 缺少 ${code}（不许静默跳过）`);
+      continue;
+    }
+    const actual = threats.filter((threat) => threat.owasp === code).map((threat) => threat.id);
+    if (entry.status === 'covered') {
+      if (!Array.isArray(entry.threat_refs) || entry.threat_refs.length === 0) {
+        problems.push(`owasp_coverage.${code} 判为已覆盖但没有威胁引用`);
+        continue;
+      }
+      for (const ref of entry.threat_refs) {
+        if (!threatById.has(ref)) problems.push(`owasp_coverage.${code} 的威胁引用悬空: ${ref}`);
+        else if (threatById.get(ref).owasp !== code) problems.push(`owasp_coverage.${code} 引用了别的类的威胁`);
+      }
+      for (const id of actual) {
+        if (!entry.threat_refs.includes(id)) problems.push(`owasp_coverage.${code} 漏掉了威胁 ${id}`);
+      }
+    } else if (entry.status === 'not_applicable') {
+      if (typeof entry.reason !== 'string' || entry.reason.trim() === '') {
+        problems.push(`owasp_coverage.${code} 判为不适用但理由为空`);
+      }
+      const question = questionById.get(entry.open_question_ref);
+      if (!question) problems.push(`owasp_coverage.${code} 的未决问题引用悬空`);
+      else if (question.category !== code) problems.push(`owasp_coverage.${code} 的未决问题类别对不上`);
+      if (actual.length > 0) problems.push(`owasp_coverage.${code} 判为不适用却造了该类威胁`);
+    } else {
+      problems.push(`owasp_coverage.${code} 的状态非法: ${entry.status}`);
+    }
+  }
+
+  // --- 四类实战补充 ---
+  const supplements = model.supplements || {};
+  for (const key of SUPPLEMENT_KEYS) {
+    const entry = supplements[key];
+    if (!entry) {
+      problems.push(`supplements 缺少 ${key}（不许静默跳过）`);
+      continue;
+    }
+    const actual = threats
+      .filter((threat) => (threat.supplement_refs || []).includes(key))
+      .map((threat) => threat.id);
+    if (entry.status === 'covered') {
+      if (!Array.isArray(entry.threat_refs) || entry.threat_refs.length === 0) {
+        problems.push(`supplements.${key} 判为已覆盖但没有威胁引用`);
+        continue;
+      }
+      for (const ref of entry.threat_refs) {
+        if (!threatById.has(ref)) problems.push(`supplements.${key} 的威胁引用悬空: ${ref}`);
+        else if (!(threatById.get(ref).supplement_refs || []).includes(key)) {
+          problems.push(`supplements.${key} 引用的威胁没有把它写进 supplement_refs`);
+        }
+      }
+      for (const id of actual) {
+        if (!entry.threat_refs.includes(id)) problems.push(`supplements.${key} 漏掉了威胁 ${id}`);
+      }
+    } else if (entry.status === 'not_applicable') {
+      if (typeof entry.reason !== 'string' || entry.reason.trim() === '') {
+        problems.push(`supplements.${key} 判为不适用但理由为空`);
+      }
+      if (actual.length > 0) problems.push(`supplements.${key} 判为不适用却造了该类威胁`);
+    } else {
+      problems.push(`supplements.${key} 的状态非法: ${entry.status}`);
+    }
+  }
+
+  // --- 扫描 ---
+  if (!model.scan || model.scan.status !== 'provided') {
+    problems.push(`scan.status 不是 provided（实际 ${model.scan ? model.scan.status : '无'}）`);
+  }
+  if (!model.scan || model.scan.tool !== 'bandit') {
+    problems.push(`scan.tool 不是 bandit（实际 ${model.scan ? model.scan.tool : '无'}）`);
+  }
+  const findings = Array.isArray(model.scan_findings) ? model.scan_findings : [];
+  if (findings.length !== 2) problems.push(`scan_findings 条数不是 2（实际 ${findings.length}）`);
+  for (const finding of findings) {
+    if (!Array.isArray(finding.threat_refs) || finding.threat_refs.length === 0) {
+      problems.push(`扫描发现 ${finding.id} 没有映射到威胁`);
+      continue;
+    }
+    for (const ref of finding.threat_refs) {
+      const threat = threatById.get(ref);
+      if (!threat) {
+        problems.push(`扫描发现 ${finding.id} 映射到不存在的威胁 ${ref}`);
+        continue;
+      }
+      if (!String(threat.source).includes('scan')) {
+        problems.push(`扫描发现 ${finding.id} 映射的威胁来源里没有 scan`);
+      }
+      if (!(threat.scan_refs || []).includes(finding.id)) {
+        problems.push(`扫描发现 ${finding.id} 映射的威胁没有回指它`);
+      }
+    }
+  }
+
+  // --- 权限矩阵 ---
+  const roles = Array.isArray(matrix.roles) ? matrix.roles : [];
+  const resources = Array.isArray(matrix.resources) ? matrix.resources : [];
+  const entries = Array.isArray(matrix.entries) ? matrix.entries : [];
+  const contextRoleIds = context.roles.map((role) => role.id).sort().join(',');
+  const contextResourceIds = context.resources.map((resource) => resource.id).sort().join(',');
+  if (roles.map((role) => role.id).sort().join(',') !== contextRoleIds) {
+    problems.push('matrix.json 的角色集合与上下文不相等');
+  }
+  if (resources.map((resource) => resource.id).sort().join(',') !== contextResourceIds) {
+    problems.push('matrix.json 的资源集合与上下文不相等');
+  }
+  if (entries.length === 0) problems.push('matrix.json 的 entries 为空');
+  const pairs = new Set();
+  const gapThreatRefs = new Set();
+  for (const entry of entries) {
+    pairs.add(`${entry.role}|${entry.resource}`);
+    if (!roles.some((role) => role.id === entry.role)) problems.push(`矩阵条目的角色悬空: ${entry.role}`);
+    if (!resources.some((resource) => resource.id === entry.resource)) {
+      problems.push(`矩阵条目的资源悬空: ${entry.resource}`);
+    }
+    if (entry.basis === 'gap') {
+      if (entry.decision !== 'allow') problems.push('矩阵缺口条目的决策必须是允许');
+      const threat = threatById.get(entry.threat_ref);
+      if (!threat) problems.push(`矩阵缺口条目指向的威胁不存在: ${entry.threat_ref}`);
+      else if (threat.category !== 'elevation_of_privilege') {
+        problems.push('矩阵缺口条目指向的威胁不是越权类');
+      }
+      gapThreatRefs.add(entry.threat_ref);
+    } else if (entry.basis !== 'expected') {
+      problems.push(`矩阵条目的依据非法: ${entry.basis}`);
+    }
+  }
+  for (const role of roles) {
+    for (const resource of resources) {
+      if (!pairs.has(`${role.id}|${resource.id}`)) {
+        problems.push(`矩阵漏掉了组合 (${role.id}, ${resource.id})`);
+      }
+    }
+  }
+  for (const threat of threats) {
+    if (threat.category !== 'elevation_of_privilege') continue;
+    if (!gapThreatRefs.has(threat.id)) {
+      problems.push(`越权类威胁 ${threat.id} 没有被任何缺口条目引用`);
+    }
+  }
+
+  // --- 套件与用例 ---
+  const suitesDir = path.join(securityRoot, 'suites');
+  const suiteNames = fs.existsSync(suitesDir)
+    ? fs.readdirSync(suitesDir).filter((name) => fs.statSync(path.join(suitesDir, name)).isDirectory()).sort()
+    : [];
+  if (suiteNames.length === 0) problems.push('没有产出任何安全套件');
+  let methodIds = [];
+  try {
+    methodIds = JSON.parse(fs.readFileSync(methodsFile, 'utf8')).methods.map((item) => item.id);
+  } catch {
+    problems.push('读不到方法库');
+  }
+  const usedCaseIds = new Set();
+  const inputCaseIds = new Set(functionalCases.cases.map((item) => item.id));
+  const coveredThreats = new Set();
+  let caseTotal = 0;
+  for (const name of suiteNames) {
+    if (!/^SEC-\d{3}-[a-z0-9][a-z0-9-]*$/.test(name)) {
+      problems.push(`套件目录名不合规: ${name}`);
+    }
+    const suiteDir = path.join(suitesDir, name);
+    const suiteFile = path.join(suiteDir, 'suite.json');
+    const casesFile = path.join(suiteDir, 'cases.json');
+    if (!fs.existsSync(suiteFile)) problems.push(`套件 ${name} 缺 suite.json`);
+    if (!fs.existsSync(casesFile)) problems.push(`套件 ${name} 缺 cases.json`);
+    if (!fs.existsSync(suiteFile) || !fs.existsSync(casesFile)) continue;
+    let suite = null;
+    let casesDoc = null;
+    try {
+      suite = JSON.parse(fs.readFileSync(suiteFile, 'utf8'));
+      casesDoc = JSON.parse(fs.readFileSync(casesFile, 'utf8'));
+    } catch (err) {
+      problems.push(`套件 ${name} 的产物不是合法 JSON`);
+      continue;
+    }
+    for (const key of Object.keys(suite)) {
+      if (!SUITE_ALLOWED.includes(key)) problems.push(`套件 ${name} 的 suite.json 出现未声明的字段 ${key}`);
+    }
+    for (const key of ['suite', 'requirement', 'scope', 'environment', 'cases_file', 'executor']) {
+      if (typeof suite[key] !== 'string' || suite[key].trim() === '') {
+        problems.push(`套件 ${name} 的 suite.json 缺必填字段 ${key}`);
+      }
+    }
+    if (suite.suite !== name) problems.push(`套件 ${name} 的 suite 名与目录名不一致`);
+    if (suite.scope !== 'security') problems.push(`套件 ${name} 的 scope 不是 security`);
+    if (suite.executor !== 'security') problems.push(`套件 ${name} 的 executor 不是 security`);
+    if (!fs.existsSync(path.join(project, 'test-assets', 'environments', `${suite.environment}.json`))) {
+      problems.push(`套件 ${name} 引用的环境不存在: ${suite.environment}`);
+    }
+    if (!fs.existsSync(path.resolve(suiteDir, suite.cases_file))) {
+      problems.push(`套件 ${name} 引用的用例集不存在: ${suite.cases_file}`);
+    }
+
+    const topKeys = Object.keys(casesDoc);
+    for (const key of CASES_TOP_LEVEL) {
+      if (!topKeys.includes(key)) problems.push(`套件 ${name} 的 cases.json 缺顶层字段 ${key}`);
+    }
+    for (const key of topKeys) {
+      if (!CASES_TOP_LEVEL.includes(key)) {
+        problems.push(`套件 ${name} 的 cases.json 出现未声明的顶层字段 ${key}`);
+      }
+    }
+    if (casesDoc.schema_version !== 2) problems.push(`套件 ${name} 的 cases.json 的 schema_version 不是 2`);
+    const requirements = Array.isArray(casesDoc.requirements) ? casesDoc.requirements : [];
+    const requirementIds = new Set(requirements.map((item) => item.id));
+    const matrixRequirements = new Set((casesDoc.coverage_matrix || []).map((item) => item.requirement));
+    for (const requirement of requirements) {
+      const matched = /^threat-model\.json#\/threats\/(TH-\d+)$/.exec(String(requirement.source_ref || ''));
+      if (!matched) {
+        problems.push(`套件 ${name} 的需求条目的来源引用格式不对: ${requirement.source_ref}`);
+      } else if (!threatById.has(matched[1])) {
+        problems.push(`套件 ${name} 的需求条目指向不存在的威胁: ${matched[1]}`);
+      }
+      if (!matrixRequirements.has(requirement.id)) {
+        problems.push(`套件 ${name} 的覆盖矩阵漏掉了需求条目 ${requirement.id}`);
+      }
+    }
+    const cases = Array.isArray(casesDoc.cases) ? casesDoc.cases : [];
+    caseTotal += cases.length;
+    for (const item of cases) {
+      if (!/^TC-\d{3}$/.test(String(item.id))) problems.push(`用例 id 不合规: ${item.id}`);
+      if (usedCaseIds.has(item.id)) problems.push(`用例 id 跨套件重复: ${item.id}`);
+      usedCaseIds.add(item.id);
+      if (inputCaseIds.has(item.id)) problems.push(`用例 id 与输入用例集冲突: ${item.id}`);
+      if (item.dimension !== 'security') problems.push(`用例 ${item.id} 的维度不是 security`);
+      if (item.status !== 'active') problems.push(`用例 ${item.id} 的状态不是 active`);
+      if (item.revision !== undefined) problems.push(`用例 ${item.id} 带了修订记录`);
+      for (const method of item.method || []) {
+        if (!methodIds.includes(method)) problems.push(`用例 ${item.id} 用了方法库里没有的方法号: ${method}`);
+      }
+      for (const ref of item.requirement_refs || []) {
+        if (!requirementIds.has(ref)) problems.push(`用例 ${item.id} 的需求引用悬空: ${ref}`);
+      }
+      if (!Array.isArray(item.tags) || !item.tags.includes('security')) {
+        problems.push(`用例 ${item.id} 的标签里没有 security`);
+      }
+      for (const ref of item.requirement_refs || []) {
+        const requirement = requirements.find((one) => one.id === ref);
+        const matched = requirement
+          ? /^threat-model\.json#\/threats\/(TH-\d+)$/.exec(String(requirement.source_ref || ''))
+          : null;
+        if (matched) {
+          coveredThreats.add(matched[1]);
+          if (!Array.isArray(item.tags) || !item.tags.includes(matched[1])) {
+            problems.push(`用例 ${item.id} 的标签里没有它对应的威胁 id ${matched[1]}`);
+          }
+        }
+      }
+      if (!Array.isArray(item.steps) || item.steps.length === 0) {
+        problems.push(`用例 ${item.id} 没有步骤`);
+      }
+    }
+
+    // --- 产物过上游校验器（真实退出码）---
+    const validated = runNode(validator, [casesFile], work);
+    if (validated.code !== 0) {
+      const detail = runOutputDetail(validated);
+      problems.push(`套件 ${name} 的 cases.json 过不了上游校验器（退出码 ${validated.code}）${detail === '' ? '' : `\n${detail}`}`);
+    }
+  }
+  if (caseTotal < threats.length) {
+    problems.push(`安全用例总数 ${caseTotal} 少于威胁数 ${threats.length}（每条威胁至少 1 条用例）`);
+  }
+  for (const threat of threats) {
+    if (!coveredThreats.has(threat.id)) {
+      problems.push(`威胁 ${threat.id} 没有任何用例覆盖`);
+    }
+  }
+
+  // --- 加载层可消费（问上游本人）---
+  const loadcheckFile = path.join(work, 'security-plan-loadcheck.mjs');
+  fs.writeFileSync(loadcheckFile, `${LOADCHECK_SOURCE}\n`, 'utf8');
+  const loaded = runNode(loadcheckFile, [securityRoot, loader], work);
+  if (loaded.code !== 0) {
+    const detail = runOutputDetail(loaded);
+    problems.push(`加载层消费失败（退出码 ${loaded.code}）${detail === '' ? '' : `\n${detail}`}`);
+  } else {
+    let report = null;
+    try {
+      report = JSON.parse(loaded.stdout.trim());
+    } catch {
+      problems.push('加载层检查没有输出可解析的结果');
+    }
+    if (Array.isArray(report)) {
+      for (const item of report) {
+        if (item.selected !== item.total) {
+          problems.push(`套件 ${item.suite} 按标签选出的用例数 ${item.selected} 与总数 ${item.total} 不一致`);
+        }
+      }
+    }
+  }
+
+  if (problems.length > 0) {
+    return {
+      ok: false,
+      message: `security-plan 的产物不自洽: ${problems.join('; ')}`,
+    };
+  }
+
+  const covered = Object.values(coverage).filter((entry) => entry.status === 'covered').length;
+  const na = Object.values(coverage).filter((entry) => entry.status === 'not_applicable').length;
+  return {
+    ok: true,
+    message:
+      `security-plan 的规划链路（make-security-plan.mjs 读安全上下文 + 功能用例集 + 依赖扫描结果）→ ` +
+      `威胁 ${threats.length} 条（OWASP 十类：已覆盖 ${covered} 类 / 不适用 ${na} 类）、` +
+      `扫描发现 ${findings.length} 条全部映射到威胁、` +
+      `权限矩阵 ${entries.length} 条（允许缺口 ${gapThreatRefs.size} 条）、` +
+      `套件 ${suiteNames.length} 个 / 安全用例 ${caseTotal} 条（id 跨套件唯一且不与输入集冲突）；` +
+      `产物可被上游加载层消费且过上游用例集校验器`,
+  };
+}
+
+/** 加载层检查脚本的源码（在临时目录里现生成现跑 —— 问上游 loader 本人「能不能被消费」）。 */
+const LOADCHECK_SOURCE = [
+  "import fs from 'node:fs';",
+  "import path from 'node:path';",
+  "import { pathToFileURL } from 'node:url';",
+  "const [root, loaderPath] = process.argv.slice(2);",
+  'const loader = await import(pathToFileURL(loaderPath).href);',
+  "const suitesDir = path.join(root, 'suites');",
+  'const out = [];',
+  "for (const name of fs.readdirSync(suitesDir).sort()) {",
+  "  const suiteFile = path.join(suitesDir, name, 'suite.json');",
+  '  const { config, casesFile } = loader.loadSuite(suiteFile);',
+  '  const { cases } = loader.loadCases(casesFile);',
+  '  const selected = loader.selectCases(cases, config.tags);',
+  '  out.push({ suite: name, total: cases.length, selected: selected.length });',
+  '}',
+  'process.stdout.write(`${JSON.stringify(out)}\\n`);',
+].join('\n');
+
+/**
  * 组合门主流程。
  * @param {string|undefined} rootArg 命令行给的安装根
  * @returns {number} 退出码
@@ -679,6 +1266,7 @@ function runVerifyIn(root, work) {
     scenarioCycle(root, work),
     scenarioReport(root, work),
     scenarioDefectVerify(root, work),
+    scenarioSecurityPlan(root, work),
   ];
   let failed = 0;
   for (const scenario of scenarios) {
