@@ -99,10 +99,10 @@ WL-001 有 4 个阈值键，其余三个场景无阈值）。
 
 #### AC-005 `execution` 段的形状与取值
 
-- **判**：`execution` **恰好 7 键**（`mode` / `started_at` / `finished_at` / `duration_ms` / `tool` / `stub` / `cli`）；
+- **判**：`execution` **恰好 6 必填键**（`mode` / `started_at` / `finished_at` / `duration_ms` / `tool` / `stub`）
+  **+ 1 条件键**（`cli`：**仅** `cli_verbatim` 模式存在，`api_equivalent` 模式**必须缺席**）；
   `mode` ∈ {`api_equivalent`, `cli_verbatim`}；`tool` **恰好 3 键**（`name` / `version` / `resolved_from`）；
-  `stub` **恰好 4 键**（`origin` / `delay_ms` / `error_rate` / `status`）；`duration_ms` 是 **≥ 0 的整数**；
-  `cli` 段**仅** `cli_verbatim` 模式存在（`api_equivalent` 模式**必须缺席**）。
+  `stub` **恰好 4 键**（`origin` / `delay_ms` / `error_rate` / `status`）；`duration_ms` 是 **≥ 0 的整数**。
 - **核**：键集合检查 + 类型检查 + 条件存在性检查。
 - **变异**：`api` 模式也写 `cli` 段 / `tool` 里多一个 `path` 键 / `mode` 写成 `"api"`。
 
@@ -254,8 +254,10 @@ WL-001 有 4 个阈值键，其余三个场景无阈值）。
 #### AC-024 产物**不得**出现生产容量表述
 
 - **判**：结果产物**全文**（含所有字符串值与键名）**不得**出现下列字样：
-  「生产」「生产环境」「容量达标」「可承载」「上线」「production」「production-ready」「capacity」；
+  「生产」「生产环境」「容量达标」「可承载」「上线」「production」「production-ready」；
   且**必须**出现「本地桩」或 `127.0.0.1` 之一（**限定语**）。
+  ⚠️ **单独的 `capacity` 不在禁词表** —— 来源标记（如 `thresholds_source = "capacity-targets"`）是**出处**，
+  不是「容量达标」这类表述；禁它会**误伤契约自身的夹具**。
 - **核**：全文正则扫描（大小写不敏感）+ 限定语存在性检查。
 - **变异**：在 `verdict` 里写一句「生产环境容量达标」。
 

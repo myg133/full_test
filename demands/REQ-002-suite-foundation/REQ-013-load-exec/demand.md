@@ -257,7 +257,7 @@ REQ-009（压测能力域）交了「负载模型」；REQ-012（A 阶段）交�
 
 **任何未登记的顶层键 ⇒ 判红**（D204）。
 
-#### F7.3 `execution` 段（**封闭 7 个**）
+#### F7.3 `execution` 段（**封闭 6 必填 + 1 条件**）
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
@@ -267,7 +267,7 @@ REQ-009（压测能力域）交了「负载模型」；REQ-012（A 阶段）交�
 | `duration_ms` | integer ≥ 0 | 墙钟耗时 |
 | `tool` | object | 封闭 3 个：`name` / `version` / `resolved_from` |
 | `stub` | object | 封闭 4 个：`origin` / `delay_ms` / `error_rate` / `status` |
-| `cli` | object \| 缺席 | **仅 cli 模式有**：封闭 2 个：`error_code_resolution` / `percentile_source` |
+| `cli` | object \| **缺席** | **条件键**：**仅** `cli_verbatim` 模式存在（封闭 2 个：`error_code_resolution` / `percentile_source`）；`api_equivalent` 模式**必须缺席** |
 
 #### F7.4 场景条目（**封闭 8 个 + 2 个条件**）
 
