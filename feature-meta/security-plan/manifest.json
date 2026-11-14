@@ -1,0 +1,10 @@
+{
+  "req": "REQ-008",
+  "branch": "feature/REQ-008",
+  "agent_id": "worker",
+  "session_id": "mvs_c297e56f1abb40ad965d23a578fb6e67",
+  "owner": "worker",
+  "base_branch": "develop",
+  "created_at": "2026-11-14T09:42:00+08:00",
+  "demand_dir": "BA/demands/REQ-002-suite-foundation/REQ-008-security-plan"
+}
