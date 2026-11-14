@@ -19,6 +19,7 @@
 | **A6** | 幂等 | 同一被验包连跑两次 | 两次「逐条结论」**逐字一致** |
 | **A7** | 判据对照 | 门的判据与 `acceptance.md` 的 **38 条**逐条对照 | **无漏判、无多判、无编号错位**；条数 == 38 |
 | **A8** | 外部探针 | 用**门之外**的探针工装打门与交付物 | 见 §4（抓门抓不到的缺陷） |
+| **A9** | 独立语义复算 | 用需求方侧复算器（`~/.local/share/agent-runtime-data/tmp/req013/t1/recompute.py`）复算产物 | **不一致 0**（不可判定项须显式列出） |
 
 ⚠️ **A2 的判定口径**：**新增失败键** = 变异体失败键 − 基线失败键（基线失败键**只取 `^FAIL` 行**）。
 ⚠️ **不得用对称差**（REQ-012 的教训）。
@@ -56,6 +57,10 @@
 | **22** | ⚠️ **出现生产容量表述** | 产物全文不得出现「生产」「容量达标」「可承载」「production」「capacity」 | AC-024 / D205 |
 | **23** | ⚠️ **改写了输入** | `plans/` / `scenarios/` / `suites/` / `environments/` 跑前跑后逐字相同 | AC-028 / F8.4 |
 | **24** | ⚠️ **`.tools/manifest.json` 的 `verify.match` 大小写写错** | 夹具的清单必须写 `"Loadtest"`（大写 L）⇒ 否则 `qa doctor` 判 failed ⇒ 工具被判不可用 | 夹具 §0.1 / PROBE-FACTS F8 |
+| **25** | ⚠️ **`python` runner 被判成 `met`** 或给它编一个 `observed` | WL-003 的 invocation：`observed` **缺席**、`verdict == "undetermined"`、`thresholds` 空数组、**证据目录里有它的子目录** | AC-041 / D203 |
+| **26** | ⚠️ **注入后仍判 `undetermined`**（过度保守 ⇒ 判定链永远无效） | `--stub-delay-ms 50` ⇒ 延迟三类 + 错误率**恢复可判**；`--stub-error-rate 1` ⇒ 错误码是 `"500"` 不是 `"-1"` | AC-039 / AC-040 |
+| **27** | ⚠️ **`execution` 段的 `cli` 键口径搞反** | api 模式 ⇒ `execution` 键集合**恰好 6 个**（`cli` 缺席）；cli 模式 ⇒ **恰好 7 个** | AC-005 / F7.3 |
+| **28** | ⚠️ **禁词表把 `capacity` 也禁了** | `thresholds_source = "capacity-targets"` 是**来源标记**，**不在**禁词表 ⇒ 禁了会误伤正确实现 | AC-024 |
 
 ---
 
