@@ -15,8 +15,8 @@
 R=<REPO_ROOT>/BA/demands/REQ-002-suite-foundation/REQ-009-load-profile
 P=<REPO_ROOT>/feature-REQ-009
 SHA=e573d1793c9b523ca479adc0daa5fad901cfc15aa4f741cbdaa22c091b5b9f21
-mkdir -p ~/.local/share/agent-runtime-data/tmp/req009-w1/gate1
-REQ009_NO_MUT=1 QA009_WORK_ROOT=~/.local/share/agent-runtime-data/tmp/req009-w1/gate1 \
+mkdir -p /tmp/req009-w1/gate1
+REQ009_NO_MUT=1 QA009_WORK_ROOT=/tmp/req009-w1/gate1 \
   QA009_SCRIPT_SHA=$SHA bash $R/verify-acceptance.sh $P
 ```
 
@@ -67,8 +67,8 @@ PASS AC-029 交付侧记账与实际一致（追溯件四件套 / req / 矩阵 /
 命令（**不设** `REQ009_NO_MUT`，每次跑门给**独立**的 `QA009_WORK_ROOT`）：
 
 ```console
-mkdir -p ~/.local/share/agent-runtime-data/tmp/req009-w1/gatefull
-QA009_WORK_ROOT=~/.local/share/agent-runtime-data/tmp/req009-w1/gatefull \
+mkdir -p /tmp/req009-w1/gatefull
+QA009_WORK_ROOT=/tmp/req009-w1/gatefull \
   QA009_SCRIPT_SHA=$SHA bash $R/verify-acceptance.sh $P
 ```
 
@@ -124,7 +124,7 @@ QA009_WORK_ROOT=~/.local/share/agent-runtime-data/tmp/req009-w1/gatefull \
 真实输出（全文）：
 
 ```
-[info] 组合门临时根: $HOME/.local/share/agent-runtime-data/tmp/test-agent-skills-verify-a8ptEN
+[info] 组合门临时根: /tmp/test-agent-skills-verify-a8ptEN
 [ok] 已装到临时根的 skill（8 个）: defect-verify, load-profile, qa-toolchain, regression-plan, security-plan, test-case-design, test-execute, test-report
 [ok] 依赖图校验通过（8 个 skill 的版本声明与 requires 全部满足）
 [ok] 组合场景: test-execute 的 offline 夹具 → 4/1/1/0（与该夹具 README 的预期一致）
