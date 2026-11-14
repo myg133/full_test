@@ -445,6 +445,51 @@ export function deepEqual(a, b) {
 }
 
 /**
+ * 未决问题（`open_questions`）的**专项比对**。
+ *
+ * ⚠️ 口径依据（契约 AC-021 ⑧ + 需求方 Q5 裁定：未决问题的具体文字属实现方的判断）：
+ *   - `id` 与 `topic` **逐字等于**模型同一条目；
+ *   - **条目数相等**、元素**字段集封闭 3**（`id` / `topic` / `question`）；
+ *   - `question` **只查「是字符串且去首尾空白后非空」** —— 它的**文字不要求逐字相等**
+ *     （REQ-012 不得比契约更严，否则会把合法的自定措辞判成不自洽）。
+ *
+ * @param {*} expected 期望值（模型侧）
+ * @param {*} actual 实际值（产物侧）
+ * @param {string} at 路径前缀
+ * @param {string[]} out 差异收集器
+ */
+export function diffOpenQuestions(expected, actual, at, out) {
+  if (!Array.isArray(expected) || !Array.isArray(actual)) {
+    out.push(`${at}: 类型不同（期望 ${Array.isArray(expected) ? '数组' : '对象'}，实际 ${Array.isArray(actual) ? '数组' : '对象'}）`);
+    return;
+  }
+  if (expected.length !== actual.length) {
+    out.push(`${at}: 数组长度不同（期望 ${expected.length}，实际 ${actual.length}）`);
+    return;
+  }
+  for (let i = 0; i < expected.length; i += 1) {
+    const itemAt = `${at}[${i}]`;
+    const e = isObject(expected[i]) ? expected[i] : {};
+    const a = isObject(actual[i]) ? actual[i] : {};
+    const eKeys = Object.keys(e).sort();
+    const aKeys = Object.keys(a).sort();
+    if (eKeys.join(',') !== aKeys.join(',')) {
+      out.push(`${itemAt}: 字段集与模型侧不一致（模型 ${eKeys.join(',')}，实际 ${aKeys.join(',')}）`);
+    }
+    if (!deepEqual(e.id, a.id)) {
+      out.push(`${itemAt}.id: 取值不同（期望 ${JSON.stringify(e.id)}，实际 ${JSON.stringify(a.id)}）`);
+    }
+    if (!deepEqual(e.topic, a.topic)) {
+      out.push(`${itemAt}.topic: 取值不同（期望 ${JSON.stringify(e.topic)}，实际 ${JSON.stringify(a.topic)}）`);
+    }
+    // `question` 只查非空字符串，**不逐字比文字**。
+    if (!isFilledString(a.question)) {
+      out.push(`${itemAt}.question: 为空或不是字符串（实际 ${JSON.stringify(a.question)}）`);
+    }
+  }
+}
+
+/**
  * 列出两处文档的差异（用于报错信息）。
  * @param {*} expected 期望值
  * @param {*} actual 实际值
@@ -470,6 +515,12 @@ export function diffDocs(expected, actual, at, out) {
     for (const key of ke) {
       if (!Object.prototype.hasOwnProperty.call(actual, key)) {
         out.push(`${at}.${key}: 缺少这个键（期望 ${JSON.stringify(expected[key])}）`);
+        continue;
+      }
+      // ⚠️ `open_questions` 走**专项口径**（契约 AC-021 ⑧）：`question` 的文字不要求逐字相等，
+      //    只比 `id` / `topic` 逐字 + 条目数 + 字段集封闭 3 + `question` 非空字符串。
+      if (key === 'open_questions') {
+        diffOpenQuestions(expected[key], actual[key], `${at}.${key}`, out);
         continue;
       }
       diffDocs(expected[key], actual[key], `${at}.${key}`, out);
