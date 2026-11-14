@@ -264,3 +264,176 @@ REQ002B rc=0
 - 见 `status.md` §6（压测工具能否跑 / 压测结果 / 真实服务容量 / 跨平台 / 并发跑门）。
 - **未跑**验收方的外部探针 —— 那些探针验的是**门**，不是本实现；门本身未改动（sha256 与需求方给的钉版一致）。
 - **未验**「把计划真的交给 `loadtest` 跑」—— 本 REQ **不执行**，且**不许**声称「已验证压测可跑」。
+
+---
+
+# REQ-013 交付验证报告 —— `load-profile` 的 **负载级执行与判定链**（只打本地桩）
+
+> 需求编号：**REQ-013** · 决策号范围：**D185~D210** · 判据条数：41（AC-001 ~ AC-041）
+> 验收门：`BA/demands/REQ-002-suite-foundation/REQ-013-load-exec/verify-acceptance.sh`
+> （sha256 `e4743970c04defb76aeb8b060d27ecff0078e78e0ee92f5a07e574af00eb6f0f`，**未改动**）
+> 被验包：`<REPO_ROOT>/feature-REQ-013`
+> 需求契约（**只读**）：`BA/demands/REQ-002-suite-foundation/REQ-013-load-exec/`
+
+---
+
+## 1. 交付边界复核
+
+| 边界 | 落实情况 |
+|---|---|
+| **只打本地桩** | ✅ 计划里的 URL 与替换后的执行 URL **都**校验回环（非回环 ⇒ rc=1 + 点名）；桩**只监听 `127.0.0.1`**、端口 0 |
+| **绝不打真实服务** | ✅ 计划 URL 的 host 非回环即拒绝执行（`bad-url` 夹具 ⇒ rc=1，stderr 点名 `example.com` 与「回环」） |
+| **判定不依赖退出码** | ✅ 判定只看观测量；桩中途挂掉不会让判定变绿（退出码只区分「跑完了」与「执行器自身出错」） |
+| **默认桩下不凭空判达标** | ✅ 延迟三类与 `error_rate` 判 `undetermined`；`throughput_rps` 仍可判 |
+| **`max_concurrency` 恒不可判定** | ✅ 不拿 `concurrency` / `clients` 冒充实际并发 |
+| **`python` runner 一律不可判定** | ✅ `observed` 缺席、判定为空数组，**但照常执行并留下证据** |
+| **只写 `results/`** | ✅ 输入（计划 / 模型 / 环境）只读；跑前跑后项目根（除 `results/` 外）指纹不变 |
+| **先校验、后建目录** | ✅ 四类非法夹具与工具缺失场景**都不留** `results/` |
+| **产物已存在不覆盖** | ✅ 第二次跑 rc=1、既有产物 sha256 逐字未变 |
+| **桩不留残留** | ✅ 桩由执行器托管起停（异常路径也停），停时连同残留连接一起断开 |
+| **不改上游** | ✅ A 阶段的计划 / 契约、`test-execute` / `test-report`、其它 skill、`bin/`、`package.json`、`README.md`、`LICENSE` **一律未改** |
+| **交付包不含内部运行时字样** | ✅ `skills/` `bin/` `README.md` `LICENSE` 全文 0 命中 |
+| **不装工具** | ✅ 只**检查**工具可用性；不可用 ⇒ rc=1 + 点名缺什么与怎么装 |
+
+---
+
+## 2. 交付物清单
+
+| 文件 | 作用 |
+|---|---|
+| `skills/load-profile/scripts/run-load-test.mjs` | **主入口**：读计划 ⇒ 起桩 ⇒ 执行 ⇒ 判定 ⇒ 写负载级产物与证据（退出码 0 / 1 / 2） |
+| `skills/load-profile/scripts/check-load-test.mjs` | **产物自洽校验器**（只读、**有行为护栏**）：复核产物与计划一致、证据清单 sha256 可复算 |
+| `skills/load-profile/scripts/lib/stub.mjs` | **本地桩服务**：只监听回环、自带计数 / 延迟直方图 / 延迟与错误注入、生命周期由执行器托管 |
+| `skills/load-profile/scripts/lib/load-exec.mjs` | **执行器 + 判定器**：argv 反解层、工具解析、`.loadtestrc` 渗透防护、阈值判定、写入纪律、产物自洽校验 |
+| `skills/load-profile/references/load-exec-contract.md` | **B 阶段契约文档**（两个入口 / 桩 / 反解层 / 判定映射 / 产物形状 / 已知限制） |
+| `skills/load-profile/SKILL.md` | **追加**一节「B 阶段：负载级执行与判定链（**只打本地桩**）」（既有内容**逐字未改**） |
+| `feature-meta/load-runner/` | 本 REQ 的追溯件四件套（`verification-report.md` / `traceability.md` / `feature.json` / `feature-meta.json`）+ `status.md` 的一节 |
+
+---
+
+## 3. 关键实现取舍（与契约口径一致）
+
+| # | 取舍 | 落点 |
+|---|---|---|
+| 1 | **API 模式 = 语义等价执行**：跑的是 argv 的**语义等价物**（API 选项名与 CLI 不是一套）⇒ 产物标 `api_equivalent` 并记 `executed_params`（反解结果，可被第三方独立反解核对） | `lib/load-exec.mjs`（`reverseArgv` / `runInvocation`） |
+| 2 | **反解只接受规范形态**：规范外 ⇒ rc=1 + 点名（不猜参数） | `lib/load-exec.mjs`（`reverseArgv`） |
+| 3 | **`.loadtestrc` 渗透防护两道防线**：显式覆盖每个相关选项 + **在空的沙箱目录里跑**（工具读不到 `.loadtestrc` ⇒ `proxy` 显式禁用）；另加一道自证（跑完核对 `Result.concurrency`） | `lib/load-exec.mjs`（`createSandbox` / `runSuite`） |
+| 4 | **`statusCallback` 必设**：不设 ⇒ HTTP 错误状态码全塌成 `-1` ⇒ 错误码分类能力丢失 | `lib/load-exec.mjs`（`runApiInvocation`） |
+| 5 | **联合口径**：错误率判 `not_met` ⇒ 同一次 invocation 的吞吐**不判 `met`**（判 `undetermined` 并点名「联合口径」） | `lib/load-exec.mjs`（`judgeThresholds`） |
+| 6 | **理由文本不含观测数值** ⇒ 同一输入两次跑的结构**逐字一致**（幂等只承诺结构级） | `lib/load-exec.mjs`（`judgeThresholds`） |
+| 7 | **桩侧与客户端侧分两段存**：桩侧是辅助证据，**不参与阈值判定**；两侧请求数**不做等式判定**（只判上界） | `lib/load-exec.mjs`（`observed` / `stub_observed`） |
+| 8 | **沉降期**：压测工具收尾时还有在途请求 ⇒ 留 150ms 让它们落到**本次**窗口（否则会被算到下一条 invocation 头上） | `lib/load-exec.mjs`（`runScenario`） |
+| 9 | **CLI 模式能力降级如实标注**：错误码只有 `-1` 桶、分位来自 stdout 文本、最小延迟**记 `null`**（不编造） | `lib/load-exec.mjs`（`parseCliStdout`） |
+
+---
+
+## 4. 自测（实现方自跑，真实输出）
+
+### 4.1 验收门 —— 快跑模式（只跑基线，不跑变异体）
+
+```console
+$ QA013_NO_MUT=1 QA013_WORK_ROOT=<工作根> bash verify-acceptance.sh <REPO_ROOT>/feature-REQ-013
+...
+结论: 41 PASS / 0 FAIL
+门自身 stderr 的 bash 错误行: 0
+被验包只读自检: 全树指纹未变 ✓
+```
+
+### 4.2 验收门 —— 完整模式（基线 + 41 个变异体 + 负控）
+
+> 见 §5（完整模式的真实输出）。
+
+### 4.3 手工自测（本地夹具 ⇒ 产物）
+
+```console
+$ node skills/load-profile/scripts/run-load-test.mjs --load-dir <项目根> --out-dir <项目根> --suite LOAD-001-checkout
+产物已生成: <项目根>/test-assets/load/results/LOAD-001-checkout.json
+  证据目录: <项目根>/test-assets/load/results/evidence/LOAD-001-checkout
+  执行模式: api_equivalent（桩: http://127.0.0.1:<随机端口>）
+  invocation 合计 5 条；套件判定: undetermined
+  不可判定阈值键: p95_latency_ms, error_rate, max_concurrency
+  ⚠️ 以上结论**只在本地桩上**成立，不代表任何真实服务的容量。
+rc=0
+```
+
+产物要点（默认桩 ⇒ 本 REQ 最核心的红线）：
+
+| 项 | 实测 |
+|---|---|
+| `p95_latency_ms` / `error_rate` 判定 | `undetermined`（**不是** `met`），`observed == null`，`reason` 点名「本次桩未注入延迟与错误」 |
+| `throughput_rps` 判定 | `met`，`observed == observed.effective_rps`（默认桩下**仍可判**） |
+| `max_concurrency` 判定 | `undetermined`，`observed == null`，`reason` 点名该键无对应观测量 |
+| `python` runner 的 invocation | `observed` **缺席**、恰好 8 键、判定 `undetermined`、**仍有** `step_index` 证据子目录 |
+| 桩侧观测 | 每条 invocation **本次增量**（`first_at_ms` / `last_at_ms` 相对桩启动 ⇒ 顺序执行、无重叠可核） |
+
+---
+
+## 5. 验收门 —— 完整模式的真实输出
+
+```console
+$ QA013_WORK_ROOT=<工作根> bash verify-acceptance.sh <REPO_ROOT>/feature-REQ-013
+工具前置: 使用已装好的 loadtest（<已装好的 loadtest 目录>）
+
+— 跑判据（独立复算器 judge.mjs —— 零 import 被验包）
+PASS AC-001 满足
+...
+PASS AC-041 满足
+被验包只读自检: 全树指纹未变 ✓
+
+— 变异体套件（正控 + 负控；检测口径 = 新增失败键）
+基线失败键: []（基线全绿）
+检测口径: 新增失败键 = 变异运行的失败键 减去 基线失败键（整行精确排除；「消失的失败键」不算检出）
+变异体 ac002（结果产物顶层多一个键）: 已检出（目标 AC-002 出现在新增失败键集合里）
+变异体 ac003（schema_version 写成字符串）: 已检出（目标 AC-003 出现在新增失败键集合里）
+...
+变异体 ac001（results/ 下多出一个 suite.json）: 已检出（目标 AC-001 出现在新增失败键集合里）
+变异体 ac036（SKILL.md 里出现内部运行时字样）: 已检出（目标 AC-036 出现在新增失败键集合里）
+变异体 ac037（追溯件里漏掉一条决策号）: 已检出（目标 AC-037 出现在新增失败键集合里）
+变异体 ac038（SKILL.md 删掉 B 阶段入口说明）: 已检出（目标 AC-038 出现在新增失败键集合里）
+负控 负控：只改结果产物的 generated_at 取值（语义不变）: 未检出（新增失败键为空）—— 符合预期，探测器不是恒真
+变异体套件: 检出 41/41（有效变异体）
+
+———— 逐条结论 ————
+PASS AC-001 满足
+...
+PASS AC-041 满足
+
+结论: 41 PASS / 0 FAIL
+验收脚本 sha256: e4743970c04defb76aeb8b060d27ecff0078e78e0ee92f5a07e574af00eb6f0f
+判据条数（动态取 acceptance.md 的 `AC-` 标题行）: 41
+决策号（动态取 decisions.md 的 `D` 标题行）: 26 条 [D185 D186 ... D210]
+门自身 stderr 的 bash 错误行: 0
+rc=0
+```
+
+| 指标 | 快跑模式 | 完整模式 |
+|---|---|---|
+| 判据结论 | **41 PASS / 0 FAIL** | **41 PASS / 0 FAIL** |
+| 退出码 | `0` | `0` |
+| 变异体 | 跳过（`QA013_NO_MUT=1`） | **41 个有效变异体，检出 41/41，逃逸 0，无效 0** |
+| 负控 | —— | **未检出**（新增失败键为空 ⇒ 探测器不是恒真） |
+| 被验包只读自检 | 全树指纹未变 ✓ | 全树指纹未变 ✓ |
+| 门自身 stderr 的 bash 错误行 | 0 | 0 |
+
+---
+
+## 6. 已知限制（如实登记）
+
+| # | 限制 |
+|---|---|
+| 1 | **结论只在本地桩上成立** ⇒ 不代表任何真实服务的容量 |
+| 2 | **默认桩的延迟 / 错误率没有代表性** ⇒ 这两类阈值在默认桩下判「不可判定」；想要可判的延迟结论必须用 `--stub-delay-ms` 注入 |
+| 3 | **`max_concurrency` 没有对应观测量** ⇒ 恒判「不可判定」 |
+| 4 | **`python` runner 的输出形态无契约** ⇒ 一律判「不可判定」（不解析其 stdout） |
+| 5 | **`python` runner 的自陈命令是否只打本地桩，本 REQ 不校验**（命令由计划给定）—— 契约 F4.5 ⑤ 已登记为遗留项 |
+| 6 | **桩侧与客户端侧的请求数天然不相等**（在途请求）⇒ 只判上界，不判等式 |
+| 7 | **桩侧延迟是服务端处理耗时**，与客户端 RTT 语义不同 ⇒ 不可混用 |
+
+## 7. 契约缺陷上报
+
+> 角色分离：**发现契约问题只上报，不自改契约**。
+
+| # | 观察 | 处理 |
+|---|---|---|
+| 1 | 契约 §3.3 的期望性质第 15 条写「各 invocation 的 `stub_observed.requests` 之和 ≥ 桩侧总请求数」——「桩侧总请求数」在本 REQ 里**没有对应字段**（桩侧观测按契约是每次 invocation 的**本次增量**，F3 ③）⇒ 该句的「桩侧总请求数」只能理解为「各次增量之和」，措辞易误读 | **未自改契约**；实现按「本次增量」口径执行（判据 AC-014 用的是可判别口径：从第 3 条起本次增量 < 前面各条之和） |
+| 2 | 契约 §3.3 的期望性质第 6 条写「每条 invocation 的 `observed.total_requests > 0`」——而 WL-003（`python` runner）**按契约没有 `observed`**（F7.5 / AC-041）⇒ 该条对 `python` 场景不成立 | **未自改契约**；实现按「`loadtest` runner 的 invocation 才有 `observed`」执行 |

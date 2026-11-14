@@ -72,3 +72,59 @@ node scripts/check-load-profile.mjs .
 - `references/load-scenario-format.md` —— 负载模型本体与套件级引用件的产物契约（字段集封闭 14 / 3）。
 - `references/profile-rules.md` —— 负载画像、阈值与**链路存在性**对账规则（归一化与未决问题口径）。
 - `scripts/check-load-profile.mjs` —— 产物自洽校验器（拿已产出的产物复核一份）。
+
+## B 阶段：负载级执行与判定链（**只打本地桩**）
+
+> 上文「`load-profile` 的描述」里那句「load 执行器尚未实现」指的是 **A 阶段**（REQ-012 的规划入口：
+> 负载模型 → 压测计划，**零请求**）。**B 阶段**（本节）把计划**真的跑起来**并给出**阈值判定**。
+
+A 阶段交的是「命令清单」，B 阶段交的是「**执行器 + 判定器 + 桩服务**」：
+
+```console
+# 1) 消费 REQ-012 的压测计划 ⇒ 真的跑起来（只打本地桩）⇒ 判定产物 + 负载级证据
+node scripts/run-load-test.mjs \
+  --load-dir <项目根> \
+  --out-dir  <项目根> \
+  --suite    <套件名> \
+  [--mode api|cli] [--stub-delay-ms <N>] [--stub-error-rate <R>]
+
+# 2) 复核产物是否自洽（字段集封闭、判定口径、证据清单 sha256 可复算）
+node scripts/check-load-test.mjs <项目根> --suite <套件名>
+```
+
+退出码：`0` 跑完（**哪怕不达标也是 0**） / `1` 输入非法、工具不可用、目标非回环、产物已存在 /
+`2` 用法错误。
+
+### ⛔ 边界：**只打本地桩，绝不打真实服务**
+
+| 边界 | 口径 |
+|---|---|
+| **目标必须是回环地址** | 计划里的 URL 与替换后的执行 URL **都**必须是 `127.0.0.0/8` 或 `::1`；非回环 ⇒ **rc=1 + 点名** |
+| **origin 只换 origin** | 协议 + 主机 + 端口换成桩地址；**path 与 query 逐字保留** |
+| **桩只监听回环** | 桩自带计数 / 延迟直方图 / 延迟与错误注入，**不含任何真实业务逻辑**；**生命周期由执行器托管**（异常与中断路径也必停） |
+| **结论只在本地桩上成立** | 产物里**不得**出现「生产环境容量达标」这类表述；**必须**带「本地桩 / `127.0.0.1`」的限定 |
+
+### 判定口径（**封闭 3 值**：`met` / `not_met` / `undetermined`）
+
+- 阈值**只**吃计划里逐字携带的 `thresholds`（键集封闭 6 个）；
+- **默认桩**（未注入延迟与错误）下，延迟类 / 错误率类阈值判 **`undetermined`**（**不是**「达标」）；`throughput_rps` 仍可判；
+- **`max_concurrency` 恒判 `undetermined`**（没有对应观测量 ⇒ 不许拿 `concurrency` / `clients` 冒充实际并发）；
+- **`python` runner 一律 `undetermined`**（输出形态无契约），但**照常执行**并**留下证据**；
+- 判定**不依赖进程退出码**（桩中途挂掉时压测工具仍然 rc=0 ⇒ 只看退出码 = 假绿）。
+
+### 产物（**只写** `<out-dir>/test-assets/load/results/`）
+
+```
+<out-dir>/test-assets/load/results/
+├── <套件名>.json                    # 负载级判定产物（顶层封闭 8 个键）
+└── evidence/<套件名>/
+    ├── manifest.json                # 逐个证据文件的 sha256
+    └── <场景标识>/<step_index>/     # 每条 invocation 一个证据目录
+        ├── result.json  ├── stdout.txt  └── stub-observations.json
+```
+
+- **只读**输入（计划 / 模型 / 环境一律不改写）；**先校验、后建目录**（输入非法 ⇒ `results/` 一个都不许出现）；
+- **产物已存在 ⇒ rc=1 不覆盖**；
+- **幂等只承诺结构级**（键集、键序、判定口径一致；数值允许抖动 —— 压测是随机过程）。
+
+判定规则在哪：`references/load-exec-contract.md`（B 阶段契约：两个入口 / 桩 / 反解层 / 判定映射 / 产物形状 / 已知限制）。

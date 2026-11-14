@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "req": "REQ-013",
+  "branch": "feature/REQ-013",
+  "base_branch": "develop",
+  "owner": "worker",
+  "agent_id": "worker",
+  "session_id": "mvs_744b60ef3d984cffbcd54448ac77bd8c",
+  "skill": "load-profile",
+  "stage": "B",
+  "demand_dir": "BA/demands/REQ-002-suite-foundation/REQ-013-load-exec",
+  "acceptance": {
+    "ac_count": 41,
+    "ac_range": "AC-001~AC-041",
+    "decision_count": 26,
+    "decision_range": "D185~D210"
+  },
+  "verification": {
+    "gate": "BA/demands/REQ-002-suite-foundation/REQ-013-load-exec/verify-acceptance.sh",
+    "gate_sha256": "e4743970c04defb76aeb8b060d27ecff0078e78e0ee92f5a07e574af00eb6f0f",
+    "quick_mode": {
+      "command": "QA013_NO_MUT=1 QA013_WORK_ROOT=<工作根> bash verify-acceptance.sh <被验包根>",
+      "pass": 41,
+      "fail": 0,
+      "exit_code": 0
+    },
+    "full_mode": {
+      "command": "QA013_WORK_ROOT=<工作根> bash verify-acceptance.sh <被验包根>",
+      "mutants_total": 41,
+      "mutants_detected": 41,
+      "negative_control_detected": false,
+      "pass": 41,
+      "fail": 0,
+      "exit_code": 0
+    },
+    "note": "真实输出见 verification-report.md（逐条粘贴，不做美化）"
+  },
+  "artifacts": {
+    "verdict_product": "test-assets/load/results/<套件名>.json",
+    "evidence_dir": "test-assets/load/results/evidence/<套件名>/",
+    "top_level_keys": [
+      "schema_version",
+      "suite",
+      "environment",
+      "generated_at",
+      "execution",
+      "scenarios",
+      "verdict",
+      "results_sha256"
+    ],
+    "verdict_enum": ["met", "not_met", "undetermined"],
+    "threshold_keys": [
+      "p50_latency_ms",
+      "p95_latency_ms",
+      "p99_latency_ms",
+      "error_rate",
+      "throughput_rps",
+      "max_concurrency"
+    ]
+  },
+  "honesty": {
+    "scope_qualifier": "结论只在**本地桩**上成立，不代表任何真实服务的容量",
+    "default_stub": "默认桩下延迟类 / 错误率类阈值判 undetermined（不判达标）；吞吐类仍可判",
+    "max_concurrency": "恒判 undetermined（无对应观测量）",
+    "python_runner": "一律 undetermined（输出形态无契约），但照常执行并留下证据"
+  },
+  "related_reqs": [
+    {
+      "req": "REQ-012",
+      "role": "上游 A 阶段：本 REQ 消费其 plans/<套件名>.json（argv 规范形态 + 逐字携带的 thresholds）",
+      "note": "A 阶段的既有文件与契约**逐字未改**"
+    },
+    {
+      "req": "REQ-013",
+      "role": "本 REQ：B 阶段的执行器 / 判定器 / 桩服务与追溯件"
+    }
+  ]
+}
