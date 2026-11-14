@@ -1,0 +1,109 @@
+{
+  "req": "REQ-009",
+  "branch": "demand",
+  "agent_id": "ba-local-ba",
+  "session_id": "mvs_744b60ef3d984cffbcd54448ac77bd8c",
+  "owner": "ba-local-ba",
+  "base_branch": "develop",
+  "created_at": "2026-11-14T09:30:00+08:00",
+  "demand_dir": "BA/demands/REQ-002-suite-foundation/REQ-009-load-profile",
+  "title": "压测能力域：load-profile skill（负载模型 + runner 适配，第 8 个 skill）",
+  "criteria_count": 29,
+  "criteria_range": "AC-001~AC-029",
+  "criteria_groups": {
+    "A_交付物形状": 4,
+    "B_输入解析与校验": 4,
+    "C_负载模型": 6,
+    "D_套件落位": 3,
+    "E_可消费与边界": 3,
+    "F_诚实性": 4,
+    "G_追溯与写入权": 5
+  },
+  "criteria_type_distribution": {
+    "功能": 11,
+    "诚实性": 7,
+    "一致性": 3,
+    "追溯": 3,
+    "写入权": 3,
+    "可用性": 1,
+    "兼容性": 1
+  },
+  "decision_range": "D127~D155",
+  "decision_count": 29,
+  "decision_range_note": "实现侧追溯范围 = decisions.md 的实际 D 集合（D127~D155，29 条），**动态取，不写死**（REQ-007 的 F-01 就栽在写死决策号上）。门侧 AC-029 另做「**逐个字面量各算各的** + 并集 + 无越界号」三道检查（写小范围 + 别处补提 ⇒ 逃逸）。",
+  "acceptance_script": "verify-acceptance.sh",
+  "acceptance_script_sha256": "e573d1793c9b523ca479adc0daa5fad901cfc15aa4f741cbdaa22c091b5b9f21",
+  "acceptance_script_env": {
+    "QA009_SCRIPT_SHA": "期望的脚本自身 sha256；不匹配即 0 PASS / 1 FAIL 退出",
+    "REQ009_NO_MUT": "1 = 跳过变异体套件（快跑 / 嵌套运行用）",
+    "QA009_KEEP_WORK": "1 = 保留工作目录（调试）",
+    "QA009_WORK_ROOT": "工作目录的父目录（默认 ${TMPDIR:-/tmp}）"
+  },
+  "acceptance_script_states": {
+    "PASS": "判据通过",
+    "FAIL": "判据不通过",
+    "UNDEC": "不可判定（**≠ 通过**；退出码一律非 0）",
+    "exit_codes": "0 = 全通过; 1 = 有 FAIL / 不可判定 / 变异体逃逸 / 负控失败 / sha 不符 / 门自身 stderr 有 bash 错误; 2 = 用法错误"
+  },
+  "target_package": "feature-REQ-009",
+  "target_branch": "feature/REQ-009",
+  "upstream_facts_used": {
+    "note": "只写需求方已核实（实测）的事实；上游**拦**什么、**放行**什么都以实测为准。",
+    "upstream_accepts": [
+      "scope=load + executor=load + cases_file=scenario.json + suite 字段==目录名 ⇒ verify-layout 判 [OK]",
+      "loadSuite() 解析 load 套件 ⇒ 不抛错"
+    ],
+    "upstream_does_not_block_gate_must_judge": [
+      "环境 driver: 'api'（合法枚举）⇒ 上游放行（AC-020）",
+      "load 套件的 executor 改成 'api' ⇒ 上游放行（AC-016 / AC-020）",
+      "cases_file 指向的 scenario.json 的**内容** ⇒ 上游一条都不管（AC-009~AC-014 / AC-017 / AC-021~AC-024）",
+      "套件目录名 LOAD-<编号>-<短名> ⇒ 上游不校验（AC-015）"
+    ],
+    "upstream_blocks": [
+      "环境 driver: 'load'（枚举非法）⇒ 上游判 [FAIL]",
+      "suite.json 顶层出现表外字段（含 load_scenario）⇒ 上游判 [FAIL]"
+    ],
+    "never_required": [
+      "run-suite.mjs --dry-run 跑通（load 执行器未实现 ⇒ 必然抛错）",
+      "loadCases() 消费 cases_file（上游硬要求 doc.cases 是数组 ⇒ scenario.json 不能做成 cases 形态）",
+      "verify-layout 对整个项目根 rc=0（那些前置条件不在本 REQ 写入范围内 ⇒ 永远判红的假判据）",
+      "上游模块缺失时不判 FAIL：AC-004 / AC-018 判**不可判定**（环境问题 ≠ 实现违约；不可判定 ≠ 通过 ⇒ 退出码仍非 0）"
+    ]
+  },
+  "mutations": {
+    "positive_controls": 27,
+    "negative_control": 1,
+    "negative_control_shape": "给未决问题的文字追加一段固定无害说明（不改变条数 / 主题 / 非空 ⇒ 不触犯任何判据）",
+    "injection": "**分两类**：① 产物型正控 ⇒ 入口脚本包装（shim），原实现 move 成 make-load-profile.real.mjs，包装跑完原实现后篡改产物；② **静态文件型正控** ⇒ **先改副本再跑门**（包装层碰不到被验包的静态文件）",
+    "mutation_self_proof": "① 入口锚点在副本里逐字唯一命中 1 次 ② node --check 通过 ③ 变异后脚本跑完不崩 ④ **可观测状态的组合指纹与基线不同**（产物树 + out-dir 里 load/ 之外 + 输入文件 + 三个记账件）；AC-028 那一类另用「第二次跑同一 out-dir 的退出码」自证",
+    "detection_metric": "新增失败键（变异运行的失败键 减去 基线失败键；基线失败键**只取 ^FAIL 行**；**不用**对称差）",
+    "baseline_failure_keys": "只取门输出里 ^FAIL 行里的 AC 编号（PASS / UNDEC 行里也有 AC 编号，混进来会让基线键集合变成全集 ⇒ 整套检测沦为橡皮章）",
+    "gate_self_check": "门自身 stderr 全量留痕；出现 bash 错误行（`行 N:` / `line N:` / 未绑定的变量）⇒ 判红并退出码非 0（门不干净 ⇒ 判定不可信）",
+    "array_alignment_self_check": "MUT_NAMES / MUT_CODE / MUT_TARGETS / MUT_MODE / MUT_FILE 五个数组**逐条对齐**；进循环前比长度，不等就明确报红并退出（不让 bash 崩在数组下标上）"
+  },
+  "d65_self_test": {
+    "report": "BA/demands/REQ-002-suite-foundation/REQ-009-load-profile/status.md",
+    "items": {
+      "1_参考实现包跑门": "通过：29 PASS / 0 FAIL，rc=0",
+      "2_无实现真包优雅降级": "通过：1 PASS / 28 FAIL，rc=1，崩溃迹象 0 处，门自身 stderr 的 bash 错误行 0",
+      "3_错sha": "通过：0 PASS / 1 FAIL，rc=1",
+      "4_变异体套件": "通过：**27/27 正控全部检出**（新增失败键命中目标判据），0 逃逸，0 无效变异；负控 M0 **未检出**",
+      "5_幂等与只读": "通过：连跑两次完整模式，逐条结论逐字一致；被验包全树 sha256 跑前跑后不变"
+    },
+    "extra_probes": {
+      "F-01_逃逸形态A": "命中 AC-029（范围字面量 D127~D153 展开后 27 个 != 实际 29 个）",
+      "F-01_逃逸形态B": "命中 AC-029（范围字面量 + 并集双重不符）",
+      "上游门回归": "上游校验器对该 load 套件的判定行全 [OK]（AC-004）；上游 loadSuite() 不抛错（AC-018）",
+      "上游模块缺失三探针": "① 删 skills/test-execute/executors/index.json ⇒ rc=0 / FAIL=[] / UNDEC=[]（门不依赖上游执行器）② 删整个 skills/test-execute ⇒ rc=1 / FAIL=[AC-003] / UNDEC=[AC-018] ③ 删 verify-layout.mjs ⇒ rc=1 / UNDEC=[AC-004]（上游模块缺失统一判不可判定）"
+    }
+  },
+  "scratch_only": {
+    "note": "自测工装与参考实现包**只放 scratch**，不是交付物；Dev 必须另写实现（照抄参考实现等于绕过「门能检出违例」的意义）",
+    "reference_package": "$HOME/.local/share/agent-runtime-data/tmp/req009/refpkg",
+    "no_impl_package": "$HOME/.local/share/agent-runtime-data/tmp/req009/probe-noimpl",
+    "f01_escape_probes": [
+      "$HOME/.local/share/agent-runtime-data/tmp/req009/probe-A",
+      "$HOME/.local/share/agent-runtime-data/tmp/req009/probe-B"
+    ]
+  }
+}
