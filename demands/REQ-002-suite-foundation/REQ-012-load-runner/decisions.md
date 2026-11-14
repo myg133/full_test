@@ -93,24 +93,35 @@
 
 ---
 
-## D160　计划产物的**三层字段集封闭**（4 / 11 / 4）
+## D160　计划产物的**三层字段集封闭**（4 / 12 / 4）
 
 **决策**：
 
 | 层 | 字段集 |
 |---|---|
 | 计划**顶层** | `schema_version` / `suite` / `environment` / `scenarios`（**恰为 4 个**） |
-| `scenarios[]` 元素 | `scenario_id` / `scenario_name` / `runner` / `runtime` / `target` / `base_url` / `profile_type` / `invocations` / `thresholds_status`（**9 个必填**）+ 条件 `thresholds` / `thresholds_source` |
+| `scenarios[]` 元素 | `scenario_id` / `scenario_name` / `runner` / `runtime` / `target` / `base_url` / `profile_type` / `invocations` / `thresholds_status` / `open_questions`（**10 个必填**）+ 条件 `thresholds` / `thresholds_source` |
 | `invocations[]` 元素 | `step_index` / `duration_s` / `concurrency` / `argv`（**恰为 4 个**） |
 
 **外加**：枚举取值（`runner` / `runtime` / `profile_type`）在**产物侧**也要合法；
 **特别地**三层里**不得**出现 `cases_file` 之类会被上游 `suite.json` 语义混淆的字段。
+
+> ⚠️ **需求方 §10.1 的契约缺陷回写（2026-11-14）**：本条原文是「4 / **11** / 4」、场景元素 **9 必填**，
+> **漏了 `open_questions`** ⇒ 与 AC-021（判「遍历每个场景条目的 `open_questions[]``」）**自相矛盾**
+> ⇒ 已增补 `open_questions`（**必填**，数组；**承载自**模型对应场景的 `open_questions`）⇒ **11 → 12**。
+> **决策号不变**（仍是 D160；条数仍 29）。
 
 **理由**：
 
 - 上游对 `cases_file` 指向的文件**只校验存在、不校验内容** ⇒ 计划的内容契约**全部由本 REQ 自守**；
 - 封闭字段集是「幂等 = 逐字相同」的前提（没有 `meta.generated_at` 这种字段）；
 - `cases_file` 是上游 `suite.json` 的字段，计划里再出现会与上游语义混淆（审门清单 **D14**）。
+
+> ⚠️ **需求方 Q1 裁定（2026-11-14）**：计划采用**嵌套**结构
+> `{schema_version, suite, environment, scenarios[]}`（**顶层仍是 4 个字段**）。
+> SPEC F3 的**扁平**示例**作废**（它只举了「一场景一套件」的例子，没考虑 REQ-009 的套件是
+> **按环境分组的多对一** —— `LOAD-001` 实含 3 个场景 ⇒ 扁平结构放不下）。
+> ⇒ 本条与 D169 的口径**维持 BA 方案**，**编号不变**。
 
 **影响面**：F3；AC-004。
 

@@ -117,7 +117,7 @@ node skills/load-profile/scripts/plan-load-run.mjs \
 
 ⚠️ **不得**出现 `cases_file` 之类会被上游 `suite.json` 语义混淆的字段。
 
-#### F3.2 `scenarios[]` 元素字段集**封闭 9 必填 + 2 条件**
+#### F3.2 `scenarios[]` 元素字段集**封闭 10 必填 + 2 条件**
 
 | 字段 | 类型 | 约束 |
 |---|---|---|
@@ -130,10 +130,21 @@ node skills/load-profile/scripts/plan-load-run.mjs \
 | `profile_type` | string | ∈ {`constant`,`ramp-up`,`ramp-down`,`spike`,`soak`}（**逐字等于**模型的 `profile.type`） |
 | `invocations` | array | ≥1 项；元素见 F3.3 |
 | `thresholds_status` | string | ∈ {`provided`,`not_provided`}（**逐字等于**模型的） |
+| `open_questions` | array | **必填**（可以为空数组）；**承载自**模型对应场景的 `open_questions`：**条目数相等**、每条的 `id` 与 `topic` **逐字等于**模型同一条目；元素结构封闭 3（`id`/`topic`/`question`）；`question` 的**文字**属实现方判断（D177），但必须非空 |
 | `thresholds` | object | **条件**：模型 `provided` 时存在且**逐字等于**模型；模型 `not_provided` 时**不得存在** |
 | `thresholds_source` | string | **条件**：同上 |
 
 ⚠️ **阈值可以携带，但绝不带任何判定结论。**
+
+⚠️ **口径分歧留痕（需求方 §10.1 与 §10 的 Q5 / §10.2 冲突）**：
+§10.1 要求本字段「**逐字等于**模型对应场景的 `open_questions`」；
+但同一节 **Q5** 裁定「未决问题措辞**不要求**逐字」（理由：REQ-009 `acceptance.md` L242「未决问题的具体文字属实现方的判断」，
+**不得**加严），且**较晚**的 §10.2 明确「**N02（措辞改写）仍是有效的无害负控**」。
+⇒ 二者**不能同时成立**（若严格逐字，N02 就成了违例而非无害负控）。
+**本契约取「措辞自由」这一边**（Q5 + §10.2 合计两处、且 §10.2 更晚）⇒ 落为
+「**`id` 与 `topic` 逐字相等 + 条目数相等 + 结构封闭 3；`question` 文字自由**」。
+**若需求方坚持严格逐字**：只需把 `acceptance.md` AC-021 ⑧ 从「`id`/`topic` 逐字」改成「`question` 也逐字」，
+并把 N02 从负控清单移到正控清单 —— **一处判定 + 一处清单**，不影响条数（29）与决策号（29）。
 
 #### F3.3 `invocations[]` 元素字段集**封闭 4 个**
 
@@ -174,6 +185,9 @@ node skills/load-profile/scripts/plan-load-run.mjs \
 
 - 三组可选参数**按上表顺序**出现，**至多各一次**；
 - URL = `base_url`（**去掉尾部 `/`**）+ `target` 的路径（以 `/` 开头）；
+- ⚠️ **尾斜杠细则**（需求方 Q8 裁定）：场景条目的 `base_url` **字段**必须**逐字等于**环境文件里的 `base_url`
+  （**含**尾部 `/`）⇒ **字段带斜杠、URL 不带**：URL 里**不得**出现 `//`；
+  夹具**补一份带尾斜杠 `base_url` 的环境变体**（`acceptance.md` §0.4.2）⇒ 该细则**真正被覆盖**。
 - 方法 = `target` 的方法（**大写**），若 `args.method` 存在则**用它**（**大写**）；
 - ⚠️ **本 REQ 不执行该命令** ⇒ 参数顺序对工具的**可接受性**属 B 阶段（REQ-013）验证范围；
   本 REQ 保证**形态正确、参数名真实存在**（PROBE-FACTS C2）。
@@ -298,6 +312,8 @@ skills/load-profile/
   指向验收脚本启动的**两个本地桩服务**（端口 `<P1>` / `<P2>`）⇒ **零请求**可被计数证实；
 - `test-assets/cycles/{index.json,R1-REQ-012/cycle.json}` + `.gitignore`（含 `.test-artifacts/`）
   —— 上游 `verify-layout.mjs` 的前置条件，**必须**预置。
+- ⚠️ **另备一份带尾斜杠 `base_url` 的环境变体**（需求方 Q8 裁定）：一份 `local.json` 的 `base_url`
+  写成 `http://127.0.0.1:<P1>/`（**带尾斜杠**）⇒ AC-009 ④⑤ 的「字段逐字 / URL 去尾斜杠」被**真正覆盖**。
 
 ### 3.4 期望计划产物
 

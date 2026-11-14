@@ -144,7 +144,9 @@ $FX/proj/
 - `environments/local.json`：`{ "name": "local", "base_url": "http://127.0.0.1:<P1>", "timeout_ms": 3000, "retries": 0, "credentials": { "token_env": "TEST_TOKEN" } }`
 - `environments/staging.json`：`{ "name": "staging", "base_url": "http://127.0.0.1:<P2>", "timeout_ms": 5000, "retries": 0, "credentials": { "token_env": "TEST_TOKEN_STAGING" } }`
 - `environments/_schema.json`：`{ "type": "object", "properties": { "name": { "type": "string" }, "base_url": { "type": "string" } }, "required": ["name", "base_url"] }`
-- `cycles/R1-REQ-012/cycle.json`：`{ "cycle_id": "R1-REQ-012", "requirement": "REQ-012", "status": "planned", "round": "R1", "round_type": "new-requirement", "scopes": ["functional", "load"], "stages": {}, "history": [], "scopes_skipped": [] }`
+- `cycles/R1-REQ-012/cycle.json`：`{ "cycle_id": "R1-REQ-012", "requirement": "REQ-012", "status": "planned", "round": "R1", "round_type": "new-requirement", "scopes": ["functional", "load"], "stages": {}, "history": [ { "at": "2026-11-14T09:00:00+08:00", "from": "planned", "to": "planned", "by": "ba" } ], "scopes_skipped": [] }`
+  ⚠️ **`history` 不可为空**（上游 `state-machine.mjs`：`history` 为空 ⇒ 判 FAIL）⇒ 空 history 会让 AC-028 ① 的
+  「上游对整个项目根 rc=0」**永远不满足**（假判据）⇒ 夹具**必须**带至少一条状态变更留痕（形态同 REQ-009 的夹具）。
 - `cycles/index.json`：`{ "cycles": [ { "id": "R1-REQ-012", "status": "planned", "round": "R1" } ] }`
 
 #### §0.4.1 桩服务（**零请求**的可观测证据）
@@ -154,6 +156,26 @@ $FX/proj/
 跑完全部被验调用后，两个日志文件都必须**为空** ⇒ 一次请求都没发（AC-022）。
 
 ⚠️ 桩服务**只用于计数**，本 REQ 的入口**不得**连它；被验实现若连了 ⇒ 计数 > 0 ⇒ 判红。
+
+#### §0.4.2 尾斜杠 `base_url` 的**环境变体**（需求方 Q8 裁定）
+
+⚠️ **为什么要有它**：Q8 裁定「`base_url` **去尾部 `/`** + 路径直接拼接」，
+但 §0.4 的两个环境文件 `base_url` **都不带**尾斜杠 ⇒ **该细则等于没被测**。
+⇒ 夹具**另造一份项目根副本**（其余内容与 §0.4 相同，只改 `environments/local.json`）：
+
+```
+$FX/proj-slash/
+└── test-assets/environments/local.json
+    { "name": "local", "base_url": "http://127.0.0.1:<P1>/", "timeout_ms": 3000, "retries": 0, "credentials": { "token_env": "TEST_TOKEN" } }
+```
+
+| # | 期望（AC-009 ④⑤） | 说明 |
+|---|---|---|
+| 1 | 场景条目的 `base_url` **字段** == `http://127.0.0.1:<P1>/`（**含尾斜杠，逐字**） | 字段**逐字承载**环境文件的值 |
+| 2 | `argv` 里的 URL == `http://127.0.0.1:<P1>/api/v1/checkout`（**不含** `//`） | URL **去尾部 `/`** 后拼路径 |
+
+⚠️ 该变体**只跑一次主跑**（不参与 §0.6 的「计划文件恰好 2 份」基线 —— 它的落点与主跑一致），
+判定**并入 AC-009**（第 ⑦ 项）⇒ **不新增判据条数**。
 
 ### §0.5 主跑命令
 
@@ -187,7 +209,7 @@ node skills/load-profile/scripts/plan-load-run.mjs \
 | 2 | 计划文件名集合 | **恰等于** `{LOAD-001-checkout.json, LOAD-002-checkout-staging.json}` | AC-013 |
 | 3 | 计划顶层字段集 | **恰为 4 个**：`schema_version`/`suite`/`environment`/`scenarios` | AC-004 |
 | 4 | `schema_version` | `1` | AC-004 |
-| 5 | 场景条目字段集 | **恰为 9 个必填 + 2 个条件**：`scenario_id`/`scenario_name`/`runner`/`runtime`/`target`/`base_url`/`profile_type`/`invocations`/`thresholds_status` + 条件 `thresholds`/`thresholds_source` | AC-004 |
+| 5 | 场景条目字段集 | **恰为 10 个必填 + 2 个条件**：`scenario_id`/`scenario_name`/`runner`/`runtime`/`target`/`base_url`/`profile_type`/`invocations`/`thresholds_status`/`open_questions` + 条件 `thresholds`/`thresholds_source` | AC-004 |
 | 6 | `invocations[]` 元素字段集 | **恰为 4 个**：`step_index`/`duration_s`/`concurrency`/`argv` | AC-004 |
 | 7 | `LOAD-001` 的 `scenarios[]` | **3 项**，顺序 = `checkout` → `order-query` → `health-check`（= 引用件顺序） | AC-013 |
 | 8 | `LOAD-002` 的 `scenarios[]` | **1 项**（`checkout-staging`） | AC-013 |
@@ -282,7 +304,7 @@ node skills/load-profile/scripts/plan-load-run.mjs \
   ① 每个计划顶层键集**恰为** {`schema_version`,`suite`,`environment`,`scenarios`}；
   ② `schema_version == 1`；
   ③ `scenarios[]` 是**非空数组**，元素键集**恰为**
-     {`scenario_id`,`scenario_name`,`runner`,`runtime`,`target`,`base_url`,`profile_type`,`invocations`,`thresholds_status`}
+     {`scenario_id`,`scenario_name`,`runner`,`runtime`,`target`,`base_url`,`profile_type`,`invocations`,`thresholds_status`,`open_questions`}
      **加**条件字段 `thresholds` / `thresholds_source`（有无按 AC-020 判）；
   ④ `invocations[]` 是**非空数组**，元素键集**恰为** {`step_index`,`duration_s`,`concurrency`,`argv`}；
   ⑤ `runner` ∈ {`loadtest`,`python`}、`runtime` ∈ {`bun`,`python`,`node`}、
@@ -348,7 +370,10 @@ node skills/load-profile/scripts/plan-load-run.mjs \
      `["loadtest", "-t", <duration_s>, "-c", <concurrency>, "--cores", "1", <url>, "-m", <METHOD>]`
      后可依次跟 `["--rps", <rps>]`、`["-k"]`、`["-d", <timeout_ms>]`
      ⇒ **不得**出现表外选项、**不得**出现第二个位置参数
-- **预期结果**: ①~⑥全满足；任一不满足 → 判红并点名（哪个场景、哪条 invocation、哪个元素）
+  ⑦ **另跑 §0.4.2 的尾斜杠环境变体**（`base_url` 带尾部 `/`）⇒
+     场景条目的 `base_url` **字段**逐字等于 `http://127.0.0.1:<P1>/`（**含尾斜杠**），
+     而 `argv` 里的 URL 必须是 `http://127.0.0.1:<P1>/api/v1/checkout`（**不得**出现 `//`）
+- **预期结果**: ①~⑦全满足；任一不满足 → 判红并点名（哪个场景、哪条 invocation、哪个元素）
 - **判据形式**: 查绝对事实（逐元素核）；探针：让实现在 URL 里漏掉 `base_url`（只留路径）→ 本条判红
 - **说明**: `loadtest` 的 URL 是**唯一位置参数**（多一个 ⇒ `Too many arguments`）⇒ URL 必须**完整绝对**
   （PROBE-FACTS C3/C4）
@@ -488,14 +513,20 @@ node skills/load-profile/scripts/plan-load-run.mjs \
 
 ### AC-021: 未决问题必须**字段齐全**且「无来源必留痕」
 - **前置条件**: §0.5 主跑产物 + §0.3 的模型
-- **测试步骤**: 遍历每个场景条目的 `open_questions[]`
+- **测试步骤**: 遍历每个场景条目的 `open_questions[]`（⚠️ 该字段是 **F3.2 的必填字段**，
+  值为模型对应场景 `open_questions` 的**承载**；契约缺陷已按需求方 §10.1 修掉）
 - **预期结果**:
   ①每条未决问题的键集**恰为** {`id`,`topic`,`question`}；
-  ②`id` 匹配 `^OQ-\d{3}$`，且**同一计划文件内唯一**；
+  ②`id` 匹配 `^OQ-\d{3}$`，且**同一计划文件内唯一**（⚠️ **按计划文件（套件级）判定** ⇒
+  **跨场景**的 `id` 也必须唯一 —— 需求方 §10.1 裁定）；
   ③`topic` ∈ {`thresholds`,`coverage`,`runner`,`other`}；④`question` **非空**（去首尾空白后仍非空）；
   ⑤模型 `thresholds_status == "not_provided"` 的场景 ⇒ 计划里**至少 1 条** `topic == "thresholds"`；
   ⑥模型 `thresholds_status == "provided"` 的场景 ⇒ 计划里**不得**有 `topic == "thresholds"` 的条目；
-  ⑦模型 `traceability.case_refs == []` 的场景 ⇒ 计划里**至少 1 条** `topic == "coverage"`
+  ⑦模型 `traceability.case_refs == []` 的场景 ⇒ 计划里**至少 1 条** `topic == "coverage"`；
+  ⑧**承载一致性**：计划里该场景的 `open_questions[]` 与模型对应场景的 `open_questions[]`
+     **条目数相等**，且**逐条**的 `id` 与 `topic` **逐字等于**模型同一条目
+     （⚠️ `question` 的**文字不要求逐字相等** —— 需求方 Q5 裁定「措辞属实现方判断」；
+     **严格逐字**的口径见 `demand.md` F3.2 的「口径分歧留痕」⇒ 改这一处即可）
 - **判据形式**: 查绝对事实；探针：让实现在 `order-query` 场景既不写阈值、也**不留**未决问题 ⇒ ⑤判红
 - **说明**: 「没有指标来源就不拍阈值」与「没有回归护栏就必须写在纸面上」——两个缺口都必须**显式**
 - **类型**: 诚实性
