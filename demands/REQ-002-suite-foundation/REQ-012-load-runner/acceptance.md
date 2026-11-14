@@ -196,7 +196,8 @@ node skills/load-profile/scripts/plan-load-run.mjs \
 
 ⚠️ **计划文件的名字绝不能叫 `suite.json`**（上游对 `suite.json` 的顶层字段集封闭 ⇒ 同名会被当成套件）。
 ⚠️ `test-assets/load/plans/` 这个新目录**对上游 `verify-layout.mjs` 无影响**（上游只递归找 `suite.json`，
-且不拦 `test-assets/` 下的未知子目录）⇒ 上游对该项目根的判定仍是 **0 FAIL / 8 OK、rc=0**。
+且不拦 `test-assets/` 下的未知子目录）⇒ 上游对该项目根的判定仍是 **0 FAIL、rc=0**
+（`[OK]` 的**条数**随上游版本变化，**不写死**）。
 
 ### §0.6 基线真值表（夹具跑出来的**唯一**正确结论）
 
@@ -364,6 +365,9 @@ node skills/load-profile/scripts/plan-load-run.mjs \
   ② `argv[0]` 是**工具名**（`runner == "loadtest"` ⇒ `argv[0] == "loadtest"`；
      `runner == "python"` ⇒ `argv[0]` == 自陈命令 `args.command` 的第 0 个元素）；
   ③ `argv` 里**恰好一个**元素是**完整绝对 URL**（以 `http://` / `https://` / `ws://` / `wss://` 开头）；
+     ⚠️ **作用域（BA 自查修订）**：本项**只对 `runner == "loadtest"` 的场景**成立 ——
+     `python` runner 的 argv 由**自陈命令**决定（夹具里的命令**不含 URL**）⇒ 字面判据对它**不可满足**；
+     `python` 侧的对应要求是「**若** argv 里出现了绝对 URL，则**恰好一个**且逐字等于 `base_url`（去尾部 `/`）+ 目标路径」；
   ④ 该 URL **逐字等于** `base_url`（去尾部 `/`）+ 目标路径（见 AC-010）；
   ⑤ 场景条目的 `base_url` 字段**逐字等于**环境文件里的 `base_url`；
   ⑥ `loadtest` runner 的 `argv` 结构**恰为**
@@ -381,11 +385,14 @@ node skills/load-profile/scripts/plan-load-run.mjs \
 
 ### AC-010: 方法与路径必须**分离**
 - **前置条件**: 同上
-- **测试步骤**: 逐条 `argv` 核：① `-m` **恰好出现一次**；② `-m` 的下一个元素 == 方法（大写）；
+- **测试步骤**: 逐条 `argv` 核（⚠️ **作用域（BA 自查修订）**：①~④ 的**结构性要求只对 `runner == "loadtest"` 的场景**成立 ——
+  `python` runner 的 argv 由**自陈命令**决定（夹具里的命令**不含 `-m`**）⇒ 字面判据对它**不可满足**；
+  `python` 侧见 AC-018 ③）：
+  ① `-m` **恰好出现一次**；② `-m` 的下一个元素 == 方法（大写）；
   ③ 方法 == `target` 的方法（`target` 形如 `METHOD /path`，取空格前那段，**转大写**）；
   ④ 若模型的 `args.method` 存在，则 `-m` 的值 == `args.method`（**大写**）；
   ⑤ **路径**（`target` 里空格后的那段，以 `/` 开头）**只**出现在那个绝对 URL 元素里，
-     `argv` 的**其它**元素**不得**包含该路径字符串
+     `argv` 的**其它**元素**不得**包含该路径字符串（**本项对两种 runner 都适用**）
 - **预期结果**: ①~⑤全满足；任一不满足 → 判红并点名
 - **判据形式**: 查绝对事实（逐元素核）；探针：让实现在 URL 之外再带一个路径元素 ⇒ 或把 `-m POST` 改成 `-m GET` → 本条判红
 - **类型**: 功能
