@@ -165,6 +165,16 @@ REQ-009（压测能力域）交了「负载模型」；REQ-012（A 阶段）交�
 | 3 | 替换后**必须**校验 host 是**回环地址**（`127.0.0.0/8` 或 `::1`）；**不通过 ⇒ rc=1 + 点名** | D194 |
 | 4 | 产物记录**替换前后的 URL**（origin 与 path 都逐字） | D194 / D208 |
 
+#### F4.5 `python` runner 的执行
+
+| # | 规定 | 出处 |
+|---|---|---|
+| 1 | **照常执行**：逐字 spawn 计划里自陈的命令（**不解析它的输出**） | D203 |
+| 2 | 该 invocation 的 `observed` **缺席**；`verdict == "undetermined"`；若有阈值，则每条判定的 `verdict == "undetermined"` 且 `reason` **点名**「输出形态无契约」 | D203 / D195 |
+| 3 | 该 invocation **仍然产生证据**（证据目录里必须有它的 `step_index` 子目录） | D208 |
+| 4 | 该 invocation 的 `stub_observed.requests` **可以是 0**（自陈命令**未必**打桩）⇒ **不适用**「桩必须收到请求」这条要求 | D198 |
+| 5 | ⚠️ **已知限制**：自陈命令由计划给定，本 REQ **不校验**它是否只打本地桩 ⇒ **如实登记为已知限制**（见 `dispatch/req-registry.md` 遗留项表） | A1 |
+
 ### F5 观测采集
 
 | # | 规定 | 出处 |
@@ -474,6 +484,17 @@ REQ-009（压测能力域）交了「负载模型」；REQ-012（A 阶段）交�
       "open_questions": [ { "id": "OQ-001", "topic": "thresholds", "question": "订单查询的延迟阈值尚未确定。" } ]
     },
     {
+      "scenario_id": "WL-003", "scenario_name": "checkout-staging", "runner": "python", "runtime": "python",
+      "target": "POST /api/v1/checkout", "base_url": "http://127.0.0.1:8080/",
+      "profile_type": "spike",
+      "invocations": [
+        { "step_index": 0, "duration_s": 1, "concurrency": 2,
+          "argv": ["python","-c","import sys,time;time.sleep(0.05)","1","2"] }
+      ],
+      "thresholds_status": "not_provided",
+      "open_questions": [ { "id": "OQ-003", "topic": "thresholds", "question": "staging 环境的压测阈值尚未确定。" } ]
+    },
+    {
       "scenario_id": "WL-004", "scenario_name": "health-check", "runner": "loadtest", "runtime": "node",
       "target": "GET /api/v1/health", "base_url": "http://127.0.0.1:8080/",
       "profile_type": "constant",
@@ -497,7 +518,7 @@ REQ-009（压测能力域）交了「负载模型」；REQ-012（A 阶段）交�
 | # | 性质 |
 |---|---|
 | 1 | `results/LOAD-001-checkout.json` 存在，顶层**恰好 8 键**（F7.2） |
-| 2 | `scenarios` 长度 == 3，顺序 == 计划顺序；`scenario_id` 逐字 == 计划的 |
+| 2 | `scenarios` 长度 == 4，顺序 == 计划顺序；`scenario_id` 逐字 == 计划的 |
 | 3 | 场景 WL-001 的 `invocations` 长度 == 2（**不合并**，D190），`step_index` == 0 / 1 |
 | 4 | 场景 WL-002 / WL-004 的 `thresholds` **不存在**，`thresholds_status == "not_provided"` |
 | 5 | 每条 invocation 的 `executed_url` 的 **origin == `execution.stub.origin`**，**path 逐字** == 计划的 URL 的 path |
@@ -511,6 +532,7 @@ REQ-009（压测能力域）交了「负载模型」；REQ-012（A 阶段）交�
 | 13 | `results_sha256` 可被第三方**复算**一致 |
 | 14 | **顺序执行可核**：同套件内前一条 invocation 的 `stub_observed.last_at_ms` ≤ 后一条的 `stub_observed.first_at_ms`（无重叠） |
 | 15 | **桩侧观测是本次增量**：各 invocation 的 `stub_observed.requests` 之和 ≥ 桩侧总请求数，且**没有哪条**等于累计值（即不是累计口径） |
+| 16 | **`python` 场景（WL-003）**：该 invocation 的 `observed` **缺席**、`verdict == "undetermined"`；其 `thresholds` 为**空数组**（该场景无阈值）；**它仍然被执行了**（证据目录里必须有它的 `step_index` 子目录） |
 
 ---
 
