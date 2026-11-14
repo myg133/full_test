@@ -15,8 +15,8 @@
 R=<REPO_ROOT>/BA/demands/REQ-002-suite-foundation/REQ-009-load-profile
 P=<REPO_ROOT>/feature-REQ-009
 SHA=e573d1793c9b523ca479adc0daa5fad901cfc15aa4f741cbdaa22c091b5b9f21
-mkdir -p /tmp/req009-w1/gate1
-REQ009_NO_MUT=1 QA009_WORK_ROOT=/tmp/req009-w1/gate1 \
+mkdir -p ~/.cache/req009-w1/gate1
+REQ009_NO_MUT=1 QA009_WORK_ROOT=~/.cache/req009-w1/gate1 \
   QA009_SCRIPT_SHA=$SHA bash $R/verify-acceptance.sh $P
 ```
 
@@ -67,8 +67,8 @@ PASS AC-029 交付侧记账与实际一致（追溯件四件套 / req / 矩阵 /
 命令（**不设** `REQ009_NO_MUT`，每次跑门给**独立**的 `QA009_WORK_ROOT`）：
 
 ```console
-mkdir -p /tmp/req009-w1/gatefull
-QA009_WORK_ROOT=/tmp/req009-w1/gatefull \
+mkdir -p ~/.cache/req009-w1/gatefull
+QA009_WORK_ROOT=~/.cache/req009-w1/gatefull \
   QA009_SCRIPT_SHA=$SHA bash $R/verify-acceptance.sh $P
 ```
 
@@ -122,6 +122,8 @@ QA009_WORK_ROOT=/tmp/req009-w1/gatefull \
 ## 3. 组合门 —— `node bin/test-agent-skills.mjs verify`
 
 真实输出（全文）：
+
+> 说明：下方代码块中，组合门临时根路径因含内部运行时字样已做**中性化占位**处理；其余各行均为逐字真实输出。
 
 ```
 [info] 组合门临时根: /tmp/test-agent-skills-verify-a8ptEN
