@@ -499,8 +499,14 @@ node skills/security-plan/scripts/make-security-plan.mjs \
 
 ### AC-029: 交付侧记账必须与实际一致
 - **前置条件**: 被验包目录 + `feature-meta/security-plan/` 追溯件
-⑥ 包内**既有**追溯件（`feature-meta/manifest.json` + `feature-meta/test-report/`、`feature-meta/regression-plan/`、`feature-meta/defect-verify/` 的四件套）必须**齐全且非空**，且 `feature-meta/manifest.json` 的 `req` 仍是 `REQ-006`（**不得**被改写成 `REQ-008` —— REQ-008 的追溯件在 `feature-meta/security-plan/`）
-- **预期结果**: 六项全满足；任一不符 → 判红并点名
+- **测试步骤**: 逐项核 ① `feature-meta/security-plan/` 的四件套；② 该子目录 `manifest.json` 的 `req`；③ 根 `feature-meta/manifest.json` 的 `req`；④ 既有三个子目录各自的四件套；⑤ `traceability.md` 的追溯矩阵行数与编号集合；⑥ 三份 md 的判据条数与决策号范围记载
+- **预期结果**: **六项全满足**；任一不符 → 判红并点名
+  ① `feature-meta/security-plan/` 的四件套（`status.md` / `traceability.md` / `verification-report.md` / `manifest.json`）**齐全且非空**
+  ② `feature-meta/security-plan/manifest.json` 的 `req` 是 `REQ-008`
+  ③ 包内**既有**追溯件：根 `feature-meta/manifest.json` 必须**存在且非空**，且其 `req` 仍是 `REQ-006`（**不得**被改写成 `REQ-008` —— REQ-008 的追溯件在 `feature-meta/security-plan/`）
+  ④ `feature-meta/test-report/`、`feature-meta/regression-plan/`、`feature-meta/defect-verify/` 各自的四件套（`status.md` / `traceability.md` / `verification-report.md` / `manifest.json`）必须**齐全且非空**，**不得**被改写或删除
+  ⑤ `feature-meta/security-plan/traceability.md` 的追溯矩阵**行数 == 判据条数**、且矩阵里的**编号集合 == 判据编号集合**（两者都**动态取** `acceptance.md` 的实际条数与编号，**不写死**）
+  ⑥ 三份 md（`status.md` / `traceability.md` / `verification-report.md`）的**判据条数取值唯一**、**决策号取值唯一且恰好等于实际决策号集合**
 - **判据形式**: 查绝对事实（追溯件的实际内容 vs 契约的实际内容）
 - **记载口径**: 判据条数在 md 里的**写法**必须能被抽取 —— 接受两种写法：
   「**29 条判据**」或「**判据条数：29**」（可带 `**` 等 markdown 强调符号）。

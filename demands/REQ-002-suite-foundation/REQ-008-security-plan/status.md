@@ -196,3 +196,31 @@
 |---|---|---|---|
 | L-08 | 已知边界 | **哪一类 OWASP 判 `not_applicable` 未钉版**（本实现判 A02 / A06 / A10 不适用） | 契约有意不写死（D103）：写死哪类必须 N/A 就是**假判据**（同一套上下文换个实现就该换判定）。验收靠 **AC-011 / AC-012 / AC-027** 三条通用规则，不靠具体类名 |
 | L-09 | 低 | **`scan_findings[].severity` 的枚举未在契约里钉版**（实现用 `critical/high/medium/low`） | AC-014 只核 `id` / `threat_refs` / 映射关系，不核 severity 取值 ⇒ 属自由字段。格式已写进 `threat-model-format.md`；若将来要跨 skill 统一枚举，需另开 REQ |
+| L-10 | **重要** | **默认环境解析不排除含 `driver` 的环境文件** | 若 `test-assets/environments/` 下排序在前的环境带 `driver`，security 套件会指向它 ⇒ 上游 `resolveDriverName()` 实测解析为 `api` ⇒ **误配对假象**（与 D126 的立意同源）。契约 F1.1 规定「默认取排序第一个」、F6 声明**不作为判据** ⇒ 本 REQ **不违规**。处置：后续 REQ 收紧「默认解析跳过含 `driver` 的环境」或「`scope=security` 的套件校验环境不含 `driver`」 |
+| L-11 | 次要 | `scan.status == "not_provided"` 时 `scan` 段**没有面向人的说明文字** | 契约 F7.3 只要求 `status` 永远存在 ⇒ 不违规，「显式声明」已由 `status` 承担。处置：后续 REQ 可加一句 `reason`，降低误读风险 |
+
+### 9.4 T1 语义复算的裁定（独立验收方，2026-11-14）
+
+T1 报告：`$HOME/.local/share/agent-runtime-data/tmp/req008/vrfy/out-T1.md`（40 KB）；
+配套证据：`…/req008/t1/{expected,actual,diff,branches}.*`、独立复算器 `t1/recompute.mjs`、核对器 `t1/indep/`（含 24 个变异自检）。
+
+**T1 结论**：AC-009 ~ AC-029 共 **21 条全部「一致」，不一致 0 条**；
+契约确定字段 **42/42 逐字段相同**；26 项实现方判断字段按契约本就不指定，改用**契约不变量双向对账**
+（在「应得」与「实际」两份产物上各跑一遍核对器，均 **19/19 PASS**）；
+**核对器自身做了 24 个变异自检、检出 24/24** ⇒ 「PASS」不是空话；
+三个官方夹具覆盖不到的分支**全部实跑通过**（不适用类：无该类威胁 + 非空 reason + `open_question_ref` 的 `category` 匹配；
+环境无 `driver` 时上游解析为 `security`；不传 `--scan` 时 `status="not_provided"`、findings 空、无 `source` 含 scan 的威胁）。
+
+| # | T1 的问题 | 裁定 | 处置 |
+|---|---|---|---|
+| **T1-01** | AC-029 正文**只剩 ⑥**，①~⑤ 在契约文件里不存在，而「预期结果」写「**六项**全满足」⇒ 按字面不可完整判定（**重要；契约缺陷，不归责于实现**） | **成立 —— 需求方当场改正** | `acceptance.md` AC-029 已补全 ①~⑥ 六项，逐项与**门侧实现一一对应**（追溯件四件套齐全非空 / `security-plan/manifest.json` 的 `req=REQ-008` / 根 `manifest.json` 的 `req=REQ-006` / 既有三个子目录四件套齐全 / 追溯矩阵行数与编号集合 / 三份 md 条数与决策号取值唯一）。**判据条数仍 29**（门动态取值不受影响）；**门脚本未改 ⇒ sha 不变**；改正后复跑主门 **29 PASS / 0 FAIL**，rc=0 |
+| **T1-02** | 默认环境解析**不排除**含 `driver` 的环境文件：若 `test-assets/environments/` 下排序在前的环境带 `driver`，security 套件会指向它 ⇒ 上游 `resolveDriverName()` 实测解析为 **`api`**（source=`environment.driver`）⇒「用功能执行器跑安全用例」的**误配对假象** | **成立，但不改实现** | 契约 F1.1 明文规定「默认取排序第一个」，F6 也写明这条**不作为判据** ⇒ 实现**未违规**。但风险真实（与 D126 的立意同源）⇒ 登记遗留项 **L-10（重要）** |
+| **T1-03** | 未提供 `--scan` 时 `scan` 段只有 `{status,tool,source_file,finding_count}`，**没有面向人的说明文字** | **成立，但不改实现** | 契约 F7.3 只要求 `status` 永远存在 ⇒ **不违规**；「显式声明」已由 `status` 字段承担。登记遗留项 **L-11（次要）** |
+| **T1-04** | AC-019 ④「每条威胁至少被一条 `requirements[]` 覆盖」未写明是文件内还是跨全部套件 | **不成立 —— 驳回** | 契约正文**已写明**：③「每项 ∈ **该文件** `requirements[].id`」= **文件内**；④「**每条威胁**至少被一条 `requirements[]` 覆盖」= **跨全部套件**（威胁本就跨套件分布）。门侧实现与之一致（③ 用 per-file 的 `reqIds`；④ 用跨套件聚合的 `covered`）⇒ **契约与门均无歧义**，T1 是漏看了 ③ 的限定 |
+| **T1-05** | 与参考实现的逐文件相似度 | **通过** | 19 个文件逐文件比对：仅 `skill-meta.json` **逐字节相同**（8 行，内容由契约规定）；最相似的代码文件 `scripts/lib/scan.mjs` 相似度 **0.158**、差异 **171 行**；`scripts/lib/threats.mjs`（694 行）vs 参考 `scripts/lib/model.mjs` 相似度 **0.060**、差异 **829 行** ⇒ **无整体照抄迹象** |
+
+T1 边界声明：被验包 `git status` **干净**（未改任何被验文件）；未跑 `verify-acceptance.sh`（避免与另一路共用工作目录产生无因果关系的 FAIL 键）；
+AC-001 ~ AC-008 不在复算范围（由门覆盖）。
+
+> 需求方另核：T1 写 AC-023「suite.json 字段集 ⊆ 9 允许字段」—— 与契约正文**一致**（契约写的就是 ⊆ + 六个必填非空，
+> 与上游 `verify-layout.mjs` 的 `SUITE_ALLOWED_FIELDS` 同口径），**不是**门比契约宽 ⇒ 不存在该处假绿洞。
