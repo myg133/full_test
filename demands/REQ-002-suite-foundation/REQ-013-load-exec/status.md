@@ -205,3 +205,41 @@ AC-037 补「REQ-012 既有件保留不动」与「决策号按行内最后一�
 3. 回收 worktree `feature-REQ-013` + 分支 `feature/REQ-013`（先 `merge-base --is-ancestor`）。
 4. 释放认领 ⇒ 登记表转终态 + 遗留项 ⇒ `aw.py verify` 期望 0 FAIL / 0 WARN。
 5. 重装（`node bin/test-agent-skills.mjs verify && install`）⇒ 逐字核对 8 skill / 136 文件。
+
+---
+
+## §8 收口（2026-11-15）
+
+### 8.1 §7 五项待办的最终状态
+
+| # | 待办 | 实测 | 结论 |
+|---|---|---|---|
+| 1 | 合并 develop + 对合并物复跑 | 合并提交 **`16d574d`**（`--no-ff -X theirs`，无冲突）；根 `feature-meta/manifest.json` **已还原**为 REQ-006 版（REQ-012 内容仍留存于 `feature-meta/load-runner/`：traceability **5** 处 / verification-report **6** 处命中） | ✅ |
+| 2 | 门快跑（对合并物 `code/`） | **41 PASS / 0 FAIL**，rc=0 · 门 stderr bash 错误行 **0** | ✅ |
+| 3 | 门完整模式（对合并物） | **41/41 变异体全部检出**、**0 逃逸**、**0 无效**、**负控未检出**，rc=0（≈90 分钟） | ✅ |
+| 4 | A9 独立语义复算（对合并物） | **一致 35 / 不一致 0 / 不可判定 0**（快跑产物与完整夹具产物**各跑一次，结论一致**） | ✅ |
+| 5 | A8 外部探针（对合并物） | 期望内 **16** / 漏检 **1（T04，已登记遗留）** / 不可判定 **1（T14）** | ✅ |
+| 6 | 上游八门 + 组合门（对合并物） | REQ-009 29/0 · REQ-010 29/0 · REQ-011 28/0/0 · REQ-007 29/0 · REQ-008 29/0 · REQ-006 42/0 · 002A 19/0 · 002B 41/0 · 组合门全绿 | ✅ |
+| 7 | 交付红线（对合并物） | internal-rt **0 命中** · `npm pack` **129 文件条目**（REQ-012 时 124，**+5**）· feature-meta **0 条** | ✅ |
+| 8 | 回收 worktree + 分支 | worktree `feature-REQ-013` 已 `git worktree remove`；分支经 `git branch --merged develop` 确认后在 **develop 视角**下 `git branch -d` 删除（**未用 `-D`**） | ✅ |
+| 9 | 释放认领 | `aw.py claim release REQ-013` ⇒ 归档 `.aw/archive/REQ-013-*.json` | ✅ |
+| 10 | 登记表终态 | 第 24 行「进行中」→**「已完成」** + 本节收口结论写入 REQ-013 段落 | ✅ |
+| 11 | `aw.py verify` | **0 FAIL / 0 WARN** | ✅ |
+| 12 | 重装核对 | `verify && install` ⇒ **8 skill / 123 文件逐字一致**（0 不一致 / 0 缺失 / 0 多出；REQ-012 时 118 文件，+5） | ✅ |
+
+### 8.2 收口期补记的两条口径（**不是新缺陷，是口径澄清**）
+
+1. **`npm pack` 条目数**：§7 原写「136 文件」是**预估**，实测为 **123**（`skills/` 下 8 个 skill 的文件数）·
+   `npm pack` 的**文件条目数**为 **129**（= 123 skills + 4 bin + README + LICENSE + package.json − 1 个被 npm 按规则排除的
+   `skills/test-execute/examples/offline/.gitignore`）。REQ-012 时对应数字是 118 / 124 ⇒ **本次 +5**（即 load-profile 新增的 5 个文件）。
+2. **T04 漏检的定性**：外部探针把「`generated_at` 非法 ISO」报为漏检，但**契约未要求**交付的 `check-load-test.mjs` 校验 ISO 合法性
+   （它只负责「产物与计划/模型一致」）⇒ **不判交付缺陷**；而**门侧 AC-003 确实校验 ISO**（`verify-acceptance.sh:725`）⇒ 主验收链无缺口。
+   探针自测口径里的「期望内 16 / 漏检 1」与验收结论里的「0 真漏检」指的是**同一件事的两面**（一个是探针的机械计数，一个是需求方的定性）。
+
+### 8.3 收口后的状态
+
+- 登记表第 24 行 = **已完成**；认领已释放；worktree/分支已回收；`aw.py verify` 0 FAIL / 0 WARN。
+- ⚠️ **本 REQ 的全部压测结论只在「本地桩服务」上成立** ⇒ **不得**表述为生产容量结论（诚实性红线）。
+- 遗留项 **5 条**已登记在 `BA/dispatch/req-registry.md` 的遗留项表（D193+D199 / F4.5 ⑤ / D202 / 工装不入库 / 校验器 ISO 职责）。
+- **C 阶段**（真实服务侧压测编排）**尚未立项**。
+
