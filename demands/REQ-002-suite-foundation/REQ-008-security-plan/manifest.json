@@ -1,0 +1,73 @@
+{
+  "req": "REQ-008",
+  "branch": "demand",
+  "agent_id": "ba-local-ba",
+  "session_id": "mvs_744b60ef3d984cffbcd54448ac77bd8c",
+  "owner": "ba-local-ba",
+  "base_branch": "develop",
+  "created_at": "2026-11-14T09:15:00+08:00",
+  "demand_dir": "BA/demands/REQ-002-suite-foundation/REQ-008-security-plan",
+  "criteria_count": 29,
+  "criteria_range": "AC-001~AC-029",
+  "criteria_groups": {
+    "A_交付物形状": 4,
+    "B_输入解析与校验": 4,
+    "C_威胁模型": 6,
+    "D_权限矩阵": 2,
+    "E_用例派生": 5,
+    "F_套件落位与可执行": 3,
+    "G_诚实性与覆盖": 5
+  },
+  "criteria_type_distribution": {
+    "功能": 14,
+    "诚实性": 9,
+    "追溯": 2,
+    "一致性": 1,
+    "写入权": 1,
+    "可用性": 1,
+    "兼容性": 1
+  },
+  "decision_range": "D98~D126",
+  "decision_count": 29,
+  "decision_range_note": "实现侧追溯范围 = decisions.md 的实际 D 集合（D98~D126，29 条），**动态取，不写死**（D120 —— REQ-007 的 F-01 就栽在写死决策号上）。门侧 AC-029 ③ 按此做「取值唯一」核。",
+  "acceptance_script": "verify-acceptance.sh",
+  "acceptance_script_sha256": "31b3bb879ab51cc68ddb12965ad8421ce9ea21427f5afddc033a6f5cabe4b85b",
+  "acceptance_script_env": {
+    "QA008_SCRIPT_SHA": "期望的脚本自身 sha256；不匹配即 0 PASS / 1 FAIL 退出",
+    "REQ008_NO_MUT": "1 = 跳过变异体套件（快跑 / 嵌套运行用）",
+    "QA008_KEEP_WORK": "1 = 保留工作目录（调试）",
+    "QA008_WORK_ROOT": "工作目录的父目录（默认 ${TMPDIR:-/tmp}）"
+  },
+  "acceptance_script_states": {
+    "PASS": "判据通过",
+    "FAIL": "判据不通过",
+    "UNDEC": "不可判定（**≠ 通过**；退出码一律非 0）",
+    "exit_codes": "0 = 全通过; 1 = 有 FAIL / 不可判定 / 变异体逃逸 / 负控失败 / sha 不符; 2 = 用法错误"
+  },
+  "target_package": "feature-REQ-008",
+  "target_branch": "feature/REQ-008",
+  "mutations": {
+    "positive_controls": 13,
+    "negative_control": 1,
+    "negative_control_shape": "往 threat-model.json 的 meta 里加一个无害字段 gate_note（meta 的字段集开放 ⇒ 不触犯任何判据）",
+    "injection": "入口脚本包装（shim）：副本里的 make-security-plan.mjs 换成包装层，包装调用原实现（move 到 make-security-plan.real.mjs）后对产物做一处语义篡改",
+    "mutation_self_proof": "① 入口锚点在副本里逐字唯一命中 1 次 ② node --check 通过 ③ 变异后脚本跑完不崩 ④ 产物与基线不同（篡改真的生效）",
+    "detection_metric": "新增失败键（变异运行的失败键 减去 基线失败键；基线失败键**只取 ^FAIL 行**；**不用**对称差）",
+    "baseline_failure_keys": "只取门输出里 ^FAIL 行里的 AC 编号（PASS / UNDEC 行里也有 AC 编号，混进来会让基线键集合变成全集 ⇒ 整套检测沦为橡皮章）"
+  },
+  "d65_self_test": {
+    "report": "$HOME/.local/share/agent-runtime-data/tmp/req008/out-BUILD.md",
+    "items": {
+      "1_无实现真包优雅降级": "通过：0 崩溃，27 条 FAIL，rc=1",
+      "2_判别探针": "通过：11 个有害篡改全部检出（其中 9 个精确命中单条判据，2 个连带同源判据 AC-004）",
+      "3_假阳性负控": "通过：3 个无害篡改门仍全绿（rc=0，新增失败键为空）",
+      "4_变异检出恒真检查": "通过：负控 M0 未检出；橡皮章三种错误口径均已复现",
+      "5_负控接线验证": "通过：M0 改成有害篡改后门 rc=1，新增失败键=[AC-011]"
+    }
+  },
+  "scratch_only": {
+    "note": "自测工装与参考实现包**只放 scratch**，不是交付物；Dev 必须另写实现（照抄参考实现等于绕过「门能检出违例」的意义）",
+    "reference_package": "$HOME/.local/share/agent-runtime-data/tmp/req008/refpkg",
+    "self_test_harness": "$HOME/.local/share/agent-runtime-data/tmp/req008/build/selftest2.sh"
+  }
+}
