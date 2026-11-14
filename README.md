@@ -34,6 +34,7 @@ npx test-agent-skills install
 ├── test-report/           # 本包安装的 skill
 ├── defect-verify/         # 本包安装的 skill
 ├── security-plan/         # 本包安装的 skill
+├── load-profile/          # 本包安装的 skill
 └── <你原有的其它 skill>     # 不受影响
 ```
 
@@ -123,6 +124,7 @@ test-agent-skills <command> [options]
 | `test-report` | 执行产物 → 执行报告：只读消费 `meta.json` / `results.json` / `evidence/` 与可选的回归计划，产出 `report.json` + `report.md`，给出用例层 / 证据层 / 计划对账层三层结论、逐条点名漏跑的用例与判不了的变更，并绑定输入产物的指纹（入口命令：`node skills/test-report/scripts/make-report.mjs --artifacts <run_dir>`） |
 | `defect-verify` | 缺陷单 → 缺陷复现用例集：读缺陷单与已有用例集，给每条缺陷**有且只有一个**处置结论（`reused` 复用已有用例 / `derived` 派生 1 条新用例 / `unresolved` 显式说不知道并给理由），产出可被 `test-execute` 直接消费的 `defect-cases.json`，复现用例带 `defect-verify` 与缺陷 id 的 tag（便于按缺陷分批跑）（入口命令：`node skills/defect-verify/scripts/make-defect-cases.mjs --defects <file> --cases <file> --suite <suite> --cycle-dir <dir>`） |
 | `security-plan` | 安全上下文 → 安全测试**规划**：读安全上下文（资产 / 信任边界 / 入口点 / 角色 / 资源）+ 可选的依赖扫描结果，派生**威胁模型**（STRIDE + OWASP 十类逐类有交代 + 四类实战补充逐类显式判定）、**权限矩阵**（角色 × 资源 × 动作，越权缺口与越权威胁双向对应）、**安全用例集**与套件配置，产出 `threat-model.json` / `matrix.json` / `suites/SEC-<编号>-<短名>/{cases.json,suite.json}`；只做规划，**不执行**安全用例（`security` 执行器未实现，属后续 REQ）（入口命令：`node skills/security-plan/scripts/make-security-plan.mjs --context <file> [--cases <file>] [--scan <file>] --out-dir <项目根>`） |
+| `load-profile` | 压测上下文 → 压测**规划**：读压测上下文（容量目标 / 负载画像 / 阈值及其来源）+ 可选的功能用例集，派生**负载模型本体**（每个容量目标一个）、**压测套件**（按环境分组：同一环境的多条容量目标进同一个套件）与**压测计划清单**，产出 `scenarios/<场景>.json` / `suites/LOAD-<编号>-<短名>/{scenario.json,suite.json}` / `report.json`；只做规划，**不发压**（`load` 执行器未实现，属后续 REQ），没有指标来源就**不写阈值**并留未决问题（入口命令：`node skills/load-profile/scripts/make-load-profile.mjs --context <file> [--cases <file>] --out-dir <项目根>`） |
 
 ### Skill 之间的版本配套
 
@@ -137,7 +139,9 @@ test-agent-skills <command> [options]
 `test-report` 消费 `test-execute` 的执行产物格式（`meta.json` / `results.json` / `evidence/` 与指纹口径），
 `defect-verify` 消费 `test-case-design` 的用例集格式、产出的复现用例由 `test-execute` 消费，
 `security-plan` 消费 `test-case-design` 的方法库与维度库（方法号 / 维度 id 的唯一来源）、
-并由 `qa-toolchain` 跑扫描器后把结果喂进 `--scan`。
+并由 `qa-toolchain` 跑扫描器后把结果喂进 `--scan`，
+`load-profile` 消费 `test-case-design` 的目录契约与用例集格式（链路存在性对账），
+并与 `qa-toolchain` 的工具链声明配套（`loadtest` 由工具链管，本 skill 只声明不安装）。
 
 ### 组合门（`verify`）
 
@@ -153,7 +157,10 @@ node bin/test-agent-skills.mjs verify --root /tmp/verify-root
 这条**经过第 6 个 skill** 的链路，
 以及「安全上下文 + 功能用例集 + 依赖扫描结果 → `security-plan` 出安全测试计划 →
 断言威胁模型 / 权限矩阵 / 安全用例集逐项自洽、且产物能被上游加载层消费」
-这条**经过第 7 个 skill** 的链路。
+这条**经过第 7 个 skill** 的链路，
+和「压测上下文 + 功能用例集 → `load-profile` 出负载模型与压测套件 →
+断言负载画像逐字可追溯、无指标来源就不写阈值、套件按环境分组、引用不漂移、
+且产物能被上游加载层消费」这条**经过第 8 个 skill** 的链路。
 
 依赖版本不满足时，组合门报**版本问题**（点名哪个 skill、要求什么、实际什么），
 而不是让下游报业务错。
