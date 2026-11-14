@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "req": "REQ-013",
+  "feature": "load-profile / B 阶段：负载级执行与判定链（只打本地桩）",
+  "title": "压测能力域 B 阶段 —— 消费压测计划、真的跑起来（只打本地桩）、按阈值给出判定结论",
+  "branch": "feature/REQ-013",
+  "base_branch": "develop",
+  "owner": "worker",
+  "agent_id": "worker",
+  "session_id": "mvs_744b60ef3d984cffbcd54448ac77bd8c",
+  "skill": "load-profile",
+  "stage": "B",
+  "scope": "只打本地桩的负载级执行与阈值判定（**不改** A 阶段计划侧、不改用例级证据链）",
+  "demand_dir": "BA/demands/REQ-002-suite-foundation/REQ-013-load-exec",
+  "acceptance": {
+    "ac_count": 41,
+    "ac_range": "AC-001~AC-041",
+    "decision_count": 26,
+    "decision_range": "D185~D210"
+  },
+  "entrypoints": [
+    {
+      "name": "run-load-test.mjs",
+      "path": "skills/load-profile/scripts/run-load-test.mjs",
+      "role": "主入口：读计划 ⇒ 起桩 ⇒ 执行 ⇒ 判定 ⇒ 写负载级产物与证据",
+      "usage": "node scripts/run-load-test.mjs --load-dir <项目根> --out-dir <项目根> --suite <套件名> [--mode api|cli] [--stub-delay-ms <N>] [--stub-error-rate <R>]"
+    },
+    {
+      "name": "check-load-test.mjs",
+      "path": "skills/load-profile/scripts/check-load-test.mjs",
+      "role": "产物自洽校验器（只读、有行为护栏）",
+      "usage": "node scripts/check-load-test.mjs <项目根> --suite <套件名>"
+    }
+  ],
+  "deliverables": [
+    "skills/load-profile/scripts/run-load-test.mjs",
+    "skills/load-profile/scripts/check-load-test.mjs",
+    "skills/load-profile/scripts/lib/stub.mjs",
+    "skills/load-profile/scripts/lib/load-exec.mjs",
+    "skills/load-profile/references/load-exec-contract.md",
+    "skills/load-profile/SKILL.md",
+    "feature-meta/load-runner/"
+  ],
+  "artifacts": {
+    "verdict_product": "<out-dir>/test-assets/load/results/<套件名>.json",
+    "evidence_dir": "<out-dir>/test-assets/load/results/evidence/<套件名>/",
+    "evidence_files": ["result.json", "stdout.txt", "stub-observations.json"],
+    "evidence_manifest": "<out-dir>/test-assets/load/results/evidence/<套件名>/manifest.json"
+  },
+  "boundaries": [
+    "只打本地桩：目标地址必须是回环地址，非回环 ⇒ rc=1 + 点名",
+    "只写 test-assets/load/results/；输入（计划 / 模型 / 环境）只读",
+    "先校验、后建目录；产物已存在 ⇒ rc=1 不覆盖",
+    "判定枚举封闭 3 值（met / not_met / undetermined），不用例级词汇",
+    "结论只限定在「本次、本地桩、该负载模型」范围内",
+    "不改 test-execute / test-report / A 阶段计划侧 / 其它 skill"
+  ],
+  "related_reqs": [
+    {
+      "req": "REQ-012",
+      "title": "压测能力域 A 阶段 —— runner 适配（负载模型 → 压测计划，零请求）",
+      "consumes": [
+        "skills/load-profile/scripts/plan-load-run.mjs",
+        "skills/load-profile/scripts/check-load-run.mjs",
+        "skills/load-profile/scripts/lib/runner.mjs",
+        "skills/load-profile/scripts/lib/plan.mjs",
+        "skills/load-profile/references/runner-adapters.md"
+      ],
+      "note": "本 REQ **消费** A 阶段产出的 plans/<套件名>.json（argv 规范形态 / 阈值逐字携带），**不改** A 阶段的任何文件与契约"
+    },
+    {
+      "req": "REQ-013",
+      "title": "压测能力域 B 阶段 —— 负载级执行与判定链",
+      "consumes": [
+        "skills/load-profile/scripts/run-load-test.mjs",
+        "skills/load-profile/scripts/check-load-test.mjs",
+        "skills/load-profile/scripts/lib/stub.mjs",
+        "skills/load-profile/scripts/lib/load-exec.mjs",
+        "skills/load-profile/references/load-exec-contract.md"
+      ]
+    }
+  ]
+}

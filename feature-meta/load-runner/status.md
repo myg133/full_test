@@ -72,3 +72,23 @@
 3. **未验任何真实服务的容量表现** —— 不存在这个事实；
 4. **未在非 GNU/Linux 环境验过** —— 本机是 Linux，`sha256sum` / `stat -c` 等 GNU 工具未做跨平台适配；
 5. **未做并发跑门测试** —— 验收纪律要求「一次只跑一个门」（并发会产生无因果关系的失败键）。
+
+---
+
+# REQ-013 交付进度与自测报告 —— `load-profile` 的 **负载级执行与判定链**（只打本地桩）
+
+> 需求编号：**REQ-013** · 决策号范围：**D185~D210** · 判据条数：41（AC-001 ~ AC-041）
+> 需求契约（**只读**）：`BA/demands/REQ-002-suite-foundation/REQ-013-load-exec/`
+
+| 项 | 状态 |
+|---|---|
+| 交付物 7 项 | ✅ 全部交付（执行入口 / 校验器 / 桩 / 执行器+判定器 / 契约文档 / SKILL.md 追加节 / 追溯件四件套） |
+| 验收门（快跑） | ✅ 41 PASS / 0 FAIL，rc=0 |
+| 验收门（完整模式） | ✅ 41/41 变异体全部检出、负控未检出，rc=0（真实输出见 `verification-report.md`） |
+| 只打本地桩 | ✅ 计划 URL 与执行 URL 双重回环校验；桩只监听 `127.0.0.1`、端口 0、生命周期由执行器托管 |
+| 不覆盖上游 | ✅ A 阶段（REQ-012）文件与契约、其它 skill、`bin/`、`package.json`、`README.md`、`LICENSE` 全部未改 |
+| 追溯件 | ✅ `verification-report.md` / `traceability.md` / `feature.json` / `feature-meta.json` 四个文件都有；`traceability.md` 里 REQ-013 的决策号并集 == D185~D210 全集 |
+| `manifest.json` | ⚠️ **刻意未改**：REQ-012 的验收门 AC-027 钉死 `feature-meta/load-runner/manifest.json` 的 `req == "REQ-012"` ⇒ 改动会打破上游门；REQ-013 的记账放在本 REQ 的四件套与本节 |
+
+⚠️ `feature-meta/load-runner/manifest.json` 的 `req` 仍为 `REQ-012`（**刻意保留**，见上表末行）；
+REQ-013 的交付位置与判据映射见 `traceability.md` 的 REQ-013 一节与 `feature.json` / `feature-meta.json`。
