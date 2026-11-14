@@ -126,6 +126,27 @@ test-agent-skills <command> [options]
 | `security-plan` | 安全上下文 → 安全测试**规划**：读安全上下文（资产 / 信任边界 / 入口点 / 角色 / 资源）+ 可选的依赖扫描结果，派生**威胁模型**（STRIDE + OWASP 十类逐类有交代 + 四类实战补充逐类显式判定）、**权限矩阵**（角色 × 资源 × 动作，越权缺口与越权威胁双向对应）、**安全用例集**与套件配置，产出 `threat-model.json` / `matrix.json` / `suites/SEC-<编号>-<短名>/{cases.json,suite.json}`；只做规划，**不执行**安全用例（`security` 执行器未实现，属后续 REQ）（入口命令：`node skills/security-plan/scripts/make-security-plan.mjs --context <file> [--cases <file>] [--scan <file>] --out-dir <项目根>`） |
 | `load-profile` | 压测上下文 → 压测**规划**：读压测上下文（容量目标 / 负载画像 / 阈值及其来源）+ 可选的功能用例集，派生**负载模型本体**（每个容量目标一个）、**压测套件**（按环境分组：同一环境的多条容量目标进同一个套件）与**压测计划清单**，产出 `scenarios/<场景>.json` / `suites/LOAD-<编号>-<短名>/{scenario.json,suite.json}` / `report.json`；只做规划，**不发压**（`load` 执行器未实现，属后续 REQ），没有指标来源就**不写阈值**并留未决问题（入口命令：`node skills/load-profile/scripts/make-load-profile.mjs --context <file> [--cases <file>] --out-dir <项目根>`） |
 
+### `load-profile` 的 runner 适配入口
+
+`load-profile` 分两段交付：**负载模型**（`make-load-profile.mjs`）与
+**runner 适配**（把负载模型编译成真实压测工具可消费的命令清单）。适配段**一个请求都不发**：
+
+```bash
+# 负载模型 + 套件 + 环境 ⇒ 压测计划（只写 <out-dir>/test-assets/load/plans/）
+node skills/load-profile/scripts/plan-load-run.mjs --load-dir <项目根> --out-dir <项目根>
+
+# 复核已产出的计划与负载模型是否自洽（篡改过的计划会判红）
+node skills/load-profile/scripts/check-load-run.mjs <项目根>
+```
+
+- 计划里每个负载画像段一条**完整可跑的 argv**（多段**不合并**、`--cores 1` 恒定钉死、
+  `timeout_s` 秒 → `-d` 毫秒）；
+- `args` 的**未知键一律拒绝**（rc=1 + 点名该键），`python` runner **必须**由 `args.command`
+  自陈完整命令（**不编造**默认命令）；
+- 计划里**不含**任何压测结论（`status` / `result` / `verdict` / `executed` / `passed` /
+  `outcome` / `conclusion`）—— 本阶段只产出「该敲什么命令」，**不产出**「压出来是什么」；
+- 适配契约详见 `skills/load-profile/references/runner-adapters.md`。
+
 ### Skill 之间的版本配套
 
 每个 skill 根级有一份 `skill-meta.json`，声明自己的版本与对别的 skill 的依赖：
