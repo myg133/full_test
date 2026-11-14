@@ -126,7 +126,8 @@ WL-001 有 4 个阈值键，其余三个场景无阈值）。
 
 - **判**：invocation 条目**恰好 10 键**（`step_index` / `duration_s` / `concurrency` / `argv` /
   `executed_url` / `executed_params` / `observed` / `stub_observed` / `thresholds` / `verdict`）；
-  ⚠️ **`python` runner 的 `observed` 键缺席 ⇒ 恰好 9 键**（与 AC-041 ① 是**同一件事**，不是额外例外）；
+  ⚠️ **`python` runner 的条目恰好 8 键**（`observed` 缺席 —— 无输出契约；`executed_params` 缺席 —— 不走 API 反解）
+  —— 与 AC-041 ① 是**同一件事**，不是额外例外；
   `step_index` == 它在数组里的**下标**；`duration_s` / `concurrency` / `argv` **逐字**等于计划的对应值
   （`argv` **逐元素**相等，**不改一个字符**）。
 - **核**：键集合 + 下标检查 + 逐字比对（含 `argv` 的数组逐元素相等）。
