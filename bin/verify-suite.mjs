@@ -29,6 +29,15 @@
  *          ⚠️ **不断言** run-suite.mjs --dry-run 能跑通 ——
  *          `security` 执行器在 test-execute 的 not_implemented 里，dry-run 会先抛错；
  *          「能被消费」只证到**加载层**）。
+ *      - 压测上下文 + 功能用例集 → **load-profile** 的 make-load-profile.mjs
+ *        → 断言产出的**负载模型本体**与**压测套件**逐项自洽
+ *        （阈值二态与键的有无一致、没有指标来源就不写阈值、负载画像逐字可追溯、
+ *          套件按环境分组、引用件与本体不漂移、场景 ↔ 套件双向覆盖完整、
+ *          产物里没有任何压测结论字段、产物能被上游的**加载层**消费）
+ *        （这条链路经过 test-case-design（目录契约 / 用例集格式）→ load-profile；
+ *          ⚠️ **不断言** run-suite.mjs --dry-run 能跑通 ——
+ *          `load` 执行器在 test-execute 的 not_implemented 里，dry-run 会先抛错；
+ *          「能被消费」只证到**加载层**）。
  *
  * 退出码：0 = 全通过 / 1 = 有问题 / 2 = 用法错误。
  *
@@ -39,6 +48,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
@@ -73,6 +83,19 @@ function runOutputDetail(run) {
   if (stdout !== '') parts.push(`stdout:\n${stdout}`);
   if (stderr !== '') parts.push(`stderr:\n${stderr}`);
   return parts.join('\n');
+}
+
+/**
+ * 文件内容的 sha256（读不到 ⇒ 空串）。
+ * @param {string} file 文件路径
+ * @returns {string}
+ */
+function sha256Of(file) {
+  try {
+    return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+  } catch {
+    return '';
+  }
 }
 
 /**
@@ -1163,6 +1186,454 @@ function scenarioSecurityPlan(root, work) {
   };
 }
 
+/**
+ * 组合场景六（压测能力域）：压测上下文 → `load-profile` 出负载模型与压测套件。
+ * @param {string} root 临时根
+ * @param {string} work 工作目录
+ * @returns {{ok: boolean, message: string}} 场景结论
+ */
+function scenarioLoadProfile(root, work) {
+  const skillsDir = path.join(root, 'skills');
+  const maker = path.join(skillsDir, 'load-profile', 'scripts', 'make-load-profile.mjs');
+  const loader = path.join(skillsDir, 'test-execute', 'scripts', 'lib', 'suite-loader.mjs');
+  const missing = [];
+  for (const file of [maker, loader]) {
+    if (!fs.existsSync(file)) missing.push(path.relative(root, file));
+  }
+  if (missing.length > 0) {
+    return { ok: false, message: `临时根里缺这些必需文件: ${missing.join(' / ')}` };
+  }
+
+  // --- 夹具：压测上下文 / 功能用例集 / 最小项目根 ---
+  const project = path.join(work, 'load-profile-proj');
+  const inputsDir = path.join(project, 'inputs');
+  const envDir = path.join(project, 'test-assets', 'environments');
+  fs.mkdirSync(inputsDir, { recursive: true });
+  fs.mkdirSync(envDir, { recursive: true });
+
+  const context = {
+    schema_version: 1,
+    service: { name: 'order-api', description: '订单服务' },
+    environments: [
+      { name: 'local', base_url: 'http://127.0.0.1:8080' },
+      { name: 'staging', base_url: 'https://staging.example.com' },
+    ],
+    workloads: [
+      {
+        id: 'WL-001', name: 'checkout', target: 'POST /api/v1/checkout', environment: 'local',
+        profile: { type: 'ramp-up', steps: [{ duration_s: 60, concurrency: 10 }, { duration_s: 120, concurrency: 20 }] },
+        thresholds: { p95_latency_ms: 800, error_rate: 0.01 },
+        thresholds_source: '需求 REQ-005 性能指标',
+        tool: { runner: 'loadtest', runtime: 'bun' },
+        args: { rps: 100, keepalive: true },
+        requirement_refs: ['R-1'],
+      },
+      {
+        // 刻意**不给指标来源** ⇒ 产物不许有阈值键，且必须留一条 topic=thresholds 的未决问题
+        id: 'WL-002', name: 'order-query', target: 'GET /api/v1/orders', environment: 'local',
+        profile: { type: 'constant', steps: [{ duration_s: 300, concurrency: 5 }] },
+        tool: { runner: 'loadtest', runtime: 'bun' },
+        requirement_refs: ['R-2'],
+      },
+      {
+        id: 'WL-003', name: 'checkout-staging', target: 'POST /api/v1/checkout', environment: 'staging',
+        profile: { type: 'spike', steps: [{ duration_s: 30, concurrency: 50 }] },
+        thresholds: { p95_latency_ms: 1200 },
+        thresholds_source: '需求 REQ-007 性能指标',
+        tool: { runner: 'python', runtime: 'python' },
+        requirement_refs: ['R-1'],
+      },
+      {
+        // 刻意**在功能用例集里没有对应用例** ⇒ case_refs 为空，且必须留一条 topic=coverage 的未决问题
+        id: 'WL-004', name: 'health-check', target: 'GET /api/v1/health', environment: 'local',
+        profile: { type: 'soak', steps: [{ duration_s: 600, concurrency: 2 }] },
+        thresholds: { p95_latency_ms: 200 },
+        thresholds_source: '需求 REQ-008 性能指标',
+        tool: { runner: 'loadtest', runtime: 'bun' },
+        requirement_refs: ['R-2'],
+      },
+    ],
+    open_questions: [],
+  };
+  const functionalCases = {
+    schema_version: 2,
+    meta: { source: 'REQ-VERIFY 需求文档', generated_at: '2026-01-01T00:00:00+08:00', case_count: 3 },
+    requirements: [
+      { id: 'R-1', title: '下单链路', source_ref: 'REQ-VERIFY §1', testable: true },
+      { id: 'R-2', title: '订单查询', source_ref: 'REQ-VERIFY §2', testable: true },
+    ],
+    open_questions: [],
+    coverage_matrix: [
+      { requirement: 'R-1', methods_applied: ['M1.1'], skipped: [], dimensions: ['functional'] },
+      { requirement: 'R-2', methods_applied: ['M1.1'], skipped: [], dimensions: ['functional'] },
+    ],
+    defects: [],
+    cases: [
+      {
+        id: 'TC-001', title: '下单成功返回订单号', requirement_refs: ['R-1'], dimension: 'functional',
+        priority: 'P0', method: ['M1.1'], status: 'active', preconditions: [],
+        steps: [{ action: 'POST /api/v1/checkout', expected: '返回 201 与 orderId' }], data: {}, tags: ['functional'],
+      },
+      {
+        // action 带路径占位符 ⇒ 对账必须**归一化**后才能匹配 WL-002 的 target
+        id: 'TC-002', title: '按订单号查询订单', requirement_refs: ['R-2'], dimension: 'functional',
+        priority: 'P0', method: ['M1.1'], status: 'active', preconditions: [],
+        steps: [{ action: 'GET /api/v1/orders/{id}', expected: '返回 200 与订单详情' }], data: {}, tags: ['functional'],
+      },
+      {
+        id: 'TC-003', title: '查询用户资料', requirement_refs: ['R-2'], dimension: 'functional',
+        priority: 'P1', method: ['M1.1'], status: 'active', preconditions: [],
+        steps: [{ action: 'GET /api/v1/users/{id}/profile', expected: '返回 200 与用户资料' }], data: {}, tags: ['functional'],
+      },
+    ],
+  };
+  // ⚠️ 环境**不写** driver：写了会覆盖 suite.json 的 executor=load，误配对到 api/mock 执行器，
+  //    「能跑通」就变成了假象（压测执行属后续 REQ）。
+  const localEnvironment = {
+    name: 'local', base_url: 'http://127.0.0.1:8080', timeout_ms: 5000, retries: 0,
+    credentials: { username_env: 'ORDER_API_USER', password_env: 'ORDER_API_PASS' },
+  };
+  const stagingEnvironment = {
+    name: 'staging', base_url: 'https://staging.example.com', timeout_ms: 5000, retries: 0,
+    credentials: { username_env: 'STAGING_USER', password_env: 'STAGING_PASS' },
+  };
+
+  const contextFile = path.join(inputsDir, 'context.json');
+  const casesFile = path.join(inputsDir, 'cases.json');
+  fs.writeFileSync(contextFile, `${JSON.stringify(context, null, 2)}\n`, 'utf8');
+  fs.writeFileSync(casesFile, `${JSON.stringify(functionalCases, null, 2)}\n`, 'utf8');
+  fs.writeFileSync(path.join(envDir, 'local.json'), `${JSON.stringify(localEnvironment, null, 2)}\n`, 'utf8');
+  fs.writeFileSync(path.join(envDir, 'staging.json'), `${JSON.stringify(stagingEnvironment, null, 2)}\n`, 'utf8');
+  const contextShaBefore = sha256Of(contextFile);
+  const casesShaBefore = sha256Of(casesFile);
+
+  // --- 实跑 ---
+  const run = runNode(maker, ['--context', contextFile, '--cases', casesFile, '--out-dir', project], work);
+  if (run.code !== 0) {
+    const detail = runOutputDetail(run);
+    return {
+      ok: false,
+      message: `load-profile 出负载模型失败（退出码 ${run.code}）${detail === '' ? '' : `\n${detail}`}`,
+    };
+  }
+
+  const loadRoot = path.join(project, 'test-assets', 'load');
+  const problems = [];
+
+  // --- 字段集基线 ---
+  const SCENARIO_ALLOWED = [
+    'schema_version', 'id', 'name', 'service', 'target', 'environment', 'profile',
+    'thresholds', 'thresholds_source', 'thresholds_status', 'tool', 'args',
+    'traceability', 'open_questions',
+  ];
+  const SCENARIO_REQUIRED = [
+    'schema_version', 'id', 'name', 'service', 'target', 'environment', 'profile',
+    'thresholds_status', 'tool', 'traceability', 'open_questions',
+  ];
+  const SUITE_ALLOWED = [
+    'suite', 'requirement', 'scope', 'environment', 'cases_file', 'executor',
+    'base_url_from', 'tags', 'report',
+  ];
+  const PROFILE_TYPES = ['constant', 'ramp-up', 'ramp-down', 'spike', 'soak'];
+  const RUNNERS = ['loadtest', 'python'];
+  const RUNTIMES = ['bun', 'python', 'node'];
+  const THRESHOLD_KEYS = [
+    'p50_latency_ms', 'p95_latency_ms', 'p99_latency_ms',
+    'error_rate', 'throughput_rps', 'max_concurrency',
+  ];
+  const TOPICS = ['thresholds', 'coverage', 'runner', 'other'];
+  const FORBIDDEN_KEYS = ['status', 'result', 'verdict', 'executed', 'passed', 'outcome', 'conclusion'];
+
+  /** 递归扫压测结论键 / method 键。 */
+  const scanForbidden = (node, where, hits) => {
+    if (Array.isArray(node)) {
+      node.forEach((item, index) => scanForbidden(item, `${where}[${index}]`, hits));
+      return;
+    }
+    if (node === null || typeof node !== 'object') return;
+    for (const [key, value] of Object.entries(node)) {
+      if (FORBIDDEN_KEYS.includes(key)) hits.push(`${where}.${key}`);
+      if (key === 'method') hits.push(`${where}.method`);
+      scanForbidden(value, `${where}.${key}`, hits);
+    }
+  };
+
+  // --- 负载模型本体 ---
+  const scenarioDir = path.join(loadRoot, 'scenarios');
+  let scenarioFiles = [];
+  try {
+    scenarioFiles = fs.readdirSync(scenarioDir).filter((name) => name.endsWith('.json')).sort();
+  } catch {
+    problems.push(`没有产出负载模型目录: ${path.relative(root, scenarioDir)}`);
+  }
+  const expectedScenarioNames = ['checkout', 'checkout-staging', 'health-check', 'order-query'];
+  const actualScenarioNames = scenarioFiles.map((name) => name.replace(/\.json$/, '')).sort();
+  if (actualScenarioNames.join(',') !== expectedScenarioNames.join(',')) {
+    problems.push(`负载模型文件名集合不对: [${actualScenarioNames.join(', ')}]`);
+  }
+  const bodies = new Map();
+  for (const file of scenarioFiles) {
+    const name = file.replace(/\.json$/, '');
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(name)) problems.push(`场景文件名不合命名约定: ${file}`);
+    let doc = null;
+    try {
+      doc = JSON.parse(fs.readFileSync(path.join(scenarioDir, file), 'utf8'));
+    } catch (err) {
+      problems.push(`场景 ${file} 不是合法 JSON（${err.message}）`);
+      continue;
+    }
+    bodies.set(name, doc);
+    for (const key of Object.keys(doc)) {
+      if (!SCENARIO_ALLOWED.includes(key)) problems.push(`场景 ${file} 出现表外顶层字段 ${key}`);
+    }
+    for (const key of SCENARIO_REQUIRED) {
+      if (!(key in doc)) problems.push(`场景 ${file} 缺必填字段 ${key}`);
+    }
+    if (doc.name !== name) problems.push(`场景 ${file} 的 name(${doc.name}) 与文件名不一致`);
+    if (doc.schema_version !== 1) problems.push(`场景 ${file} 的 schema_version 不是 1`);
+    if (!PROFILE_TYPES.includes(doc.profile && doc.profile.type)) {
+      problems.push(`场景 ${file} 的 profile.type 非法: ${doc.profile && doc.profile.type}`);
+    }
+    if (!RUNNERS.includes(doc.tool && doc.tool.runner)) {
+      problems.push(`场景 ${file} 的 tool.runner 非法: ${doc.tool && doc.tool.runner}`);
+    }
+    if (!RUNTIMES.includes(doc.tool && doc.tool.runtime)) {
+      problems.push(`场景 ${file} 的 tool.runtime 非法: ${doc.tool && doc.tool.runtime}`);
+    }
+    if (doc.thresholds && typeof doc.thresholds === 'object') {
+      for (const key of Object.keys(doc.thresholds)) {
+        if (!THRESHOLD_KEYS.includes(key)) problems.push(`场景 ${file} 的 thresholds 出现表外键 ${key}`);
+      }
+    }
+    // --- 阈值二态：键的有无 ---
+    const hasThresholds = 'thresholds' in doc;
+    const hasSource = 'thresholds_source' in doc;
+    if (doc.thresholds_status === 'provided') {
+      if (!hasThresholds || !hasSource) problems.push(`场景 ${file} 声称有来源却缺阈值键`);
+    } else if (doc.thresholds_status === 'not_provided') {
+      if (hasThresholds || hasSource) problems.push(`场景 ${file} 没有指标来源却写了阈值键`);
+    } else {
+      problems.push(`场景 ${file} 的 thresholds_status 取值非法: ${doc.thresholds_status}`);
+    }
+    // --- 追溯 ---
+    const workload = context.workloads.find((one) => one.id === doc.id);
+    if (!workload) {
+      problems.push(`场景 ${file} 的 id ${doc.id} 不在上下文里`);
+    } else {
+      if (doc.target !== workload.target) problems.push(`场景 ${file} 的 target 与输入不一致`);
+      if (doc.environment !== workload.environment) problems.push(`场景 ${file} 的 environment 与输入不一致`);
+      if (doc.service !== context.service.name) problems.push(`场景 ${file} 的 service 与输入不一致`);
+      if (JSON.stringify(doc.profile) !== JSON.stringify(workload.profile)) {
+        problems.push(`场景 ${file} 的 profile 与输入不一致（含步序）`);
+      }
+      if (JSON.stringify(doc.tool) !== JSON.stringify(workload.tool)) {
+        problems.push(`场景 ${file} 的 tool 与输入不一致`);
+      }
+      const expectedRefs = workload.name === 'health-check'
+        ? []
+        : (workload.name === 'order-query' ? ['TC-002'] : ['TC-001']);
+      const actualRefs = (doc.traceability && doc.traceability.case_refs) || [];
+      if (JSON.stringify(actualRefs) !== JSON.stringify(expectedRefs)) {
+        problems.push(`场景 ${file} 的 case_refs 不对: [${actualRefs.join(', ')}]（应为 [${expectedRefs.join(', ')}]）`);
+      }
+      if (!doc.traceability || doc.traceability.workload_id !== workload.id) {
+        problems.push(`场景 ${file} 的 traceability.workload_id 与输入不一致`);
+      }
+    }
+    // --- 未决问题 ---
+    const questions = Array.isArray(doc.open_questions) ? doc.open_questions : [];
+    const thresholdQuestions = questions.filter((item) => item.topic === 'thresholds');
+    if (doc.thresholds_status === 'not_provided' && thresholdQuestions.length < 1) {
+      problems.push(`场景 ${file} 没有指标来源却没有 topic=thresholds 的未决问题`);
+    }
+    if (doc.thresholds_status === 'provided' && thresholdQuestions.length > 0) {
+      problems.push(`场景 ${file} 有指标来源却留了 topic=thresholds 的未决问题`);
+    }
+    const caseRefs = (doc.traceability && doc.traceability.case_refs) || [];
+    if (caseRefs.length === 0 && !questions.some((item) => item.topic === 'coverage')) {
+      problems.push(`场景 ${file} 没有对应用例却没有 topic=coverage 的未决问题`);
+    }
+    for (const question of questions) {
+      const keys = Object.keys(question).sort();
+      if (keys.join(',') !== 'id,question,topic') {
+        problems.push(`场景 ${file} 的未决问题字段集不对: {${keys.join(', ')}}`);
+      }
+      if (!/^OQ-\d{3}$/.test(String(question.id))) problems.push(`场景 ${file} 的未决问题 id 非法: ${question.id}`);
+      if (!TOPICS.includes(question.topic)) problems.push(`场景 ${file} 的未决问题 topic 非法: ${question.topic}`);
+      if (typeof question.question !== 'string' || question.question.trim() === '') {
+        problems.push(`场景 ${file} 的未决问题 question 为空`);
+      }
+    }
+    const hits = [];
+    scanForbidden(doc, file, hits);
+    if (hits.length > 0) problems.push(`场景 ${file} 出现压测结论键/method: ${hits.join(', ')}`);
+  }
+
+  // --- 套件 ---
+  const suitesDir = path.join(loadRoot, 'suites');
+  let suiteDirs = [];
+  try {
+    suiteDirs = fs.readdirSync(suitesDir).filter((name) => fs.statSync(path.join(suitesDir, name)).isDirectory()).sort();
+  } catch {
+    problems.push('没有产出压测套件目录');
+  }
+  const expectedSuiteNames = ['LOAD-001-checkout', 'LOAD-002-checkout-staging'];
+  if (suiteDirs.join(',') !== expectedSuiteNames.join(',')) {
+    problems.push(`套件目录集合不对: [${suiteDirs.join(', ')}]`);
+  }
+  const referenced = new Map();
+  for (const dirName of suiteDirs) {
+    if (!/^LOAD-\d{3}-[a-z0-9][a-z0-9-]*$/.test(dirName)) {
+      problems.push(`套件目录名不合规: ${dirName}`);
+    }
+    const suiteDir = path.join(suitesDir, dirName);
+    const suiteFile = path.join(suiteDir, 'suite.json');
+    const refFile = path.join(suiteDir, 'scenario.json');
+    if (!fs.existsSync(suiteFile)) {
+      problems.push(`套件 ${dirName} 缺 suite.json`);
+      continue;
+    }
+    if (!fs.existsSync(refFile)) {
+      problems.push(`套件 ${dirName} 缺 scenario.json`);
+      continue;
+    }
+    if (fs.existsSync(path.join(suiteDir, 'cases.json'))) {
+      problems.push(`套件 ${dirName} 里有 cases.json（压测套件不产出 cases.json）`);
+    }
+    let suite = null;
+    let ref = null;
+    try {
+      suite = JSON.parse(fs.readFileSync(suiteFile, 'utf8'));
+      ref = JSON.parse(fs.readFileSync(refFile, 'utf8'));
+    } catch (err) {
+      problems.push(`套件 ${dirName} 的产物不是合法 JSON（${err.message}）`);
+      continue;
+    }
+    for (const key of Object.keys(suite)) {
+      if (!SUITE_ALLOWED.includes(key)) problems.push(`套件 ${dirName} 的 suite.json 出现未声明的字段 ${key}`);
+    }
+    for (const key of ['suite', 'requirement', 'scope', 'environment', 'cases_file', 'executor']) {
+      if (typeof suite[key] !== 'string' || suite[key].trim() === '') {
+        problems.push(`套件 ${dirName} 的 suite.json 缺必填字段 ${key}`);
+      }
+    }
+    if (suite.suite !== dirName) problems.push(`套件 ${dirName} 的 suite 名与目录名不一致`);
+    if (suite.scope !== 'load') problems.push(`套件 ${dirName} 的 scope 不是 load`);
+    if (suite.executor !== 'load') problems.push(`套件 ${dirName} 的 executor 不是 load`);
+    if (suite.cases_file !== 'scenario.json') problems.push(`套件 ${dirName} 的 cases_file 不是 scenario.json`);
+    if (!fs.existsSync(path.join(project, 'test-assets', 'environments', `${suite.environment}.json`))) {
+      problems.push(`套件 ${dirName} 引用的环境不存在: ${suite.environment}`);
+    }
+    const refKeys = Object.keys(ref).sort();
+    if (refKeys.join(',') !== 'scenarios,schema_version,suite') {
+      problems.push(`套件 ${dirName} 的 scenario.json 顶层字段集不对: {${refKeys.join(', ')}}`);
+    }
+    if (ref.schema_version !== 1) problems.push(`套件 ${dirName} 的 scenario.json schema_version 不是 1`);
+    if (ref.suite !== dirName) problems.push(`套件 ${dirName} 的 scenario.json 的 suite 与目录名不一致`);
+    if (!Array.isArray(ref.scenarios) || ref.scenarios.length < 1) {
+      problems.push(`套件 ${dirName} 的 scenario.json 的 scenarios 必须是非空数组`);
+      continue;
+    }
+    for (const entry of ref.scenarios) {
+      const entryKeys = Object.keys(entry).sort();
+      if (entryKeys.join(',') !== 'id,name,path') {
+        problems.push(`套件 ${dirName} 的引用元素字段集不对: {${entryKeys.join(', ')}}`);
+      }
+      const abs = path.resolve(suiteDir, entry.path);
+      if (!fs.existsSync(abs)) {
+        problems.push(`套件 ${dirName} 的引用指向不存在的文件: ${entry.path}`);
+        continue;
+      }
+      if (!abs.startsWith(scenarioDir + path.sep)) {
+        problems.push(`套件 ${dirName} 的引用越出 scenarios/: ${entry.path}`);
+      }
+      const body = JSON.parse(fs.readFileSync(abs, 'utf8'));
+      if (body.id !== entry.id || body.name !== entry.name) {
+        problems.push(`套件 ${dirName} 的引用与本体漂移: ${entry.id}/${entry.name}`);
+      }
+      if (body.environment !== suite.environment) {
+        problems.push(`套件 ${dirName} 内的场景 ${body.id} 的 environment 与套件不一致`);
+      }
+      referenced.set(body.id, (referenced.get(body.id) || 0) + 1);
+    }
+  }
+
+  // --- 双向覆盖完整性 ---
+  for (const workload of context.workloads) {
+    const count = referenced.get(workload.id) || 0;
+    if (count !== 1) problems.push(`容量目标 ${workload.id} 被 ${count} 个套件引用（应为恰好 1 个）`);
+  }
+  for (const body of bodies.values()) {
+    if ((referenced.get(body.id) || 0) < 1) problems.push(`场景模型 ${body.id} 是孤儿场景（没有任何套件引用）`);
+  }
+
+  // --- 压测计划清单 ---
+  const reportFile = path.join(loadRoot, 'report.json');
+  if (!fs.existsSync(reportFile)) {
+    problems.push('没有产出 report.json');
+  } else {
+    const report = JSON.parse(fs.readFileSync(reportFile, 'utf8'));
+    const reportKeys = Object.keys(report).sort();
+    if (reportKeys.join(',') !== 'open_questions,scenarios,schema_version,service,suites') {
+      problems.push(`report.json 的顶层字段集不对: {${reportKeys.join(', ')}}`);
+    }
+    const hits = [];
+    scanForbidden(report, 'report.json', hits);
+    if (hits.length > 0) problems.push(`report.json 出现压测结论键/method: ${hits.join(', ')}`);
+  }
+
+  // --- 不该有执行产物（本 REQ 只做规划） ---
+  for (const name of ['runs', 'evidence']) {
+    if (fs.existsSync(path.join(project, name))) problems.push(`跑完之后出现了执行产物目录: ${name}`);
+  }
+
+  // --- 输入只读 ---
+  if (sha256Of(contextFile) !== contextShaBefore) problems.push('压测上下文被改写了');
+  if (sha256Of(casesFile) !== casesShaBefore) problems.push('功能用例集被改写了');
+
+  // --- 加载层可消费（问上游本人） ---
+  const loadcheckFile = path.join(work, 'load-profile-loadcheck.mjs');
+  fs.writeFileSync(loadcheckFile, `${LOADCHECK_LOAD_SOURCE}\n`, 'utf8');
+  const loaded = runNode(loadcheckFile, [loadRoot, loader], work);
+  if (loaded.code !== 0) {
+    const detail = runOutputDetail(loaded);
+    problems.push(`加载层消费失败（退出码 ${loaded.code}）${detail === '' ? '' : `\n${detail}`}`);
+  } else {
+    let report = null;
+    try {
+      report = JSON.parse(loaded.stdout.trim());
+    } catch {
+      problems.push('加载层检查没有输出可解析的结果');
+    }
+    if (Array.isArray(report)) {
+      for (const item of report) {
+        if (item.scope !== 'load' || item.executor !== 'load') {
+          problems.push(`套件 ${item.suite} 被上游加载层读成了 scope=${item.scope} / executor=${item.executor}`);
+        }
+        if (item.casesFileExists !== true) {
+          problems.push(`套件 ${item.suite} 的 cases_file 解析不到真实存在的文件`);
+        }
+      }
+    }
+  }
+
+  if (problems.length > 0) {
+    return {
+      ok: false,
+      message: `load-profile 的产物不自洽: ${problems.join('; ')}`,
+    };
+  }
+
+  return {
+    ok: true,
+    message:
+      `load-profile 的规划链路（make-load-profile.mjs 读压测上下文 + 功能用例集）→ ` +
+      `负载模型 ${bodies.size} 个（阈值二态与键的有无一致、无来源的 ${context.workloads.filter((one) => !('thresholds' in one)).length} 个已留未决问题）、` +
+      `压测套件 ${suiteDirs.length} 个（按环境分组、引用不漂移、覆盖双向完整）、` +
+      `产物可被上游加载层消费且不含任何压测结论字段`,
+  };
+}
+
 /** 加载层检查脚本的源码（在临时目录里现生成现跑 —— 问上游 loader 本人「能不能被消费」）。 */
 const LOADCHECK_SOURCE = [
   "import fs from 'node:fs';",
@@ -1178,6 +1649,33 @@ const LOADCHECK_SOURCE = [
   '  const { cases } = loader.loadCases(casesFile);',
   '  const selected = loader.selectCases(cases, config.tags);',
   '  out.push({ suite: name, total: cases.length, selected: selected.length });',
+  '}',
+  'process.stdout.write(`${JSON.stringify(out)}\\n`);',
+].join('\n');
+
+/**
+ * 压测套件的加载层检查脚本源码（问上游 loader 本人「load 套件能不能被消费」）。
+ *
+ * ⚠️ **只问加载层**：上游的 `loadCases()` 硬要求 `doc.cases` 是数组 ⇒ 场景文件**不能**做成
+ *    cases 形态；`load` 执行器也**尚未实现** ⇒ 这里**不**要求 dry-run 跑通。
+ */
+const LOADCHECK_LOAD_SOURCE = [
+  "import fs from 'node:fs';",
+  "import path from 'node:path';",
+  "import { pathToFileURL } from 'node:url';",
+  "const [root, loaderPath] = process.argv.slice(2);",
+  'const loader = await import(pathToFileURL(loaderPath).href);',
+  "const suitesDir = path.join(root, 'suites');",
+  'const out = [];',
+  "for (const name of fs.readdirSync(suitesDir).sort()) {",
+  "  const suiteFile = path.join(suitesDir, name, 'suite.json');",
+  '  const { config, casesFile } = loader.loadSuite(suiteFile);',
+  '  out.push({',
+  '    suite: name,',
+  '    scope: config.scope,',
+  '    executor: config.executor,',
+  '    casesFileExists: fs.existsSync(casesFile),',
+  '  });',
   '}',
   'process.stdout.write(`${JSON.stringify(out)}\\n`);',
 ].join('\n');
@@ -1267,6 +1765,7 @@ function runVerifyIn(root, work) {
     scenarioReport(root, work),
     scenarioDefectVerify(root, work),
     scenarioSecurityPlan(root, work),
+    scenarioLoadProfile(root, work),
   ];
   let failed = 0;
   for (const scenario of scenarios) {

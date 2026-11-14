@@ -1,0 +1,17 @@
+{
+  "req": "REQ-009",
+  "branch": "feature/REQ-009",
+  "agent_id": "worker",
+  "session_id": "mvs_744b60ef3d984cffbcd54448ac77bd8c",
+  "owner": "worker",
+  "base_branch": "develop",
+  "created_at": "2026-11-14T11:45:00+08:00",
+  "demand_dir": "BA/demands/REQ-002-suite-foundation/REQ-009-load-profile",
+  "skill": "load-profile",
+  "deliverables": [
+    "skills/load-profile/",
+    "bin/verify-suite.mjs",
+    "README.md",
+    "feature-meta/load-profile/"
+  ]
+}

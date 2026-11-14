@@ -1,0 +1,8 @@
+{
+  "name": "load-profile",
+  "version": "0.1.0",
+  "requires": {
+    "test-case-design": ">=0.1.0",
+    "qa-toolchain": ">=0.1.0"
+  }
+}
