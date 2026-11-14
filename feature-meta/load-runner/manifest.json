@@ -1,0 +1,20 @@
+{
+  "req": "REQ-012",
+  "branch": "feature/REQ-012",
+  "agent_id": "worker",
+  "session_id": "mvs_744b60ef3d984cffbcd54448ac77bd8c",
+  "owner": "worker",
+  "base_branch": "develop",
+  "created_at": "2026-11-14T13:52:00+08:00",
+  "demand_dir": "BA/demands/REQ-002-suite-foundation/REQ-012-load-runner",
+  "skill": "load-profile",
+  "deliverables": [
+    "skills/load-profile/scripts/plan-load-run.mjs",
+    "skills/load-profile/scripts/check-load-run.mjs",
+    "skills/load-profile/scripts/lib/runner.mjs",
+    "skills/load-profile/scripts/lib/plan.mjs",
+    "skills/load-profile/references/runner-adapters.md",
+    "README.md",
+    "feature-meta/load-runner/"
+  ]
+}
