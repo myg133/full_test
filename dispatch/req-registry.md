@@ -123,6 +123,23 @@
 > `code/feature-meta/defect-verify/` 子目录，根 `feature-meta/` 四件套**逐字未变**。
 > 遗留项 **L-01~L-07 登记不修**（见下表），另登记本轮方法论教训（并行子会话会被挤死）。
 > 下游：REQ-008 / REQ-009（安全 / 压测能力域）可复用本 REQ 的缺陷单输入契约与派生三态。
+>
+> **⭐ REQ-007 收口后修复（2026-11-16 · Windows 兼容性）**：**用户实机反馈** —— 在 Windows 的
+> `C:\Users\cxp\.agents\skills` 装好 8 个 skill 后跑 `defect-verify`，**一跑就挂**。根因：
+> `skills/defect-verify/scripts/lib/validate-defects.mjs` 取「轮次目录名」用
+> `cycleDir.split('/').filter(Boolean).pop()` —— **POSIX-only** 切法；Windows 上路径是**反斜杠** ⇒ 切不开
+> ⇒ `pop()` 取到**整条路径** ⇒ 永远 ≠ `cycle_id` ⇒ 轮次契约校验必然抛 `InputError`。
+> **Linux 上恰好正确** ⇒ 此前全部验收（均在 Linux）都没暴露它。
+> **修法**：抽出导出函数 `cycleDirName()`，用 **`path.win32.basename`** 固定按 win32 规则解析
+> （与宿主平台无关；win32 basename 同时认 `/` 与 `\`，故 POSIX 与 Windows 路径都取到末段）。
+> **不用裸 `path.basename`** —— 它是宿主平台相关的（posix 版不认反斜杠）⇒ Linux 上跑自测根本验证不了
+> Windows 行为。**校验逻辑未放宽**（「目录名 == cycle_id」判据原样保留）。
+> **自测**：新增 `skills/defect-verify/scripts/selftest-validate-defects.mjs`（8 项 = P1~P5 五组路径形态
+> + N1a/N1b 负控「目录名 ≠ cycle_id 仍抛错」+ N2 正控）。
+> **需求方独立验收**：`path.win32.basename` 7/7 通过；**裸 `path.basename` 在 Linux 上对 Windows 路径返回
+> 整条路径**（实测证实修法判断正确）；新自测 **8/0**；既有自测 `selftest-defect-cases.mjs` **17/17**；
+> REQ-007 门 **检出 5/5 · 负控未检出 · 29 PASS / 0 FAIL**；组合门全绿。
+> 提交 `f542d70`（develop）。⚠️ **本条不是结案** —— 整包**从未在 Windows 上验证过**，见下方遗留项表。
 
 > **REQ-008 收口（2026-11-14 · 已完成）**：安全能力域 —— 交付第 7 个 skill `skills/security-plan/`
 > （19 文件）+ 组合门加 `security-plan` 场景 + README 两处 + 追溯件四件套（`code/feature-meta/security-plan/`）。
@@ -439,3 +456,4 @@
 | REQ-009 / L-03 | **`report.json` 内层结构（`suites[]`/`scenarios[]` 的元素字段集）由实现方自定** —— 契约只封闭顶层 5 个键 | **未改**（契约授权）：Dev 已声明避开全部压测结论键与 `method` 字段（AC-022/AC-024 的要求）⇒ 无冲突；但**跨 skill 比对时**内层形状无契约约束 → 归属：后续 REQ（若要与 REQ-006/010 的 report 形状统一，须另开 REQ 统一口径） |
 | REQ-009 / 判据覆盖教训 | **变异体套件的覆盖面 ≠ 判据覆盖面**：门内建 27 个正控**全部在产物侧**（篡改产物 ⇒ 期望判据变红），而 `AC-005`/`AC-006`/`AC-007`（输入校验三条）+ `AC-014` 的「加键」形态**恰好零覆盖**（正控 `MUT_TARGETS` 实际覆盖 25 条，与 29 条全集的差集就是这 4 条）⇒ 门**从未验证过**「若实现压根不拒绝非法输入，这四条会不会变红」 | **已补位并固化**：① 新增 **`repair` 反向探针**（原实现返回非 0 后**再跑一次**并换成**合法**输入 ⇒ 从门的视角「实现没拒绝」）⇒ 4 条全部被证明**不是恒真判据**；② **先算判据覆盖差集**（正控目标集合 vs 判据全集）再决定外部探针补哪儿，**不要凭印象**挑；③ 外部探针**工装先自测**（先拿参考实现包当被验对象跑一遍 ⇒ 20/20 + 5/5 全绿才用于正式验收）→ 登记为方法论：**门与探针工装本身都要被当作被验对象**（D65 的延伸） |
 | REQ-009 / 复算器教训 | **复算器自己会错，误报会被当成「实现违约」**：本轮**两处**误报 —— 需求方复算器初版把 `{id}` 占位符段删成空串、留下尾斜杠（误判 WL-002）；T1 verifier 初版用**有序相等**比文件名集合、把产物文件清单期望写成 7（实际 9）（误判 2 项） | **已固化**：① **先自测复算器**（归一化器先用**契约给的示例**自测：`GET /api/v1/orders/{id}` → `GET /api/v1/orders`，占位符段连同**前置斜杠**一起删）再用于判产物；② 误报一律**如实归因于复算器自身**并留痕，**不记成实现缺陷**；③ verifier 报告须显式列出「我自己的误报」段 → 归属：后续 REQ（任何独立复算都必须带复算器自测步骤） |
+| ⭐ REQ-007 / Windows 兼容 | ⚠️ **【用户实机反馈 · 2026-11-16】整套 skill 套件在 Windows 上不可用** —— 用户在 `C:\Users\cxp\.agents\skills` 装好 8 个 skill 后跑 `defect-verify`，**一跑就挂**（组合门 7/8，`defect-verify` 那个场景红）。根因：`skills/defect-verify/scripts/lib/validate-defects.mjs` 取「轮次目录名」时用 `cycleDir.split('/')` —— 那是**文件系统路径**，Windows 上是**反斜杠** ⇒ 切不开 ⇒ 取出来是**整条路径** ⇒ 永远 ≠ `cycle_id` ⇒ 必然抛 `InputError`。**Linux 上是对的**（正斜杠），故此前全部验收（均在 Linux）都没暴露 | **已修一处（不结案）**：抽出导出函数 `cycleDirName()`，改用 **`path.win32.basename`** 固定按 win32 规则解析（与宿主平台无关；win32 basename 同时认 `/` 与 `\` ⇒ POSIX 与 Windows 路径都取到末段）；**不用裸 `path.basename`**（宿主平台相关，posix 版不认反斜杠 ⇒ Linux 上验证不了 Windows 行为）；**校验逻辑未放宽**（「目录名 == cycle_id」判据原样保留）。新增单元自测 `skills/defect-verify/scripts/selftest-validate-defects.mjs`（8 项 = P1~P5 五组路径形态 + N1a/N1b 负控「目录名 ≠ cycle_id 仍抛错」+ N2 正控）。需求方独立验收：`path.win32.basename` 7/7 通过、**裸 `path.basename` 在 Linux 上对 Windows 路径返回整条路径**（实测证实修法判断正确）、新自测 8/0、既有自测 17/17、REQ-007 门 **检出 5/5 · 负控未检出 · 29 PASS / 0 FAIL**、组合门全绿。提交 `f542d70`（develop）。⚠️ **但根因不止这一处**：本套件**从未在 Windows 上验证过**（全部验收在 Linux）⇒ 需求方对全部 8 个 skill 做了**静态**平台排查，结论：① `skills/` 内**无 shell 脚本**、**无 POSIX 外部命令**（外部调用全是 `spawnSync(process.execPath,…)`）⇒ 无问题；② 路径 API 用法以 `path.join`/`path.resolve` 为主 ⇒ 跨平台；③ 另两处 `split('/')` **不是 bug**（`load-profile/scripts/lib/reconcile.mjs` 切的是 **HTTP URL 路径**，恒为正斜杠；`test-execute/scripts/run-suite.mjs` 的相对路径**约定为正斜杠**且**显式拒绝反斜杠** ⇒ 路径穿越检查在 Windows 上无洞）；④ 产物里记录的相对路径**已做归一化**（`load-exec.mjs` 的 `path.relative(...).split(path.sep).join('/')`）；⑤ `bin/qa` 无扩展名 ⇒ npm 在 Windows 上生成 `.cmd` shim ⇒ 可用。**但静态排查不能替代实跑** | 后续 REQ（把 **Windows 纳入验收环境** —— 至少对 8 个 skill 各跑一次 Windows 冒烟；⚠️ **本条不得只按「已修一处」结案** —— 整包至今无任何 Windows 实跑验证） |
