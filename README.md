@@ -1,9 +1,52 @@
 # Full Test
 
-> （待补充）
+> 本仓库是 **`test-agent-skills` npm 包**（测试 Agent Skill 套件）的源码与开发过程记录。
+> **交付包在 `develop` 分支**；`demand` 分支是需求契约与验收门（**过程文件**，不进 npm 包）。
 
-本仓库采用 **Agent Workspace 工作流**（参见 `skills/agent-workspace/`），
+本仓库采用 **Agent Workspace 工作流**（工作流规范由独立的 `agent-workspace` skill 提供，
+安装后在 `~/.agents/skills/agent-workspace/` —— **它不在本仓内**），
 使用 `workspace` 分支作为根容器，**所有 worktree 在仓库根平铺**（无中间目录层）。
+
+## 仓库内容（按分支）
+
+| 分支 | 内容 | 说明 |
+|---|---|---|
+| `develop` | `skills/` `bin/` `README.md` `LICENSE` `package.json` `feature-meta/` | **交付面**：npm 包 `test-agent-skills` 的源码（8 个 skill）+ 追溯件。`npm pack` 129 个文件条目 |
+| `demand` | `demands/` `dispatch/` `decisions/` `plan/` `sprint/` `backlog/` | **过程文件**：需求契约（`demand.md` / `acceptance.md` / `decisions.md`）、验收门（`verify-acceptance.sh`）、登记表、勘察记录。**不进 npm 包** |
+| `deploy` | `apps/` `argocd/` `environments/` `releases/` `scripts/` | 部署配置骨架（当前为空壳） |
+| `workspace` | 仅 `README.md` + `.gitignore` | 根容器，白名单防御 |
+| `main` | `README.md` | 占位分支 |
+
+## ⚠️ 公开仓库说明（2026-11-16）
+
+本仓要推到**公开** GitHub，故做过一次**字面量与绝对路径清理**：
+
+- **清理范围**：内部运行时名 + 本机绝对路径（**两类**）。**无任何凭据类内容泄露** ——
+  私钥 / 证书 / 云厂商与平台 token / `.env` / `.npmrc` / `id_rsa` 等敏感文件**全部 0 命中**。
+- **交付面零改动**：`skills/` 下 **123 个文件逐字未变**（sha256 全等）⇒ npm 包内容与已验收版本完全一致。
+- **历史被改写**：清理用 `git filter-repo` 重写了 278 个提交 ⇒ **所有 commit hash 都变了**。
+  这是**有意的规范化**，不是「历史原貌」；详见
+  `demand` 分支的 `BA/demands/REQ-002-suite-foundation/PUBLIC-REPO-CLEANUP.md`（含替换规则表、
+  **验收门 sha 三段式对照表**、诚实声明）。
+- **验收门是语义敏感的**：门里的禁用词表与变异体载荷改用**构造式**表达
+  （运行时值与原字面量逐字相同 ⇒ **判定语义不变**，已实证）。
+
+## ⚠️ 已知：REQ-012 验收门对当前 `develop` 判红（**不是交付缺陷**）
+
+`demand` 分支的 REQ-012 验收门对当前 `develop` 判 **27 PASS / 2 FAIL**（`AC-002` + `AC-027` ⑤⑥）。
+
+**根因是跨 REQ 的契约冲突，与公开仓库清理无关**（对**清理前**的 `develop` 跑**原始**门，同样 27/2）：
+
+1. `AC-002`：REQ-012 契约的基线表钉死「REQ-009 既有 14 文件逐字未改」，而 **REQ-013 契约明确授权**
+   「`SKILL.md` 追加 B 阶段一节」⇒ 该文件 sha 变化 ⇒ 判红（14 个基线文件里只变这 1 个）。
+2. `AC-027` ⑤⑥：REQ-012 门要求 `feature-meta/load-runner/` 的判据编号集合 **== REQ-012 的 29 条**、
+   「判据条数」取值唯一；而 REQ-013 的记账（41 条判据 / D185~D210）在**同一目录** ⇒ 冲突。
+   而 REQ-013 门 `AC-037` 又**要求**该目录含 REQ-013 条目 ⇒ **两门不可同时绿**。
+
+⚠️ 之所以一直没被发现：当时的「上游八门回归」清单里**不含 REQ-012 门** ⇒ 合并后从未复跑过。
+
+**状态**：已如实登记在 `demand` 分支 `dispatch/req-registry.md` 的遗留项表，
+**含三条候选修法待需求方拍板**（修复需改契约 + 改门 + 重跑门，属独立 REQ）。
 
 ## 目录 ↔ 分支对应表
 
@@ -30,10 +73,13 @@
 ### 1. 克隆仓库
 
 ```bash
-git clone <url> my-project
+git clone git@github.com:myg133/full_test.git my-project
 cd my-project
 # 默认在 workspace/ 主 worktree，看到这份 README
 ```
+
+> clone 下来只有 `workspace` 分支的 README 与 .gitignore ⇒ 其它分支的内容要另拉：
+> `git fetch origin && git checkout develop`（或按下面的「快速上手」建 worktree）。
 
 ### 2. 注册主 worktree（如已部署过可跳过）
 
@@ -94,17 +140,26 @@ PR 合并后 Dev Agent 自动清理 worktree（详见 `skills/agent-workspace/re
 
 ## 详细文档
 
-- 工作流规范：`skills/agent-workspace/SKILL.md`
-- 全局约定：`skills/agent-workspace/references/global/`
-- 角色工作流：`skills/agent-workspace/references/roles/`
-- 初始化：`skills/agent-workspace/references/init/`
-- 生命周期与发布：`skills/agent-workspace/references/lifecycle/`
-- 模板：`skills/agent-workspace/assets/templates/`
-- 自检工具：`python skills/agent-workspace/scripts/aw.py verify`
-- 各角色 Agent 定义：`com.anspire-open.agents/`
-- 各角色 README：见对应 worktree 根目录（如 `BA/README.md`）
+> ⚠️ 以下文档属于 **`agent-workspace` skill**（**独立于本仓**，安装后位于 `~/.agents/skills/agent-workspace/`），
+> **不在本仓任何分支里** ⇒ clone 本仓后这些路径**不存在**，请先安装该 skill。
 
-> 以上路径均相对于本插件根目录（`plugin.json` 所在目录）。
+- 工作流规范：`~/.agents/skills/agent-workspace/SKILL.md`
+- 全局约定：`~/.agents/skills/agent-workspace/references/global/`
+- 角色工作流：`~/.agents/skills/agent-workspace/references/roles/`
+- 初始化：`~/.agents/skills/agent-workspace/references/init/`
+- 生命周期与发布：`~/.agents/skills/agent-workspace/references/lifecycle/`
+- 模板：`~/.agents/skills/agent-workspace/assets/templates/`
+- 自检工具：`python ~/.agents/skills/agent-workspace/scripts/aw.py verify`
+
+### 本仓内的文档
+
+| 位置 | 内容 |
+|---|---|
+| `BA/demands/REQ-002-suite-foundation/architecture-design.md` | 套件整体架构（能力域 §8 映射） |
+| `BA/demands/REQ-002-suite-foundation/PUBLIC-REPO-CLEANUP.md` | **公开仓库字面量清理说明**（替换规则 / 门 sha 对照表 / 诚实声明） |
+| `BA/dispatch/req-registry.md` | 需求登记表 + **遗留项表** |
+| `BA/demands/<REQ>/` | 各需求的 `demand.md` / `acceptance.md`（判据）/ `decisions.md` / `status.md` / `verify-acceptance.sh` |
+| `code/feature-meta/` | 各能力的追溯件四件套（`status.md` / `traceability.md` / `verification-report.md` / `manifest.json`） |
 
 ## 平台运行目录
 
