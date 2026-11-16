@@ -11,7 +11,7 @@
 
 | 分支 | 内容 | 说明 |
 |---|---|---|
-| `develop` | `skills/` `bin/` `README.md` `LICENSE` `package.json` `feature-meta/` | **交付面**：npm 包 `test-agent-skills` 的源码（8 个 skill）+ 追溯件。`npm pack` 129 个文件条目 |
+| `develop` | `skills/` `bin/` `README.md` `LICENSE` `package.json` `feature-meta/` | **交付面**：npm 包 `test-agent-skills` 的源码（8 个 skill）+ 追溯件。`npm pack` 130 个文件条目 |
 | `demand` | `demands/` `dispatch/` `decisions/` `plan/` `sprint/` `backlog/` | **过程文件**：需求契约（`demand.md` / `acceptance.md` / `decisions.md`）、验收门（`verify-acceptance.sh`）、登记表、勘察记录。**不进 npm 包** |
 | `deploy` | `apps/` `argocd/` `environments/` `releases/` `scripts/` | 部署配置骨架（当前为空壳） |
 | `workspace` | 仅 `README.md` + `.gitignore` | 根容器，白名单防御 |
@@ -23,13 +23,33 @@
 
 - **清理范围**：内部运行时名 + 本机绝对路径（**两类**）。**无任何凭据类内容泄露** ——
   私钥 / 证书 / 云厂商与平台 token / `.env` / `.npmrc` / `id_rsa` 等敏感文件**全部 0 命中**。
-- **交付面零改动**：`skills/` 下 **123 个文件逐字未变**（sha256 全等）⇒ npm 包内容与已验收版本完全一致。
+- **清理对交付面零改动**：清理**当时** `skills/` 下 **123 个文件逐字未变**（sha256 全等）⇒ 清理本身没有动交付物。
+  （此后 REQ-007 的 Windows 兼容性修复新增 1 个自测文件、修改 2 个文件 ⇒ **当前 `skills/` 为 124 个文件**。）
 - **历史被改写**：清理用 `git filter-repo` 重写了 278 个提交 ⇒ **所有 commit hash 都变了**。
   这是**有意的规范化**，不是「历史原貌」；详见
   `demand` 分支的 `BA/demands/REQ-002-suite-foundation/PUBLIC-REPO-CLEANUP.md`（含替换规则表、
   **验收门 sha 三段式对照表**、诚实声明）。
 - **验收门是语义敏感的**：门里的禁用词表与变异体载荷改用**构造式**表达
   （运行时值与原字面量逐字相同 ⇒ **判定语义不变**，已实证）。
+
+## ⚠️ 平台兼容性：Windows（**已修一处，整包仍未在 Windows 上实跑验证**）
+
+**已发现的缺陷（用户实机反馈）**：在 Windows 装好 8 个 skill 后跑 `defect-verify` **一跑就挂**。
+根因：`skills/defect-verify/scripts/lib/validate-defects.mjs` 取「轮次目录名」用 `split('/')` ——
+**POSIX-only** 切法，Windows 上是**反斜杠** ⇒ 切不开 ⇒ 取到整条路径 ⇒ 永远 ≠ `cycle_id` ⇒ 必抛 `InputError`。
+**Linux 上恰好正确**，故此前全部验收（均在 Linux）都没暴露它。
+
+**已修**（`develop`：`f542d70` + `a2f80de`）：改用 **`path.win32.basename`** 固定按 win32 规则取名
+（与宿主平台无关；POSIX 与 Windows 路径都取到末段），**校验逻辑未放宽**；
+并新增跨平台单元自测 `selftest-validate-defects.mjs`（含负控：目录名 ≠ `cycle_id` 仍须抛错）。
+
+⚠️ **但本套件从未在 Windows 上验证过** —— 全部验收都在 Linux。需求方对 8 个 skill 做过
+**静态**平台排查，结论是**未发现第二处真 bug**（无 shell 脚本、无 POSIX 外部命令；另两处
+`split('/')` 切的是 HTTP URL 路径与约定正斜杠的相对路径，都不是 bug），**但静态排查不能替代实跑**。
+
+⇒ **Windows 用户请重装后至少对 8 个 skill 各跑一次冒烟**；发现的问题按常规反馈即可。
+该条已按**系统性问题**登记在 `demand` 分支 `dispatch/req-registry.md` 的遗留项表
+（「⭐ REQ-007 / Windows 兼容」），**不按「已修一处」结案**。
 
 ## ⚠️ 已知：REQ-012 验收门对当前 `develop` 判红（**不是交付缺陷**）
 
@@ -47,6 +67,8 @@
 
 **状态**：已如实登记在 `demand` 分支 `dispatch/req-registry.md` 的遗留项表，
 **含三条候选修法待需求方拍板**（修复需改契约 + 改门 + 重跑门，属独立 REQ）。
+（2026-11-16 在**含 Windows 修复**的 `develop` 上复跑，仍是 27 PASS / 2 FAIL，同样那两条 ⇒
+**与本次修复无关**。）
 
 ## 目录 ↔ 分支对应表
 
