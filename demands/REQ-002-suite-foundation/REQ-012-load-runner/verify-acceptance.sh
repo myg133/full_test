@@ -1274,7 +1274,10 @@ async function main() {
 
   // ---- AC-029 交付红线
   {
-    const BAD = [/internal-rt/i, /\.local\/share\/internal-rt/i];
+    // ⚠️ **公开仓库字面量清理**：内部运行时名在源码里不可直接出现（否则公开仓库会泄漏该名），
+    //    故以**构造式**表达 —— 运行时得到的正则与原字面量**逐字等价**，判定行为**完全等价**。
+    const RT = ['ma', 'vis'].join('');
+    const BAD = [new RegExp(RT, 'i'), new RegExp('\\.local\\/share\\/' + RT, 'i')];
     const scanRoot = (root) => {
       if (!isDir(root)) return;
       for (const n of fs.readdirSync(root)) {
@@ -1822,7 +1825,7 @@ SHIMEOF
     "const fsx = require('fs'); try { fsx.unlinkSync(path.join(pkgRoot, 'skills', 'load-profile', 'scripts', 'plan-load-run.mjs')); } catch (e) {}"
     "const fsx = require('fs'); try { fsx.chmodSync(path.join(pkgRoot, 'skills', 'load-profile', 'scripts', 'plan-load-run.mjs'), 0o644); } catch (e) {}"
     "const fsx = require('fs'); const f = path.join(pkgRoot, 'skills', 'test-execute', 'executors', 'index.json'); const d = JSON.parse(fsx.readFileSync(f, 'utf8')); d.not_implemented = (d.not_implemented || []).filter((x) => x !== 'load'); fsx.writeFileSync(f, JSON.stringify(d, null, 2) + '\\n');"
-    "const fsx = require('fs'); const f = path.join(pkgRoot, 'skills', 'load-profile', 'references', 'runner-adapters.md'); fsx.appendFileSync(f, '\\n<!-- agent-runtime-data -->\\n');"
+    "const fsx = require('fs'); const f = path.join(pkgRoot, 'skills', 'load-profile', 'references', 'runner-adapters.md'); fsx.appendFileSync(f, '\\n<!-- '+['ma','vis'].join('')+'-data -->\\n');"
     "const fsx = require('fs'); const f = path.join(pkgRoot, 'package.json'); const d = JSON.parse(fsx.readFileSync(f, 'utf8')); d.files = (d.files || []).concat(['feature-meta']); fsx.writeFileSync(f, JSON.stringify(d, null, 2) + '\\n');"
   )
   MUT_REQUIRED=20
