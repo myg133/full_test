@@ -26,16 +26,16 @@
 
 | # | 规则 | 替换为 |
 |---|---|---|
-| 1 | `/home/<用户>/.local/share/internal-rt-data` | `$HOME/.local/share/agent-runtime-data` |
-| 2 | `/home/<用户>/.minimax/` | `<HOST_RUNTIME_DIR>/` |
-| 3 | `~/.local/share/internal-rt-data` | `~/.local/share/agent-runtime-data` |
-| 4 | `internal-rt-trash`（宿主的可恢复删除运行时） | `RECOVERABLE_DELETE_RUNTIME` |
-| 5 | `internal-rt-data` | `agent-runtime-data` |
-| 6 | `/home/<用户>/Projects/full_test` | `<REPO_ROOT>` |
-| 7 | `/home/<用户>/` | `~/` |
-| 8 | `INTERNAL_RT_SKILLS_DIR`（旧版环境变量名） | `INTERNAL_RT_SKILLS_DIR` |
-| 9 | `internal-rt` | `internal-rt` |
-| 10 | 路径名里的 `internal-rt`（含 `bin/internal-rt-test-agent-skills.mjs`） | `internal-rt` |
+| 1 | `<本机用户目录>/.local/share/<运行时数据目录名>` | `$HOME/.local/share/agent-runtime-data` |
+| 2 | `<本机用户目录>/.<宿主运行时目录>/` | `<HOST_RUNTIME_DIR>/` |
+| 3 | `~/.local/share/<运行时数据目录名>` | `~/.local/share/agent-runtime-data` |
+| 4 | `<宿主可恢复删除运行时的命令名>` | `RECOVERABLE_DELETE_RUNTIME` |
+| 5 | `<运行时数据目录名>` | `agent-runtime-data` |
+| 6 | `<本机用户目录>/<本仓目录名>` | `<REPO_ROOT>` |
+| 7 | `<本机用户目录>/` | `~/` |
+| 8 | `<旧版环境变量名>`（大写形式） | `INTERNAL_RT_SKILLS_DIR` |
+| 9 | `<内部运行时名>` | `internal-rt` |
+| 10 | 路径名里的 `<内部运行时名>`（含 `<内部运行时名>-test-agent-skills.mjs`） | `internal-rt` |
 
 ### 2.2 ⚠️ 验收门是**语义敏感**的 ⇒ 用「构造式」而非字符串替换
 
@@ -103,8 +103,8 @@ const BAD = [new RegExp(RT, 'i'), new RegExp('\\.local\\/share\\/' + RT, 'i')];
 
 - 本次清理**改写了仓库的历史提交内容**（`git filter-repo` 重写 278 个提交）⇒ **所有 commit hash 都变了**。
   原始仓库（清理前）的历史**保持不变**（备份见 §6）。
-- 被改写的是**历史文件内容**与**历史文件名**（旧包名 `internal-rt-test-agent-skills` → `internal-rt-test-agent-skills`、
-  旧环境变量名 `INTERNAL_RT_SKILLS_DIR` → `INTERNAL_RT_SKILLS_DIR`）。
+- 被改写的是**历史文件内容**与**历史文件名**（旧包名 `<内部运行时名>-test-agent-skills` → `internal-rt-test-agent-skills`、
+  旧环境变量名 `<旧版环境变量名>` → `INTERNAL_RT_SKILLS_DIR`）。
   ⚠️ 这意味着**公开仓库里的历史与原始历史在命名上不完全一致** —— 这是一次**有意的、已登记的规范化**，
   不是「历史原貌」。
 - 交付面（`skills/` + `bin/` + `README.md` + `LICENSE`）**逐字未变**（123 个文件 sha256 全等）⇒
@@ -114,7 +114,7 @@ const BAD = [new RegExp(RT, 'i'), new RegExp('\\.local\\/share\\/' + RT, 'i')];
 
 | 备份 | 路径 |
 |---|---|
-| 全部分支 git bundle | `~/.local/share/internal-rt-data/tmp/req013/backup-pre-push/full_test-all-refs.bundle` |
-| 整仓目录拷贝 | `~/.local/share/internal-rt-data/tmp/req013/backup-pre-push/full_test-dir-copy/` |
+| 全部分支 git bundle | `~/.local/share/<运行时数据目录>/tmp/req013/backup-pre-push/full_test-all-refs.bundle` |
+| 整仓目录拷贝 | `~/.local/share/<运行时数据目录>/tmp/req013/backup-pre-push/full_test-dir-copy/` |
 
 ⚠️ 这两处在**临时目录**（会被系统清理）⇒ 需要长期保留请另行复制。
