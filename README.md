@@ -74,7 +74,6 @@
 
 ```bash
 git clone https://github.com/myg133/full_test.git my-project
-# （或 SSH：git clone git@github.com:myg133/full_test.git my-project）
 cd my-project
 # 默认在 workspace/ 主 worktree，看到这份 README
 ```
