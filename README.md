@@ -116,7 +116,7 @@ git push -u origin feature/REQ-xxx
 # 在 GitHub/GitLab 创建 PR → develop
 ```
 
-PR 合并后 Dev Agent 自动清理 worktree（详见 `skills/agent-workspace/references/lifecycle/cleanup.md`）。
+PR 合并后 Dev Agent 自动清理 worktree（详见 `~/.agents/skills/agent-workspace/references/lifecycle/cleanup.md`）。
 
 ## 各角色 Agent 入口
 
@@ -126,7 +126,7 @@ PR 合并后 Dev Agent 自动清理 worktree（详见 `skills/agent-workspace/re
 - **Deploy Agent**（子 agent）→ 进入 `Deploy/` 目录
 - **Explore Agent**（子 agent，只读）→ 任意目录
 
-新 agent 启动时先读 `skills/agent-workspace/SKILL.md`（索引），再读 `references/roles/<角色>.md`。
+新 agent 启动时先读 `~/.agents/skills/agent-workspace/SKILL.md`（索引），再读 `~/.agents/skills/agent-workspace/references/roles/<角色>.md`。
 
 ## 硬规则
 
