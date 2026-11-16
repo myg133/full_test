@@ -37,6 +37,9 @@ node scripts/check-defect-cases.mjs \
 
 # 3) 派生规则的单元自测（含共享场景 —— 验收夹具造不出来的那条分支）
 node scripts/selftest-defect-cases.mjs
+
+# 4) 轮次目录名取法的跨平台单元自测（POSIX 与 Windows 路径都取到末段；带负控：目录名 ≠ cycle_id 仍须抛错，校验不许放宽）
+node scripts/selftest-validate-defects.mjs
 ```
 
 `--out-dir` 可选（默认 = `--cycle-dir`）。退出码：`0` 成功 / `1` 输入非法或违反写入纪律 / `2` 用法错误。
