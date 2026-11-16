@@ -1,5 +1,9 @@
 # REQ-010 状态 —— 报告能力域 `test-report` skill
 
+> ⚠️ **公开仓库字面量清理（2026-11-16）**：本文件中提到的「内部运行时字样」在公开仓库里**不写出字面量**（以构造式表达，运行时值逐字相同 ⇒ 判定语义不变）；本 REQ 验收门的 sha 也因此变化。
+> 完整清理口径、门 sha 三段式对照表、诚实声明 ⇒ **`BA/demands/REQ-002-suite-foundation/PUBLIC-REPO-CLEANUP.md`**。
+
+
 - **状态**: **已完成**（2026-11-13）
 - **认领**: 已释放（`ba-local-ba`，归档于 `.aw/archive/`）
 - **分支**: `feature/REQ-010` 已合并进 `develop`（merge commit `fb669b1`）并**回收**
@@ -47,7 +51,7 @@
 | 上游 REQ-006 主验收（42 条判据） | **42 PASS / 0 FAIL** |
 | 上游 REQ-002A 回归 | **19 PASS / 0 FAIL** |
 | 上游 REQ-002B 回归 | **41 PASS / 0 FAIL** |
-| 交付纪律实查 | `internal-rt` **0 处**；`npm pack --dry-run` **73 条目 / 5 skill 齐全 / `feature-meta` 0 条**；既有 4 个 skill 与 `develop` **逐文件无差异**；根 `feature-meta/` **逐字未变** |
+| 交付纪律实查 | 「内部运行时字样」 **0 处**；`npm pack --dry-run` **73 条目 / 5 skill 齐全 / `feature-meta` 0 条**；既有 4 个 skill 与 `develop` **逐文件无差异**；根 `feature-meta/` **逐字未变** |
 ## 下一步
 
 1. ~~Dev 收掉 AC-016~~ **已完成**（`9a62ef4`）：md 在**待复核语境**逐条点名 `needs_review` 用例 id

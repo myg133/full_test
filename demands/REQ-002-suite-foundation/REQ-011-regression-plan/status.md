@@ -1,5 +1,9 @@
 # REQ-011 状态 —— R2 回归轮 `regression-plan` skill + 套件层组合门
 
+> ⚠️ **公开仓库字面量清理（2026-11-16）**：本文件中提到的「内部运行时字样」在公开仓库里**不写出字面量**（以构造式表达，运行时值逐字相同 ⇒ 判定语义不变）；本 REQ 验收门的 sha 也因此变化。
+> 完整清理口径、门 sha 三段式对照表、诚实声明 ⇒ **`BA/demands/REQ-002-suite-foundation/PUBLIC-REPO-CLEANUP.md`**。
+
+
 - **状态**: **已完成**（2026-11-13）
 - **认领**: 已释放（`dev-0026`，归档于 `.aw/archive/REQ-011-20260713061116.json`）
 - **分支**: `feature/REQ-011` 已合并进 `develop`（merge commit `efd9b7d`）并**回收**
@@ -30,7 +34,7 @@
 | 上游 REQ-002A 回归 | **19 PASS / 0 FAIL** |
 | 上游 REQ-002B 回归 | **41 PASS / 0 FAIL** |
 | 独立回归第四轮（全量 81 探针） | 红 69 / 绿 3（`f25a`、`f25b` 预期绿 + `p27d` 契约变更豁免）/ INVALID 8（负控全 INVALID，零假红）/ **无任何曾判红者转绿** |
-| npm 包（`npm pack --dry-run`） | 61 条目；`regression-plan` 11 文件；4 份 `skill-meta.json`；`feature-meta` **0** 条目；**"internal-rt" 字样 0** |
+| npm 包（`npm pack --dry-run`） | 61 条目；`regression-plan` 11 文件；4 份 `skill-meta.json`；`feature-meta` **0** 条目；**「内部运行时字样」 字样 0** |
 | 已装副本 | `~/.agents/skills/regression-plan/` 11 文件 + 三个既有 skill 各补 `skill-meta.json` |
 
 ## 遗留项登记（D45~D47）

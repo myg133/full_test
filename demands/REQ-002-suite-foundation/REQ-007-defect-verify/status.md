@@ -1,5 +1,9 @@
 # REQ-007 状态 —— 缺陷复现能力域 `defect-verify` skill（R3 缺陷复现用例生成）
 
+> ⚠️ **公开仓库字面量清理（2026-11-16）**：本文件中提到的「内部运行时字样」在公开仓库里**不写出字面量**（以构造式表达，运行时值逐字相同 ⇒ 判定语义不变）；本 REQ 验收门的 sha 也因此变化。
+> 完整清理口径、门 sha 三段式对照表、诚实声明 ⇒ **`BA/demands/REQ-002-suite-foundation/PUBLIC-REPO-CLEANUP.md`**。
+
+
 - **状态**: **实现已交付 + 独立验收完成**（待收口）
 - **需求编号**: REQ-007（原编号 `REQ-002.7`）
 - **被验对象**: `feature-REQ-007` worktree（分支 `feature/REQ-007`，基于 develop `fb669b1`）
@@ -82,7 +86,7 @@
 | 假阳性负控（5 个） | 无害改动（加说明 / 加注释 / 改 md 措辞 / json 加字段 / 排版注释） | **5/5 仍全绿**，0 假红 |
 | 优雅降级 | 把 `skills/defect-verify/` 移开后再跑门 | **1 PASS / 12 FAIL / 16 不可判定**，rc=1，**0 崩溃** |
 | 上游门不回归 | REQ-010 / REQ-011 / REQ-006 / REQ-002A / REQ-002B | **全绿**：29/0、28/0、42/0、19/0、41/0，全部 rc=0、0 条 FAIL |
-| 交付物形状 | 结构 / 可执行位 / 零三方依赖 / README 两处 / 追溯件四件套 / 根 manifest 逐字未变 / 既有 5 skill 未被改 / `package.json` files+version / 无 "internal-rt" 字样 | **全项符合** |
+| 交付物形状 | 结构 / 可执行位 / 零三方依赖 / README 两处 / 追溯件四件套 / 根 manifest 逐字未变 / 既有 5 skill 未被改 / `package.json` files+version / 无 「内部运行时字样」 字样 | **全项符合** |
 | 组合门 | `node bin/test-agent-skills.mjs verify` | **6 个 skill 装齐、依赖图通过、4 个场景全过**（含 `scenarioDefectVerify` 实跑 `make-defect-cases.mjs` 并从产物反推断言） |
 | **合并物复跑** | 合并进 develop（`f541066`）后，对 `code/` 重跑主门 + 上游 5 门 | **六条全绿**：主门 **29/0**、REQ-010 **29/0**、REQ-011 **28/0**、REQ-006 **42/0**、002A **19/0**、002B **41/0**，全部 rc=0 ⇒「合并物 == 被独立验收物」 |
 

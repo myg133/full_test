@@ -1,5 +1,9 @@
 # REQ-006 状态 —— 安全 / 压力 / 可观测性覆盖维度 + M2.x 安全测试方法段
 
+> ⚠️ **公开仓库字面量清理（2026-11-16）**：本文件中提到的「内部运行时字样」在公开仓库里**不写出字面量**（以构造式表达，运行时值逐字相同 ⇒ 判定语义不变）；本 REQ 验收门的 sha 也因此变化。
+> 完整清理口径、门 sha 三段式对照表、诚实声明 ⇒ **`BA/demands/REQ-002-suite-foundation/PUBLIC-REPO-CLEANUP.md`**。
+
+
 - **状态**: 已完成
 - **认领**: dev-0025（会话 `dev-006-20261112164500`，worktree `feature-REQ-006`，已回收）
 - **分支**: `feature/REQ-006`（已合并 develop → `9d95ad3`，已删除）
@@ -54,7 +58,7 @@ bash BA/demands/REQ-002-suite-foundation/REQ-006-security-stress-observability/v
 
 - `code/skills/test-case-design/`：11 维度（8 + `security`/`stress`/`observability`）、9 方法（M1.1~M1.6 + M2.1~M2.3）、14 文件
 - `code/feature-meta/`：REQ-006 版追溯四件套（req=REQ-006、42 条判据、D1~D31、11 维度、9 种方法、钉版 sha `85b93b5e`）
-- 已装副本 `~/.agents/skills/test-case-design/`：已重装并核对为 REQ-006 版（14 文件 / 11 维度 / 9 方法，无 "internal-rt" 字样）
+- 已装副本 `~/.agents/skills/test-case-design/`：已重装并核对为 REQ-006 版（14 文件 / 11 维度 / 9 方法，无 「内部运行时字样」 字样）
 
 ## 遗留项（登记不修）
 

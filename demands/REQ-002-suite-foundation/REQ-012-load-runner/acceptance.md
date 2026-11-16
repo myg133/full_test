@@ -652,13 +652,13 @@ node skills/load-profile/scripts/plan-load-run.mjs \
 - **前置条件**: 被验包目录
 - **测试步骤**:
   ① 扫 `skills/load-profile/**` 与 `feature-meta/**` 的**全部文件内容**，查内部运行时字样
-  （`internal-rt` / `agent-runtime-data` / `.local/share/internal-rt` / 内部临时目录路径形态）；
+  （**内部运行时名** / **运行时数据目录名** / `.local/share/` 下的运行时目录形态 / 内部临时目录路径形态）；
   ② **实跑** `npm pack --dry-run --json`（在本包目录内），取**真实**打包清单，查有没有 `feature-meta/` 开头的条目
 - **预期结果**:
   ①**0 处**命中内部运行时字样（**任何一处**命中即判红并点名文件与行号）；
   ②打包清单里**没有**任何 `feature-meta/` 开头的文件
 - **判据形式**: 查绝对事实（文件内容扫描 + **真实** `npm pack` 清单）；
-  探针：往 `skills/load-profile/SKILL.md` 里写一行含 `internal-rt` 的注释 ⇒ ①判红；
+  探针：往 `skills/load-profile/SKILL.md` 里写一行**含内部运行时字样**的注释 ⇒ ①判红；
   往 `package.json` 的 `files` 里加 `"feature-meta"` ⇒ ②判红
 - **说明**: 交付物里**不得**出现内部运行时字样（那是要被清掉的东西）；`feature-meta/` 是**开发期**追溯件，
   **不进 npm 包**（包内根 `feature-meta/manifest.json` 是 REQ-006 的原样文件）
@@ -697,7 +697,14 @@ node skills/load-profile/scripts/plan-load-run.mjs \
 | 1 | `manifest.json` | `356f08a49ce65e633161fa651d7fd78d763606b195b8663d4fd212e8d665c4c5` |
 | 2 | `status.md` | `c8582cfb52c1f1231207fe85e043aa0ca204102f9c90401a80cecb499bf5b306` |
 | 3 | `traceability.md` | `35aad0e338fe9cab17f6ff868fda6d2b3f6e950c184eeda4303924b842eeb8d3` |
-| 4 | `verification-report.md` | `c1c6163f3c48616231be47bef434de6a392ec6d47f3605a6291389b1c6e2f043` |
+| 4 | `verification-report.md` | `bd487178693e01290f9bed198111173724ce4a877a0150ff7d12dd8032bfb584` |
+
+> ⚠️ **第 4 行的值在 2026-11-16 更新过一次**（原值 `c1c6163f3c48616231be47bef434de6a392ec6d47f3605a6291389b1c6e2f043`）。
+> **原因**：本仓要推到**公开** GitHub，故对该文件做了**字面量/绝对路径清理**（内部运行时名 + 本机绝对路径）
+> ⇒ 文件内容变化 ⇒ sha 随之变化。**这是「被验物内容变化 ⇒ 基线值同步」，不是验收结论的改写** ——
+> 该文件**从未被交付面改动过**（`skills/` 123 个文件逐字未变，sha256 全等），
+> 且本次更新**不改变 REQ-012 的任何一条验收结论**。
+> 详见 `BA/demands/REQ-002-suite-foundation/PUBLIC-REPO-CLEANUP.md` §2 / §4。
 
 ---
 

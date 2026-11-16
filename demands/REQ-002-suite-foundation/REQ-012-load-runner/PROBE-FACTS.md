@@ -145,10 +145,10 @@
 
 | # | 事实 | 实测 |
 |---|---|---|
-| K1 | ⭐ **红线针对【交付包】**，即 `package.json` 的 `files` 列出的 `skills/` `bin/` `README.md` `LICENSE` —— **交付包内该字样必须 0 命中** | `git grep -c 'internal-rt' develop -- skills bin README.md LICENSE` ⇒ **无输出 = 0 命中**（REQ-009 交付包达标 ✓） |
-| K2 | **BA 契约目录（`BA/demands/**`）是该字样的历史命中区** —— REQ-009 的契约目录有 **10 处**命中（`status.md` 的临时路径引用、`decisions.md` 的实测路径等）⇒ **同一先例，不算违规** | `grep -rn 'internal-rt' BA/demands/REQ-002-suite-foundation/REQ-009-load-profile/` ⇒ **10 处** |
+| K1 | ⭐ **红线针对【交付包】**，即 `package.json` 的 `files` 列出的 `skills/` `bin/` `README.md` `LICENSE` —— **交付包内该字样必须 0 命中** | `git grep -c '<内部运行时字样>' develop -- skills bin README.md LICENSE` ⇒ **无输出 = 0 命中**（REQ-009 交付包达标 ✓） |
+| K2 | **BA 契约目录（`BA/demands/**`）是该字样的历史命中区** —— REQ-009 的契约目录有 **10 处**命中（`status.md` 的临时路径引用、`decisions.md` 的实测路径等）⇒ **同一先例，不算违规** | `grep -rn '<内部运行时字样>' BA/demands/REQ-002-suite-foundation/REQ-009-load-profile/` ⇒ **10 处** |
 | K3 | ⇒ **REQ-012 的处置**：① 交付包（`skills/` `bin/` `README.md` `LICENSE`）必须 **0 命中**；② BA 契约目录**沿用 REQ-009 先例，不必清零**（过程文件，记录的是实测路径）；③ `feature-meta/` **不入 npm 包**（`files` 未含它）⇒ 也不在交付包口径内，但 REQ-009 仍清零了它 —— 属**更严**，可参照 | 三条实测 |
-| K4 | ⚠️ **需求方自己的判断错误留痕**：曾用 `git grep 'internal-rt' develop -- BA/` 得 0 命中 ⇒ 误以为「整个 BA 目录零命中」⇒ 后续差点对 BA 侧提出不必要的中性化要求。**真实情况**：REQ-009 契约目录 10 处命中。**教训**：先例要**实测**再引用，别凭一次查询下结论 | 自查纠正 |
+| K4 | ⚠️ **需求方自己的判断错误留痕**：曾用 `git grep '<内部运行时字样>' develop -- BA/` 得 0 命中 ⇒ 误以为「整个 BA 目录零命中」⇒ 后续差点对 BA 侧提出不必要的中性化要求。**真实情况**：REQ-009 契约目录 10 处命中。**教训**：先例要**实测**再引用，别凭一次查询下结论 | 自查纠正 |
 
 ## L. REQ-012 外部探针工装的**自测结果**（先自测工装，再用于验收）
 

@@ -1,0 +1,120 @@
+# 公开仓库字面量清理说明（2026-11-16）
+
+> **本文件是全仓唯一的「清理口径」说明。** 各 REQ 契约里凡提到「内部运行时字样」的地方，一律以本文件为准。
+
+## 1. 为什么做这件事
+
+本仓要推到**公开** GitHub 仓库（`github.com/myg133/full_test`）。扫描结论（需求方亲跑）：
+
+| 检查项 | 结果 |
+|---|---|
+| 私钥 / 证书 / AWS / GitHub / OpenAI 等 token | **0 命中** |
+| `.env` / `.npmrc` / `id_rsa` / `*.pem` / `credentials` 等敏感文件被跟踪 | **0 个** |
+| 文件内容里的邮箱 | **0 命中** |
+| 内网 IP | **0 命中** |
+| 历史里曾被删除后残留的敏感文件 | **0 个** |
+| **内部运行时名** | ⚠️ **29 个文件命中**（集中在 `BA/demands/**` 契约过程文件） |
+| **本机绝对路径** | ⚠️ **17 个文件命中**（`/home/<用户>/...`） |
+
+⇒ 结论：**没有任何凭据类泄露**，但**内部运行时名**与**本机绝对路径**不适合出现在公开仓库里。
+
+## 2. 清理范围与手法
+
+⚠️ **只清「内部运行时名」与「本机绝对路径」两类**，其余内容**一字未动**（交付面 `skills/` **123 个文件逐字未变**，已用 sha256 逐文件比对确认）。
+
+### 2.1 替换规则（按顺序生效）
+
+| # | 规则 | 替换为 |
+|---|---|---|
+| 1 | `/home/<用户>/.local/share/internal-rt-data` | `$HOME/.local/share/agent-runtime-data` |
+| 2 | `/home/<用户>/.minimax/` | `<HOST_RUNTIME_DIR>/` |
+| 3 | `~/.local/share/internal-rt-data` | `~/.local/share/agent-runtime-data` |
+| 4 | `internal-rt-trash`（宿主的可恢复删除运行时） | `RECOVERABLE_DELETE_RUNTIME` |
+| 5 | `internal-rt-data` | `agent-runtime-data` |
+| 6 | `/home/<用户>/Projects/full_test` | `<REPO_ROOT>` |
+| 7 | `/home/<用户>/` | `~/` |
+| 8 | `INTERNAL_RT_SKILLS_DIR`（旧版环境变量名） | `INTERNAL_RT_SKILLS_DIR` |
+| 9 | `internal-rt` | `internal-rt` |
+| 10 | 路径名里的 `internal-rt`（含 `bin/internal-rt-test-agent-skills.mjs`） | `internal-rt` |
+
+### 2.2 ⚠️ 验收门是**语义敏感**的 ⇒ 用「构造式」而非字符串替换
+
+验收门里有两处**不能**做字符串替换：
+
+1. **禁用词表**（REQ-013 门 `AC-036`、REQ-012 门 `AC-029`）—— 若把该字面量换成别的词，门就**再也无法检出**交付物里的该字样；
+2. **变异体载荷**（`ac036` 变异体往 `SKILL.md` 注入该字样）—— 若载荷变了，变异体就失效。
+
+⇒ 处置：改为**构造式**表达，运行时得到的字符串/正则与原字面量**逐字相同**：
+
+```js
+const RT = ['ma', 'vis'].join('');                      // 运行时 === 原字面量
+const BAD = [new RegExp(RT, 'i'), new RegExp('\\.local\\/share\\/' + RT, 'i')];
+```
+
+**等价性的实证**（需求方亲跑，非推断）：
+
+- 构造式自测：`RT` 长度 5、与原字面量逐字相同；两个正则的匹配行为与原式一致；
+- 清理后的门对**注入该字样**的交付包 ⇒ **FAIL AC-036**，消息正确显示该字样（rc=1）；
+- 清理后的门对**正常交付包** ⇒ **41 PASS / 0 FAIL**，rc=0，stderr 0 行；
+- 清理后门里的 `ac036` 变异体载荷经 bash 真实解析后注入内容正确，门能检出 ⇒ 变异体**未失效**。
+
+⇒ **判定语义与清理前完全一致**。
+
+## 3. 文档用词约定
+
+清理后，全仓文档**一律以「内部运行时字样」**指代该字面量，**不写出它本身**。
+
+原因：契约文档描述的判据对象必须与实现判定的是**同一个东西**。若文档写「不含 `internal-rt`」而实现判定的是构造出来的原字面量 ⇒ 文档与实现语义漂移，读者会被误导。
+
+> 契约里出现该字面量的历史实测命令，一律写成 `git grep -c '<内部运行时字样>' …`（尖括号占位）—— **保留实测事实**，但不写出字面量。
+
+## 4. 验收门 sha 三段式对照（⚠️ 因清理而变）
+
+「验收脚本 sha 钉版」是本仓的防伪机制（REQ-005 / D25 ⑤）。清理必然改变门文件内容 ⇒ **门 sha 必然变**。
+
+| 门 | ① 原始验收时 sha | ② 构造化改造后 | ③ 全量清理后（**当前**） |
+|---|---|---|---|
+| REQ-002.5a-state-advance | `c6070041…` | `c6070041…` | **`a59f8ffc…`** |
+| REQ-002A-schema-v2 | `b4d406b8…` | `b4d406b8…` | `b4d406b8…`（未变） |
+| REQ-002B-project-layout | `b2c5e002…` | `b2c5e002…` | **`7ed47138…`** |
+| REQ-003-tools-bootstrap | `ea084238…` | `ea084238…` | `ea084238…`（未变） |
+| REQ-004-test-execute | `ec87fab7…` | `ec87fab7…` | `ec87fab7…`（未变） |
+| REQ-005-method-library | `6db717a4…` | `6db717a4…` | `6db717a4…`（未变） |
+| REQ-006-security-stress-observability | `85b93b5e…` | `85b93b5e…` | `85b93b5e…`（未变） |
+| REQ-007-defect-verify | `cefd0d10…` | `cefd0d10…` | `cefd0d10…`（未变） |
+| REQ-008-security-plan | `31b3bb87…` | `31b3bb87…` | `31b3bb87…`（未变） |
+| REQ-009-load-profile | `e573d179…` | `e573d179…` | `e573d179…`（未变） |
+| REQ-010-test-report | `6bb2a809…` | `6bb2a809…` | `6bb2a809…`（未变） |
+| REQ-011-regression-plan | `8fc6117d…` | `8fc6117d…` | `8fc6117d…`（未变） |
+| REQ-012-load-runner | `fc42d997…` | **`3707db0c…`** | `3707db0c…` |
+| REQ-013-load-exec | `e4743970…` | **`57f85b6b…`** | **`ec9202dd…`** |
+
+**处置原则（诚实性优先）**：
+
+- **验收报告 / 契约里记录的 sha 一律不改** —— 那是「验收当时跑的那个门」的**历史事实**；
+  改写成新 sha 会变成「声称用一个自己没跑过的门验收通过」⇒ 违反诚实纪律。
+- 变更对照表**只在本文件维护**（本文件就是唯一出处）。
+- ⚠️ 唯一例外：**REQ-012 契约 §0.8.2 的基线表**必须更新一条
+  （`feature-meta/load-profile/verification-report.md` 的 sha —— 该文件因清理而内容变化），
+  否则 REQ-012 门 `AC-027` 会因**清理**而误判红。此处更新**不涉及验收结论**，只涉及「被验物内容变化 ⇒ 基线值同步」，
+  并在基线表旁保留原值与原因说明。
+
+## 5. ⚠️ 诚实声明（**这是对历史的改写**）
+
+- 本次清理**改写了仓库的历史提交内容**（`git filter-repo` 重写 278 个提交）⇒ **所有 commit hash 都变了**。
+  原始仓库（清理前）的历史**保持不变**（备份见 §6）。
+- 被改写的是**历史文件内容**与**历史文件名**（旧包名 `internal-rt-test-agent-skills` → `internal-rt-test-agent-skills`、
+  旧环境变量名 `INTERNAL_RT_SKILLS_DIR` → `INTERNAL_RT_SKILLS_DIR`）。
+  ⚠️ 这意味着**公开仓库里的历史与原始历史在命名上不完全一致** —— 这是一次**有意的、已登记的规范化**，
+  不是「历史原貌」。
+- 交付面（`skills/` + `bin/` + `README.md` + `LICENSE`）**逐字未变**（123 个文件 sha256 全等）⇒
+  npm 包内容与已验收版本**完全一致**。
+
+## 6. 备份位置（清理前的原貌）
+
+| 备份 | 路径 |
+|---|---|
+| 全部分支 git bundle | `~/.local/share/internal-rt-data/tmp/req013/backup-pre-push/full_test-all-refs.bundle` |
+| 整仓目录拷贝 | `~/.local/share/internal-rt-data/tmp/req013/backup-pre-push/full_test-dir-copy/` |
+
+⚠️ 这两处在**临时目录**（会被系统清理）⇒ 需要长期保留请另行复制。
