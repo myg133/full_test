@@ -6,6 +6,7 @@
 //
 // 纯 Node.js，只用 node: 内置模块。
 
+import path from 'node:path';
 import { InputError, isObject } from './io.mjs';
 
 /** 缺陷 id 的格式（必填、文件内唯一）。 */
@@ -156,6 +157,30 @@ export function validateCasesDocument(doc, file) {
 }
 
 /**
+ * 取轮次目录名（**跨平台**）。
+ *
+ * ⚠️ 为什么不用 `cycleDir.split('/')`：那是 POSIX-only 的切法。
+ *    Windows 上 `cycleDir` 是 `C:\Users\...\cycles\R3-VERIFY`（反斜杠），
+ *    `split('/')` 切不开 ⇒ `pop()` 取到**整条路径** ⇒ 永远 ≠ cycle_id
+ *    ⇒ 轮次契约校验必然抛错 ⇒ skill 在 Windows 上一跑就挂。
+ *
+ * ⚠️ 为什么不用裸 `path.basename`：`path.basename` 是**宿主平台相关**的
+ *    （`path` = win32 on Windows / posix elsewhere），posix 版不认反斜杠。
+ *    同一段代码在不同机器上行为不同 ⇒ 自测无法给出平台无关的期望值。
+ *
+ * 这里用 `path.win32.basename`：**固定按 win32 规则**解析，与宿主平台无关；
+ *    win32 的 basename 同时把 `/` 和 `\` 当分隔符 ⇒
+ *    POSIX 路径（`/a/b/R3`）与 Windows 路径（`C:\a\b\R3`）都取到末段 `R3`。
+ *
+ * @param {string} cycleDir R3 轮次目录路径（任意平台风格）
+ * @returns {string} 轮次目录名（如 `R3-VERIFY`）
+ */
+export function cycleDirName(cycleDir) {
+  if (typeof cycleDir !== 'string' || cycleDir === '') return '';
+  return path.win32.basename(cycleDir);
+}
+
+/**
  * 校验 R3 轮次契约（需求 F5 / D79 / D90）：**只读** cycle.json，不得改写。
  * @param {string} cycleDir R3 轮次目录
  * @param {object} cycle cycle.json 的内容
@@ -192,7 +217,7 @@ export function validateCycleDocument(cycle, cycleFile, cycleDir, defectIds) {
         `（轮次与缺陷单对不上）: ${cycleFile}`,
     );
   }
-  const dirName = cycleDir.split('/').filter(Boolean).pop();
+  const dirName = cycleDirName(cycleDir);
   if (typeof cycle.cycle_id === 'string' && cycle.cycle_id !== '' && cycle.cycle_id !== dirName) {
     throw new InputError(
       `轮次目录名 ${dirName} 与 cycle.json 的 cycle_id=${cycle.cycle_id} 不一致` +
