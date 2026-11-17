@@ -11,7 +11,7 @@
 
 | 分支 | 内容 | 说明 |
 |---|---|---|
-| `develop` | `skills/` `bin/` `README.md` `LICENSE` `package.json` `feature-meta/` | **交付面**：npm 包 `test-agent-skills` 的源码（8 个 skill）+ 追溯件。`npm pack` 130 个文件条目 |
+| `develop` | `skills/` `bin/` `README.md` `LICENSE` `package.json` `feature-meta/` | **交付面**：npm 包 `test-agent-skills` 的源码（8 个 skill）+ 追溯件。`npm pack` 134 个文件条目 |
 | `demand` | `demands/` `dispatch/` `decisions/` `plan/` `sprint/` `backlog/` | **过程文件**：需求契约（`demand.md` / `acceptance.md` / `decisions.md`）、验收门（`verify-acceptance.sh`）、登记表、勘察记录。**不进 npm 包** |
 | `deploy` | `apps/` `argocd/` `environments/` `releases/` `scripts/` | 部署配置骨架（当前为空壳） |
 | `workspace` | 仅 `README.md` + `.gitignore` | 根容器，白名单防御 |
@@ -24,7 +24,8 @@
 - **清理范围**：内部运行时名 + 本机绝对路径（**两类**）。**无任何凭据类内容泄露** ——
   私钥 / 证书 / 云厂商与平台 token / `.env` / `.npmrc` / `id_rsa` 等敏感文件**全部 0 命中**。
 - **清理对交付面零改动**：清理**当时** `skills/` 下 **123 个文件逐字未变**（sha256 全等）⇒ 清理本身没有动交付物。
-  （此后 REQ-007 的 Windows 兼容性修复新增 1 个自测文件、修改 2 个文件 ⇒ **当前 `skills/` 为 124 个文件**。）
+  （此后 REQ-007 的 Windows 兼容性修复新增 1 个自测文件、修改 2 个文件；REQ-014 又新增 4 个文件
+  （项目根定位 / 脱敏器 / 证据内联 三个模块 + 1 个单元自测）⇒ **当前 `skills/` 为 128 个文件**。）
 - **历史被改写**：清理用 `git filter-repo` 重写了 278 个提交 ⇒ **所有 commit hash 都变了**。
   这是**有意的规范化**，不是「历史原貌」；详见
   `demand` 分支的 `BA/demands/REQ-002-suite-foundation/PUBLIC-REPO-CLEANUP.md`（含替换规则表、
@@ -50,6 +51,28 @@
 ⇒ **Windows 用户请重装后至少对 8 个 skill 各跑一次冒烟**；发现的问题按常规反馈即可。
 该条已按**系统性问题**登记在 `demand` 分支 `dispatch/req-registry.md` 的遗留项表
 （「⭐ REQ-007 / Windows 兼容」），**不按「已修一处」结案**。
+
+## ✅ 测试报告可提交化（2026-11-17 · REQ-014）
+
+**用户实机反馈**：功能测试产出的报告**提交不了** —— 报告落在产物目录里，而产物区被
+`.gitignore` 忽略；证据只是**路径引用**，报告提交后证据全丢；报告里还带着**明文口令**与
+**本机绝对路径**。
+
+**现在 `test-report` 的行为已变**（⚠️ **旧调用方式需注意**）：
+
+| 变化 | 之前 | 现在 |
+|---|---|---|
+| 报告输出位置 | `<产物目录>/report/`（**在 `.gitignore` 里 ⇒ 报告本身不可提交**） | **`<项目根>/reports/<run_id>/`**（**可提交**） |
+| 证据 | 只有路径引用 | **`report.json` 内联全部证据内容**（每条 8 个字段：相对路径 / 原文件指纹 / 内联内容指纹 / 字节数 / 正文 …） |
+| 敏感信息 | 原样带出 | **一律脱敏**：口令与凭证 → 占位符；绝对路径 → 相对项目根 |
+
+- **项目根三段式定位**：显式 `--project-root` > 从 `<项目根>/.test-artifacts/<run_id>` 形态反推 >
+  两者都不成立 ⇒ **报错退出**（错误信息点名 `--project-root`），**不猜**。
+- **追踪标识不误伤**：`trace_id` / `x-trace-id` / `request_id` / `id` / `uuid` 等键下的值**原样保留** ——
+  抹掉它们会让报告失去查后端日志的能力（用户真实数据实测：58 份证据里的 32 位 hex
+  **全是业务标识，没有一条是真凭证**）。
+- **旧默认位置不再被写**：`<产物目录>/report/` 不再产生（避免两处报告）。
+- 契约与验收门在 `demand` 分支：`BA/demands/REQ-002-suite-foundation/REQ-014-report-submittable/`
 
 ## ⚠️ 已知：REQ-012 验收门对当前 `develop` 判红（**不是交付缺陷**）
 
