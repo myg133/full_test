@@ -1361,10 +1361,14 @@ CHECK="$TR/scripts/check-report.mjs"
 step "跑被验实现（带计划 / 不带计划 / 证据被篡改）"
 
 run_make() { # $1 = artifacts dir, $2 = out dir, $3 = plan file（空 = 不给计划）
+  # ⚠️ REQ-014（D211）起：**项目根「总是」需要**（报告里的 source.artifacts 必须相对项目根）
+  #    ⇒ 统一用「产物目录的上级」当项目根（各调用方传的产物目录都是拷贝，形态各异，
+  #    多数不可反推 ⇒ 必须显式给）。
+  local PROJ; PROJ="$(dirname "$1")"
   if [ -n "$3" ]; then
-    node "$MAKE" --artifacts "$1" --regression-plan "$3" --out-dir "$2" >"$WORK/make.log" 2>&1
+    node "$MAKE" --artifacts "$1" --project-root "$PROJ" --regression-plan "$3" --out-dir "$2" >"$WORK/make.log" 2>&1
   else
-    node "$MAKE" --artifacts "$1" --out-dir "$2" >"$WORK/make.log" 2>&1
+    node "$MAKE" --artifacts "$1" --project-root "$PROJ" --out-dir "$2" >"$WORK/make.log" 2>&1
   fi
   return $?
 }
@@ -1665,7 +1669,7 @@ printf '{"not":"an array"}\n' > "$BAD_ART2/results.json"
 check_bad_input() { # $1 = 描述, $2 = artifacts, $3 = out dir, $4 = stderr 必须点名的坏点
   local desc="$1" art="$2" out="$3" kw="$4"
   mkdir -p "$out"
-  node "$MAKE" --artifacts "$art" --out-dir "$out" >"$WORK/bad.out" 2>"$WORK/bad.err"
+  node "$MAKE" --artifacts "$art" --project-root "$(dirname "$art")" --out-dir "$out" >"$WORK/bad.out" 2>"$WORK/bad.err"
   local rc=$?
   local msg; msg="$(head -3 "$WORK/bad.err" | tr '\n' ' ')"
   # F-11：三种情形各要求 rc == 1（**输入非法**；用法错 = 2 另行判定）
@@ -1747,19 +1751,28 @@ A25="AC-025"
 A25_PROBLEMS=""
 ART_DEF="$WORK/art-default"
 cp -r "$ART" "$ART_DEF"
-# F-05（C-J）：快照**不排除任何目录**；「report/」的排除只作用于「默认输出位置」那一支的判读
-#   （认定默认输出位置时，仍按「产物目录**根下**那一个 report/」排除）。
+# ⚠️ REQ-014（D211）起：默认输出改到 **<项目根>/reports/<run_id>/**。
+#    项目根 = 产物目录的上级（$WORK/art-default ⇒ $WORK）；run_id 取自 meta.json。
+PROJ_DEF="$(dirname "$ART_DEF")"
+RUN_ID_DEF="$(node -e '
+  const fs=require("fs");
+  try{ const m=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); process.stdout.write(String(m.run_id||"")); }
+  catch(e){ process.stdout.write(""); }
+' "$ART_DEF/meta.json")"
+DEF_OUT="$PROJ_DEF/reports/$RUN_ID_DEF"
+# F-05（C-J）：快照**不排除任何目录** —— 新默认输出在产物目录**之外**，
+#   所以产物目录里**任何**文件被改动都算违规（不再有「排除 report/」的特例）。
 BEFORE_DEF="$(node "$WORK/snapdir.mjs" "$ART_DEF" 2>/dev/null)"
-run_make "$ART_DEF" "" "$PLAN" 2>/dev/null
-node "$MAKE" --artifacts "$ART_DEF" --regression-plan "$PLAN" >"$WORK/def.log" 2>&1
+node "$MAKE" --artifacts "$ART_DEF" --project-root "$PROJ_DEF" --regression-plan "$PLAN" >"$WORK/def.log" 2>&1
 DEF_RC=$?
-if [ ! -s "$ART_DEF/report/report.json" ] || [ ! -s "$ART_DEF/report/report.md" ]; then
-  A25_PROBLEMS="$A25_PROBLEMS [默认输出目录下没有 report/report.json 与 report/report.md（rc=$DEF_RC）]"
+if [ ! -s "$DEF_OUT/report.json" ] || [ ! -s "$DEF_OUT/report.md" ]; then
+  A25_PROBLEMS="$A25_PROBLEMS [默认输出目录下没有 report.json 与 report.md（期望 $DEF_OUT，rc=$DEF_RC）]"
 fi
-AFTER_DEF="$(node "$WORK/snapdir.mjs" "$ART_DEF" "report/" 2>/dev/null)"
-#   排除只作用于「产物目录**根下**那一个 report/」；嵌套的 report/ 目录不在排除范围内
-#   （前缀匹配 ⇒ 「logs/report/x」不会被排除）⇒ 散落文件照样会被抓到。
-[ "$BEFORE_DEF" = "$AFTER_DEF" ] || A25_PROBLEMS="$A25_PROBLEMS [输入产物目录里除根下 report/ 外有文件被改动（快照不排除任何目录）]"
+if [ -d "$ART_DEF/report" ]; then
+  A25_PROBLEMS="$A25_PROBLEMS [旧默认位置 $ART_DEF/report/ 仍存在（新默认不该写那里）]"
+fi
+AFTER_DEF="$(node "$WORK/snapdir.mjs" "$ART_DEF" 2>/dev/null)"
+[ "$BEFORE_DEF" = "$AFTER_DEF" ] || A25_PROBLEMS="$A25_PROBLEMS [输入产物目录里有文件被改动（快照不排除任何目录）]"
 
 ART_OUT="$WORK/art-outside"
 cp -r "$ART" "$ART_OUT"
@@ -2187,7 +2200,8 @@ SHIMEOF
         cp -r "$ART" "$MUTART"
         MUTOUT="$WORK/mutout-$i"
         mkdir -p "$MUTOUT"
-        node "$ENTRY" --artifacts "$MUTART" --regression-plan "$PLAN" --out-dir "$MUTOUT" >/dev/null 2>&1
+        # ⚠️ REQ-014（D211）起：项目根「总是」需要 ⇒ 变异运行也要显式给 --project-root
+        node "$ENTRY" --artifacts "$MUTART" --project-root "$(dirname "$MUTART")" --regression-plan "$PLAN" --out-dir "$MUTOUT" >/dev/null 2>&1
         MRC=$?
         if [ "$MRC" -ne 0 ] || [ ! -s "$MUTOUT/report.json" ]; then
           STATUS="变异后脚本没正常跑完：rc=$MRC —— 崩溃造成的判红是假检出"
@@ -2233,8 +2247,8 @@ SHIMEOF
   if [ "$CTRL_STATUS" = "有效" ]; then
     CTRLOUT="$WORK/ctrlout"
     mkdir -p "$CTRLOUT"
-    node "$CTRLPKG/skills/test-report/scripts/make-report.mjs" --artifacts "$ART" --regression-plan "$PLAN" \
-      --out-dir "$CTRLOUT" >/dev/null 2>&1
+    node "$CTRLPKG/skills/test-report/scripts/make-report.mjs" --artifacts "$ART" --project-root "$(dirname "$ART")" \
+      --regression-plan "$PLAN" --out-dir "$CTRLOUT" >/dev/null 2>&1
     CRC=$?
     if [ "$CRC" -ne 0 ] || [ ! -s "$CTRLOUT/report.json" ]; then
       CTRL_STATUS="变异后脚本没正常跑完：rc=$CRC"

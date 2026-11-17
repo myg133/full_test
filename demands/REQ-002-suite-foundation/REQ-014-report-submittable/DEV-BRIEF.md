@@ -24,7 +24,8 @@
 
 ## 2. 你要交付什么
 
-**只改 `skills/test-report/`** 下的文件（+ 必要的 `references/` 文档）。
+**改动范围**：`skills/test-report/` 下的文件（+ 必要的 `references/` 文档）**+ `bin/verify-suite.mjs`**
+（组合门的 `scenarioReport` 场景，见 §2.3）。
 **不许**改 `test-execute` / 其他 skill、不许改 `feature-meta/`、不许改 `package.json` 的版本号。
 
 ### 2.1 三件事
@@ -45,6 +46,19 @@
 **② `failures[].evidence[]` 保持既有语义不变**（逐字取自产物）。
 本 REQ 只做**增量**：新加的 `evidence.files[]` 才是「实查 + 内联」的权威视图。
 不要顺手改 `failures[]` 的形状 —— 那会牵连 REQ-010 的 AC-013。
+
+### 2.3 组合门也要同步（`bin/verify-suite.mjs` 的 `scenarioReport`）
+
+组合门现在硬编码了旧的调用形态 ⇒ 新默认下**整个组合门会红**：
+
+- 调 `make-report.mjs` 时**必须给 `--project-root`**（该场景的执行产物落在 `<work>/exec-report`，
+  **不是** `<root>/.test-artifacts/<id>` 形态 ⇒ 不可反推）；
+- 该场景**改为走新的默认输出位置**（**不给 `--out-dir`**），并断言报告落在
+  `<项目根>/reports/<run_id>/report.json`（`<run_id>` = `verify-report`）；
+- 三层结论的断言（`verdict.*` / `cases.*`）**逐字不变**。
+
+改完自己跑一遍：`cd <worktree> && node bin/test-agent-skills.mjs verify`
+（期望：8 skill 装齐 + 依赖图校验通过 + 6 个组合场景全过 + rc=0）。
 
 ---
 
