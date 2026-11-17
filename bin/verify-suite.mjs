@@ -372,6 +372,10 @@ function scenarioCycle(root, work) {
  * make-report.mjs 读它、实查证据、算出三层结论 —— 断言的是报告里的
  * `verdict.*` 与 `cases.*`，不是「文件存在」。
  *
+ * ⚠️ REQ-014（F5.1 / F5.2）：项目根「总是」需要（产物目录不是 `<root>/.test-artifacts/<id>`
+ *    形态 ⇒ 不可反推）⇒ 必须显式给 `--project-root`；并且**不给** `--out-dir` ——
+ *    让组合门**实跑**验证「默认输出落在 `<项目根>/reports/<run_id>/`」这个核心行为。
+ *
  * @param {string} root 临时根
  * @param {string} work 工作目录
  * @returns {{ok: boolean, message: string}} 场景结论
@@ -404,8 +408,11 @@ function scenarioReport(root, work) {
     };
   }
 
-  const reportDir = path.join(work, 'report-out');
-  const reported = runNode(reporter, ['--artifacts', outputDir, '--out-dir', reportDir], work);
+  // ⚠️ REQ-014（F5.1 / F5.2）：**必须**给 --project-root（产物目录不可反推）；
+  //    且**不给** --out-dir —— 让它走「默认输出 = <项目根>/reports/<run_id>/」。
+  const projectRoot = work;
+  const reportDir = path.join(projectRoot, 'reports', 'verify-report');
+  const reported = runNode(reporter, ['--artifacts', outputDir, '--project-root', projectRoot], work);
   if (reported.code !== 0) {
     const detail = runOutputDetail(reported);
     return {
@@ -415,7 +422,12 @@ function scenarioReport(root, work) {
   }
 
   const reportFile = path.join(reportDir, 'report.json');
-  if (!fs.existsSync(reportFile)) return { ok: false, message: 'test-report 没有产出 report.json' };
+  if (!fs.existsSync(reportFile)) {
+    return {
+      ok: false,
+      message: `test-report 没有产出 report.json（期望默认输出位置 ${reportFile}）`,
+    };
+  }
   let report = null;
   try {
     report = JSON.parse(fs.readFileSync(reportFile, 'utf8'));
@@ -434,6 +446,11 @@ function scenarioReport(root, work) {
   };
   const expectCases = { total: 6, passed: 4, failed: 1, blocked: 1, skipped: 0 };
   const problems = [];
+  // ⚠️ REQ-014（F5.2）：`<run_id>` 取自 meta.json（**不是**产物目录名）。
+  const runId = report && report.source ? report.source.run_id : '';
+  if (runId !== 'verify-report') {
+    problems.push(`source.run_id=${JSON.stringify(runId)}，应为 "verify-report"（run_id 取自 meta.json）`);
+  }
   for (const [key, want] of Object.entries(expectVerdict)) {
     if (verdict[key] !== want) problems.push(`verdict.${key}=${JSON.stringify(verdict[key])}，应为 ${want}`);
   }
