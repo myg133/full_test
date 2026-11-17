@@ -133,6 +133,11 @@ md 里**不得**出现任何断言回归状态的措辞（不给就不编造）�
    落在项目根下的**绝对路径**换成相对路径；计数在 `redaction` 段里**如实**自陈。
    ⚠️ **豁免**：追踪 / 业务标识键（`trace_id` / `x-trace-id` / `request_id` / `x-request-id` /
    `span_id` / `correlation_id` / `id` / `uuid`）下的值**原样保留**；
+   ⚠️ **豁免**：**本报告自身算出的指纹**（`meta.results_sha256` / `meta.evidence_manifest_sha256` /
+   `results[]` 里各 `evidence[].sha256` / 重算出的 results 与 manifest 指纹 / 实存证据文件的字节指纹）
+   即便命中长 hex 也**原样保留、不计数**（键名级豁免对 findings 的**消息文本**无效 ——
+   证据层要写「meta.json 记 X，重算为 Y」，这两个值不能被自己抹掉）；
+   ⚠️ 值层面的豁免**只对长 hex 开口**：内嵌 JSON 口令 / `Bearer` / URL userinfo 照旧被抹；
    ⚠️ **被测目标的地址、端口与业务账号逐字保留**。
    ⚠️ 脱敏**不得**影响证据层判定，也不得让「文件没被动过」变得不可判定
    （内容不含敏感内容 ⇒ `content_sha256 == sha256` 严格相等）。

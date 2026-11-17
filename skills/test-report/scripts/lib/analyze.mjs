@@ -263,6 +263,9 @@ export function buildReport(input) {
 
   const recomputedResults = resultsFingerprint(results);
   const recomputedManifest = evidenceManifestFingerprint(results);
+  // ⚠️ D221：重算出来的两个指纹必须**早于任何一次脱敏**登记进已知指纹集合
+  //    （证据内容内联时的脱敏也算）—— 否则它们会被长 hex 规则当凭证抹掉。
+  redactor.addFingerprints([recomputedResults, recomputedManifest]);
   const inspected = inspectEvidence(results, dir);
   const findings = [
     ...inspected.findings,

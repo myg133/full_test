@@ -31,7 +31,7 @@ import { loadArtifacts, loadPlan, InputError } from './lib/artifacts.mjs';
 import { buildReport, needsReviewCaseIds } from './lib/analyze.mjs';
 import { renderMarkdown } from './lib/render.mjs';
 import { resolveProjectRoot, ProjectRootError } from './lib/project-root.mjs';
-import { createRedactor } from './lib/redaction.mjs';
+import { createRedactor, collectDeclaredFingerprints } from './lib/redaction.mjs';
 
 /**
  * 打印用法。
@@ -102,6 +102,9 @@ function main() {
   let markdown;
   try {
     const redactor = createRedactor({ projectRoot });
+    // ⚠️ D221：**立刻**补齐产物里**声明**的指纹（它们会被 findings 的消息逐字引用）
+    //    —— 必须早于任何一次脱敏，否则会被长 hex 规则当凭证抹掉。
+    redactor.addFingerprints(collectDeclaredFingerprints(artifacts.meta, artifacts.results));
     report = buildReport({
       dir: artifacts.dir,
       meta: artifacts.meta,

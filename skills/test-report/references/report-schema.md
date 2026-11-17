@@ -142,10 +142,14 @@
 | R1 | 敏感**字段名**（`password` / `passwd` / `pwd` / `token` / `secret` / `api_key` / `apikey` / `access_key` / `private_key` / `authorization` / `cookie` / `credential` / `credentials` / `session` 等，大小写与分隔符不敏感）⇒ **整值替换** | `[REDACTED:field]` |
 | R2 | 敏感**值模式**：① 内嵌 JSON 形态（`"password":"xxx"`）；② `Bearer <token>`；③ URL 里的 `user:pass@host`；④ 独立的长十六进制串（≥32 位） | `[REDACTED:secret]` |
 | R3 | 落在**项目根**下的绝对路径 ⇒ 换成**相对项目根**的路径 | 相对路径本身 |
-| 豁免 | **追踪 / 业务标识**键（`trace_id` / `x-trace-id` / `request_id` / `x-request-id` / `span_id` / `correlation_id` / `id` / `uuid`）下的值**原样保留** | —— |
+| 豁免（键名） | **追踪 / 业务标识**键（`trace_id` / `x-trace-id` / `request_id` / `x-request-id` / `span_id` / `correlation_id` / `id` / `uuid`）下的值**原样保留** | —— |
+| 豁免（值） | **本报告自身算出的指纹**（D221）：`meta.results_sha256` / `meta.evidence_manifest_sha256` / `results[]` 里各 `evidence[].sha256` / **重算**出的 results 与 manifest 指纹 / **实存证据文件**的字节指纹 ⇒ 即便命中 R2④ 也**原样保留、不计数** | —— |
 
 ⚠️ **豁免是按键名判定的**（结构化遍历），不是「一律放过长 hex」——
 非豁免键（如 `cache_key`）下的长 hex 仍被 R2④ 脱敏。
+
+⚠️ **值层面的豁免只对 R2④ 开口**（D221）：内嵌 JSON 口令 / `Bearer` / URL userinfo
+**照旧被抹**（真凭证优先）—— 已知指纹若出现在这三种形态里，仍会被替换。
 
 ⚠️ **被测目标的地址、端口与业务账号逐字保留**（它们是被测对象标识，不是凭证）。
 

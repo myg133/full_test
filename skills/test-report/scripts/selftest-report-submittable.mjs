@@ -317,6 +317,95 @@ function mkTmp() {
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 
+// ---------------------------------------------------------------- 5. D221 已知指纹豁免
+
+{
+  const fingerprint = 'a'.repeat(64);
+  const otherHex = 'aaaabbbbccccddddaaaabbbbccccdddd';
+
+  // ① 已知指纹里的 64 位 hex 不被替换，且 stats.values 不增加
+  const redactor = createRedactor({ projectRoot: '/work/proj', fingerprints: [fingerprint] });
+  const before = redactor.stats.values;
+  const kept = redactor.redactText(`记录：${fingerprint}`);
+  check(kept.includes(fingerprint), 'D221 · 已知指纹里的 64 位 hex 原样保留', kept);
+  check(redactor.stats.values === before, 'D221 · 保留已知指纹不计数', `values=${redactor.stats.values}`);
+
+  // ② 非指纹的长 hex 仍被替换（反向探针：豁免不是「一律放过长 hex」）
+  const replaced = redactor.redactText(`记录：${otherHex}`);
+  check(!replaced.includes(otherHex) && replaced.includes('[REDACTED:secret]'), 'D221 · 非指纹的长 hex 仍被脱敏', replaced);
+  check(redactor.stats.values === before + 1, 'D221 · 非指纹长 hex 被计一次替换', `values=${redactor.stats.values}`);
+
+  // ③ 内嵌 JSON 口令 / Bearer / URL userinfo 仍被替换（指纹豁免不覆盖其它值规则）
+  const real3 = createRedactor({ projectRoot: '/work/proj', fingerprints: [fingerprint] });
+  const r3 = real3.redactText(
+    `curl -d '{"password":"PlainTextPwd123"}' -H 'Authorization: Bearer ${fingerprint}' http://admin:s3cr3t@example.com/x`,
+  );
+  check(!r3.includes('PlainTextPwd123'), 'D221 · 内嵌 JSON 口令仍被替换（真凭证优先）', r3);
+  check(!r3.includes('Bearer ' + fingerprint), 'D221 · Bearer 形态仍被替换（真凭证优先）', r3);
+  check(!r3.includes('s3cr3t'), 'D221 · URL userinfo 仍被替换（真凭证优先）', r3);
+}
+
+{
+  // ④⑤ 端到端：产物里声明的指纹与 findings 消息里的指纹逐字可见；无敏感内容 ⇒ 计数为 0
+  const tmp = mkTmp();
+  const projectRoot = path.join(tmp, 'proj');
+  const runId = 'run-clean';
+  const runDir = path.join(projectRoot, '.test-artifacts', runId);
+  fs.mkdirSync(path.join(runDir, 'evidence', 'TC-001'), { recursive: true });
+  const rawClean = `${JSON.stringify({
+    driver: 'api',
+    response: { body: { code: 'OK', id: 'fedcba9876543210fedcba9876543210' } },
+  }, null, 2)}\n`;
+  fs.writeFileSync(path.join(runDir, 'evidence', 'TC-001', 'step-1-response.json'), rawClean, 'utf8');
+
+  // ⚠️ meta 里**声明**的指纹是**错的**（与重算值不同）⇒ 报告会点名「指纹不符」，
+  //    findings 消息里会逐字引用这两个 64 位 hex ⇒ 这正是 D221 的目标场景。
+  const declaredResults = '1'.repeat(64);
+  const declaredManifest = '2'.repeat(64);
+  const meta = {
+    run_id: runId,
+    suite: 'REQ-SELFTEST',
+    requirement: 'REQ-SELFTEST',
+    environment: 'mock-local',
+    started_at: '2026-01-01T00:00:00.000Z',
+    finished_at: '2026-01-01T00:00:01.000Z',
+    results_sha256: declaredResults,
+    evidence_manifest_sha256: declaredManifest,
+  };
+  const results = [{
+    case_id: 'TC-001',
+    title: '正常用例',
+    status: 'passed',
+    duration_ms: 10,
+    evidence: [{ path: 'evidence/TC-001/step-1-response.json', sha256: 'x', bytes: 1, media_type: 'application/json' }],
+    reproduction: null,
+    error: null,
+  }];
+  fs.writeFileSync(path.join(runDir, 'meta.json'), `${JSON.stringify(meta, null, 2)}\n`, 'utf8');
+  fs.writeFileSync(path.join(runDir, 'results.json'), `${JSON.stringify(results, null, 2)}\n`, 'utf8');
+
+  const script = path.join(path.dirname(new URL(import.meta.url).pathname), 'make-report.mjs');
+  const run = spawnSync(process.execPath, [script, '--artifacts', runDir], { encoding: 'utf8' });
+  const reportFile = path.join(projectRoot, 'reports', runId, 'report.json');
+  check(run.status === 0 && fs.existsSync(reportFile), 'D221 · 端到端：报告已产出', run.stderr);
+  const report = JSON.parse(fs.readFileSync(reportFile, 'utf8'));
+  const raw = fs.readFileSync(reportFile, 'utf8');
+  check(raw.includes(declaredResults), 'D221 · 端到端：meta 声明的指纹在报告里逐字可见');
+  check(raw.includes(report.source.results_sha256), 'D221 · 端到端：重算出的指纹在报告里逐字可见');
+  const mdFile = path.join(projectRoot, 'reports', runId, 'report.md');
+  check(
+    fs.readFileSync(mdFile, 'utf8').includes(declaredResults),
+    'D221 · 端到端：findings 消息里的指纹在 md 里逐字可见',
+  );
+  check(
+    report.redaction.redacted_fields === 0 && report.redaction.redacted_values === 0,
+    'D221 · 端到端：无敏感内容的产物 ⇒ redacted_fields == 0 且 redacted_values == 0',
+    JSON.stringify(report.redaction),
+  );
+
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
 console.log('');
 console.log(`自测结果：${passed} PASS / ${failed} FAIL`);
 process.exitCode = failed === 0 ? 0 : 1;

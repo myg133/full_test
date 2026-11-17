@@ -12,6 +12,11 @@
 // `x-request-id` / `span_id` / `correlation_id` / `id` / `uuid`）下的值**原样保留**，
 // 不参与任何脱敏规则 —— 「长得像 hash」不是可靠的凭证信号，业务标识与 token 同形。
 //
+// 还有**已知指纹豁免**（D221）：本报告涉及的指纹值（产物里**声明**的 + 报告**重算**的）
+// 即便命中长 hex 形态也**原样保留、不计数** —— 它们确定不是凭证，
+// 却会以「值」的形态嵌在 findings 的**自由文本**里（键级豁免对自由文本无效）。
+// ⚠️ 只对「长 hex」这一条规则开口子：内嵌 JSON 口令 / Bearer / URL userinfo 仍按真凭证处理。
+//
 // R1 / R2 的分工（F3.1 / AC-016）：
 //   - 敏感字段名**只在对象键上**判 ⇒ `must_change_password` 的值被换掉；
 //   - 裸词**不认** ⇒ `page.secrets.view`（业务权限点）、`DEMO_TEST_TOKEN`（环境变量引用）逐字保留；
@@ -112,6 +117,7 @@ export const RULES_APPLIED = [
   'secret-pattern:long-hex',
   'path:absolute-to-project-relative',
   'exempt-key:trace-and-business-id',
+  'exempt-value:known-fingerprint',
 ];
 
 /** 敏感字段名的整值替换占位符。 */
@@ -144,7 +150,11 @@ export function isExemptKey(key) {
 
 /**
  * 建一个脱敏器（计数是**全局**的：证据内容与报告正文共用同一份计数）。
- * @param {{projectRoot?: string|null}} [options] 选项（项目根用于 R3）
+ *
+ * @param {{projectRoot?: string|null, fingerprints?: string[]|Set<string>}} [options] 选项
+ *   - `projectRoot`：R3 用（绝对路径 → 相对项目根）；
+ *   - `fingerprints`：**已知指纹**（D221）—— 本报告涉及的全部指纹值，
+ *     它们即便命中长 hex 形态也**原样保留、不计数**（它们确定不是凭证）。
  * @returns {object} 脱敏器
  */
 export function createRedactor(options = {}) {
@@ -152,6 +162,25 @@ export function createRedactor(options = {}) {
     ? options.projectRoot
     : null;
   const stats = { fields: 0, values: 0 };
+  /** 已知指纹集合（D221）：值层面的豁免 —— 只对「长 hex」这一条规则开口子。 */
+  const knownFingerprints = new Set();
+
+  /**
+   * 追加已知指纹（D221）。
+   * @param {string[]|Set<string>|string} values 指纹值（可批量追加）
+   * @returns {number} 追加后的指纹条数
+   */
+  function addFingerprints(values) {
+    const list = values instanceof Set
+      ? Array.from(values)
+      : Array.isArray(values) ? values : [values];
+    for (const value of list) {
+      if (typeof value === 'string' && value !== '') knownFingerprints.add(value);
+    }
+    return knownFingerprints.size;
+  }
+
+  addFingerprints(options.fingerprints);
 
   /**
    * R3：把落在项目根下的绝对路径换成相对项目根的路径。
@@ -198,7 +227,12 @@ export function createRedactor(options = {}) {
       stats.values += 1;
       return REDACTED_SECRET;
     });
-    out = out.replace(LONG_HEX, () => {
+    out = out.replace(LONG_HEX, (matched) => {
+      // ⚠️ D221：**已知指纹**（本报告自己算出来的、或产物里声明的指纹）确定不是凭证
+      //    ⇒ 原样保留、**不计数**（没替换过就不能算一次替换）。
+      //    ⚠️ 只对「长 hex」这一条规则开口子 —— 内嵌 JSON 口令 / Bearer / URL userinfo
+      //    仍按真凭证处理（真凭证优先）。
+      if (knownFingerprints.has(matched)) return matched;
       stats.values += 1;
       return REDACTED_SECRET;
     });
@@ -271,7 +305,38 @@ export function createRedactor(options = {}) {
     redactText,
     redactNode,
     redactEvidenceText,
+    addFingerprints,
     stats,
     rulesApplied: () => RULES_APPLIED.slice(),
   };
+}
+
+/**
+ * 收集**产物里声明的指纹**（D221）。
+ *
+ * 来源：`meta.json` 的 `results_sha256` / `evidence_manifest_sha256`，
+ * 以及 `results[]` 里各 `evidence[].sha256`。
+ * ⚠️ 这些值会被报告的 findings 消息**逐字引用**（「meta.json 记 X，重算为 Y」）
+ *    ⇒ 必须**早于任何一次脱敏**登记进已知指纹集合，否则会被长 hex 规则当凭证抹掉。
+ * @param {object} meta meta.json
+ * @param {object[]} results 结果数组
+ * @returns {string[]} 声明的指纹值
+ */
+export function collectDeclaredFingerprints(meta, results) {
+  const values = [];
+  const add = (value) => {
+    if (typeof value === 'string' && value !== '') values.push(value);
+  };
+  if (meta && typeof meta === 'object') {
+    add(meta.results_sha256);
+    add(meta.evidence_manifest_sha256);
+  }
+  const list = Array.isArray(results) ? results : [];
+  for (const entry of list) {
+    const evidence = entry && Array.isArray(entry.evidence) ? entry.evidence : [];
+    for (const item of evidence) {
+      if (item && typeof item === 'object') add(item.sha256);
+    }
+  }
+  return values;
 }

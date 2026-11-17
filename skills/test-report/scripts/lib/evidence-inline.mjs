@@ -89,12 +89,17 @@ export function buildEvidenceFiles(input) {
       seen.add(key);
       const buffer = fs.readFileSync(abs);
       const rawText = buffer.toString('utf8');
+      const sha256 = sha256Hex(buffer);
+      // ⚠️ D221：本文件**实算**出来的指纹也是「本报告涉及的指纹」——
+      //    findings 消息里会引用它（「记录 sha256=X，实算 sha256=Y」）⇒ 必须**早于**内容脱敏登记，
+      //    否则它会被长 hex 规则当凭证抹掉。
+      redactor.addFingerprints([sha256]);
       const content = redactor.redactEvidenceText(rawText);
       files.push({
         case_id: caseId,
         step: parseStep(path.basename(rel)),
         path: relativeToRoot(projectRoot, abs),
-        sha256: sha256Hex(buffer),
+        sha256,
         bytes: buffer.length,
         media_type: typeof item.media_type === 'string' && item.media_type !== ''
           ? item.media_type

@@ -93,9 +93,14 @@ node scripts/selftest-report-submittable.mjs
    （内嵌 JSON 口令 / `Bearer <token>` / URL `user:pass@` / 长 hex）换成 `[REDACTED:secret]`，
    落在项目根下的**绝对路径**换成相对路径；计数在 `redaction` 段里**如实**自陈；
    ⚠️ **被测目标的地址、端口与业务账号逐字保留**（它们是被测对象标识，不是凭证）；
-   ⚠️ **追踪 / 业务标识豁免**：`trace_id` / `x-trace-id` / `request_id` / `x-request-id` /
+   ⚠️ **追踪 / 业务标识豁免（按键名）**：`trace_id` / `x-trace-id` / `request_id` / `x-request-id` /
    `span_id` / `correlation_id` / `id` / `uuid` 这些**键名**下的值**原样保留** ——
-   「长得像 hash」不是可靠的凭证信号，业务标识与 token 同形。
+   「长得像 hash」不是可靠的凭证信号，业务标识与 token 同形；
+   ⚠️ **本报告自身指纹豁免（按值）**：`meta.results_sha256` / `meta.evidence_manifest_sha256` /
+   `results[]` 里各 `evidence[].sha256` / 重算出的 results 与 manifest 指纹 / 实存证据文件的字节指纹
+   ⇒ 即便命中「长 hex」也**原样保留、不计数**（证据层 findings 的消息文本里会引用它们，
+   键名级豁免对自由文本无效 ⇒ 否则报告自己写出的指纹会被自己抹掉）；
+   ⚠️ 值层面的豁免**只对「长 hex」开口**：内嵌 JSON 口令 / `Bearer` / URL userinfo 照旧被抹。
 
 ## 三层结论（不得混为一谈）
 
