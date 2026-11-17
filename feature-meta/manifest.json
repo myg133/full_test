@@ -1,10 +1,10 @@
 {
-  "req": "REQ-006",
-  "branch": "feature/REQ-006",
-  "agent_id": "dev-0025",
-  "session_id": "dev-006-20261112164500",
-  "owner": "dev-0025",
+  "req": "REQ-014",
+  "branch": "feature/REQ-014",
+  "agent_id": "ba-local-ba",
+  "session_id": "mvs_744b60ef3d984cffbcd54448ac77bd8c",
+  "owner": "ba-local-ba",
   "base_branch": "develop",
-  "created_at": "2026-11-12T16:45:00+08:00",
-  "demand_dir": "BA/demands/REQ-002-suite-foundation/REQ-006-security-stress-observability"
+  "created_at": "2026-11-17T13:37:43+08:00",
+  "demand_dir": "BA/demands/REQ-014"
 }
