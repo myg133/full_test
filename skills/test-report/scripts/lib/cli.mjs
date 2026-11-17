@@ -1,7 +1,8 @@
 // cli.mjs —— 命令行参数解析
 //
 // 用法：
-//   node scripts/make-report.mjs --artifacts <run_dir> [--regression-plan <file>] [--out-dir <dir>]
+//   node scripts/make-report.mjs --artifacts <run_dir> [--project-root <dir>]
+//                                [--regression-plan <file>] [--out-dir <dir>]
 //
 // 退出码语义：用法错 = 2，输入非法 = 1（与 F7 的调用方契约一致）。
 
@@ -16,10 +17,10 @@ export class UsageError extends Error {
 /**
  * 解析命令行参数。
  * @param {string[]} argv 参数数组（不含 node 与脚本路径）
- * @returns {{artifacts: string, regressionPlan: string|null, outDir: string|null, help: boolean}} 解析结果
+ * @returns {{artifacts: string, projectRoot: string|null, regressionPlan: string|null, outDir: string|null, help: boolean}} 解析结果
  */
 export function parseArgs(argv) {
-  const options = { artifacts: '', regressionPlan: null, outDir: null, help: false };
+  const options = { artifacts: '', projectRoot: null, regressionPlan: null, outDir: null, help: false };
   let i = 0;
   while (i < argv.length) {
     const arg = argv[i];
@@ -42,6 +43,18 @@ export function parseArgs(argv) {
         i += 1;
       }
       if (!options.artifacts) throw new UsageError('--artifacts 需要一个目录参数');
+    } else if (isFlag('--project-root')) {
+      if (isInline('--project-root')) {
+        options.projectRoot = arg.slice('--project-root='.length);
+      } else {
+        const value = argv[i + 1];
+        if (value === undefined || String(value).startsWith('--')) {
+          throw new UsageError('--project-root 需要一个目录参数');
+        }
+        options.projectRoot = String(value);
+        i += 1;
+      }
+      if (!options.projectRoot) throw new UsageError('--project-root 需要一个目录参数');
     } else if (isFlag('--regression-plan')) {
       if (isInline('--regression-plan')) {
         options.regressionPlan = arg.slice('--regression-plan='.length);

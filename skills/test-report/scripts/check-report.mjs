@@ -19,6 +19,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { computeReportSha256, digestValue, getByPath } from './lib/canonical.mjs';
+import { sha256Hex } from './lib/fingerprint.mjs';
 
 /** 必填字段的类型约束。 */
 const REQUIRED = {
@@ -30,6 +31,7 @@ const REQUIRED = {
   'failures': 'array',
   'evidence': 'object',
   'regression': 'object|null',
+  'redaction': 'object',
   'report_sha256': 'string',
 };
 
@@ -59,6 +61,14 @@ const DIGEST_REQUIRED = [
 
 /** 证据层发现的 kind 枚举。 */
 const FINDING_KINDS = ['missing_evidence', 'evidence_mismatch', 'count_mismatch', 'fingerprint_mismatch'];
+
+/** `evidence.files[]` 每条的**固定** 8 键（多一个少一个都判红）。 */
+const EVIDENCE_FILE_KEYS = [
+  'case_id', 'step', 'path', 'sha256', 'bytes', 'media_type', 'content', 'content_sha256',
+];
+
+/** `redaction` 段的**固定** 3 键。 */
+const REDACTION_KEYS = ['rules_applied', 'redacted_fields', 'redacted_values'];
 
 /** 正文关键数字的标签词表（F4.2）。 */
 const BODY_METRICS = [
@@ -151,6 +161,60 @@ function checkReport(report) {
           problems.push(`evidence.findings[${index}].message 缺失或为空`);
         }
       });
+    }
+    // `evidence.files[]`（REQ-014 F2.2）：**恰好** 8 个键 + 类型 + `content_sha256` 可重算
+    if (!Array.isArray(evidence.files)) {
+      problems.push('evidence.files 不是数组');
+    } else {
+      evidence.files.forEach((file, index) => {
+        if (file === null || typeof file !== 'object' || Array.isArray(file)) {
+          problems.push(`evidence.files[${index}] 不是对象`);
+          return;
+        }
+        const keys = Object.keys(file).sort();
+        const want = EVIDENCE_FILE_KEYS.slice().sort();
+        if (JSON.stringify(keys) !== JSON.stringify(want)) {
+          problems.push(`evidence.files[${index}] 键集不符：实得 [${keys.join(',')}]，期望 [${want.join(',')}]`);
+        }
+        for (const key of ['case_id', 'step', 'path', 'sha256', 'media_type', 'content', 'content_sha256']) {
+          if (typeof file[key] !== 'string') problems.push(`evidence.files[${index}].${key} 缺失或不是 string`);
+        }
+        if (typeof file.bytes !== 'number' || file.bytes < 0) {
+          problems.push(`evidence.files[${index}].bytes 不是非负 number`);
+        }
+        if (typeof file.path === 'string' && (file.path === '' || file.path.startsWith('/'))) {
+          problems.push(`evidence.files[${index}].path 不是相对项目根的路径: ${file.path}`);
+        }
+        if (typeof file.content === 'string' && typeof file.content_sha256 === 'string') {
+          const recomputed = sha256Hex(Buffer.from(file.content, 'utf8'));
+          if (recomputed !== file.content_sha256) {
+            problems.push(`evidence.files[${index}].content_sha256 与 content 重算不符（重算 ${recomputed}）`);
+          }
+        }
+        if (typeof file.sha256 === 'string' && !/^[0-9a-f]{64}$/.test(file.sha256)) {
+          problems.push(`evidence.files[${index}].sha256 不是 64 位十六进制`);
+        }
+      });
+    }
+  }
+  // `redaction` 段（REQ-014 F3.3 / D216）：**恰好** 3 个键，计数如实（非负数）
+  if (typeof report.redaction === 'object' && report.redaction !== null) {
+    const keys = Object.keys(report.redaction).sort();
+    const want = REDACTION_KEYS.slice().sort();
+    if (JSON.stringify(keys) !== JSON.stringify(want)) {
+      problems.push(`redaction 键集不符：实得 [${keys.join(',')}]，期望 [${want.join(',')}]`);
+    }
+    if (!Array.isArray(report.redaction.rules_applied) || report.redaction.rules_applied.length === 0) {
+      problems.push('redaction.rules_applied 不是非空数组');
+    } else {
+      report.redaction.rules_applied.forEach((rule, index) => {
+        if (typeof rule !== 'string' || rule === '') problems.push(`redaction.rules_applied[${index}] 不是非空 string`);
+      });
+    }
+    for (const key of ['redacted_fields', 'redacted_values']) {
+      if (typeof report.redaction[key] !== 'number' || report.redaction[key] < 0) {
+        problems.push(`redaction.${key} 不是非负 number`);
+      }
     }
   }
   if (report.regression !== null && typeof report.regression === 'object') {

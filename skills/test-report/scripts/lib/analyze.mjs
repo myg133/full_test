@@ -16,6 +16,8 @@ import path from 'node:path';
 import { fingerprintFile, resultsFingerprint, evidenceManifestFingerprint } from './fingerprint.mjs';
 import { computeReportSha256 } from './canonical.mjs';
 import { isPlainObject } from './artifacts.mjs';
+import { buildEvidenceFiles } from './evidence-inline.mjs';
+import { relativeToRoot } from './project-root.mjs';
 
 /** meta.json 的五个计数字段 → 报告 cases 段的对应键。 */
 const COUNT_FIELDS = [
@@ -241,11 +243,18 @@ export function deriveVerdict(counts, evidence, regression) {
 
 /**
  * 组装报告对象。
- * @param {{dir: string, meta: object, results: object[], plan: object|null, planPath: string|null, generatedAt: string}} input 输入
+ *
+ * ⚠️ 顺序（REQ-014 F1.2.2 / F2 / F3）：
+ *   1. 计数、指纹、证据实查（**不脱敏** —— 脱敏不得影响证据层判定，F4.2）；
+ *   2. 内联证据内容（已脱敏）；
+ *   3. 报告正文脱敏（绝对路径 → 相对项目根；敏感字段名 / 值模式 → 占位符）；
+ *   4. 脱敏自陈（`redaction` 段，**如实**计数）；
+ *   5. 重算 `report_sha256`（新增了字段 ⇒ 必须重算）。
+ * @param {{dir: string, meta: object, results: object[], plan: object|null, planPath: string|null, generatedAt: string, projectRoot: string, redactor: object}} input 输入
  * @returns {object} 报告对象
  */
 export function buildReport(input) {
-  const { dir, meta, results, plan, planPath, generatedAt } = input;
+  const { dir, meta, results, plan, planPath, generatedAt, projectRoot, redactor } = input;
   const counts = recountCases(results);
   const durationTotal = results.reduce((sum, entry) => {
     const value = isPlainObject(entry) ? Number(entry.duration_ms) : NaN;
@@ -285,7 +294,8 @@ export function buildReport(input) {
     schema_version: 1,
     generated_at: generatedAt,
     source: {
-      artifacts: dir,
+      // ⚠️ 相对**项目根**（F3.2）：报告里不许出现本机绝对路径。
+      artifacts: relativeToRoot(projectRoot, dir),
       run_id: sourceString(meta, 'run_id'),
       suite: sourceString(meta, 'suite'),
       requirement: sourceString(meta, 'requirement'),
@@ -294,7 +304,7 @@ export function buildReport(input) {
       finished_at: sourceString(meta, 'finished_at'),
       results_sha256: recomputedResults,
       evidence_manifest_sha256: recomputedManifest,
-      regression_plan: planPath,
+      regression_plan: planPath === null || planPath === undefined ? null : relativeToRoot(projectRoot, planPath),
     },
     cases: {
       total: counts.total,
@@ -310,6 +320,29 @@ export function buildReport(input) {
     regression,
     report_sha256: '',
   };
+
+  // ---- 证据内容内联（F2）：实查存在的每一份证据文件一条（**含 passed / skipped 用例的**）
+  report.evidence.files = buildEvidenceFiles({ results, runDir: dir, projectRoot, redactor });
+
+  // ---- 报告正文脱敏（F3）：作用在**所有来自产物的文本**上
+  //     ⚠️ `evidence.files[].content` 在内联时**已经**脱敏过 ⇒ 这里跳过（不重复处理）。
+  const skipContent = new Set(['content']);
+  report.source = redactor.redactNode(report.source);
+  report.cases = redactor.redactNode(report.cases);
+  report.verdict = redactor.redactNode(report.verdict);
+  report.failures = redactor.redactNode(report.failures);
+  report.regression = redactor.redactNode(report.regression);
+  report.evidence.findings = redactor.redactNode(report.evidence.findings);
+  report.evidence.missing_paths = redactor.redactNode(report.evidence.missing_paths);
+  report.evidence.files = report.evidence.files.map((file) => redactor.redactNode(file, { skipKeys: skipContent }));
+
+  // ---- 脱敏自陈（F3.3 / D216）：**如实**计数，不虚报
+  report.redaction = {
+    rules_applied: redactor.rulesApplied(),
+    redacted_fields: redactor.stats.fields,
+    redacted_values: redactor.stats.values,
+  };
+
   report.report_sha256 = computeReportSha256(report);
   return report;
 }

@@ -33,6 +33,8 @@ const DIGEST_KEYS = [
   'source.evidence_manifest_sha256',
   'evidence.files_present',
   'evidence.files_missing',
+  'redaction.redacted_fields',
+  'redaction.redacted_values',
   'regression.selected_planned',
   'regression.selected_executed',
   'regression.selected_missing',
@@ -176,6 +178,58 @@ function renderRegression(regression, needsReviewCaseIds) {
 }
 
 /**
+ * 渲染内联的证据内容段（REQ-014 F2 / F4.1）。
+ *
+ * ⚠️ md 里**内联证据内容**（不只是列文件名）—— 只读 md 就能读到证据原文。
+ * @param {object[]} files `evidence.files[]`
+ * @returns {string[]} 文本行
+ */
+function renderEvidenceContents(files) {
+  const lines = [];
+  lines.push('> 每份证据的**内容**已内联在本报告里 —— 只读本文件即可读到证据原文，不必回到产物目录。', '');
+  lines.push('> `sha256` 是**原文件**的字节指纹（实算）；`content_sha256` 是**内联内容**（脱敏后）的指纹。', '');
+  lines.push('> 两者**不等**是因为展示层做了脱敏（敏感字段名 / 凭证字面量被替换成占位符），**不是**证据被改过；', '');
+  lines.push('> 证据层判定用的仍是原文件的实查指纹。内容若完全不含敏感内容，两者**严格相等**。', '');
+  if (!Array.isArray(files) || files.length === 0) {
+    lines.push('（本次没有可内联的证据文件）', '');
+    return lines;
+  }
+  for (const file of files) {
+    lines.push(`### ${file.case_id} · ${file.path}`, '');
+    lines.push(`- 原文件指纹（sha256）：\`${file.sha256}\``);
+    lines.push(`- 内联内容指纹（content_sha256）：\`${file.content_sha256}\``);
+    lines.push(`- 字节数：${file.bytes}`);
+    lines.push(`- 媒体类型：${file.media_type}`);
+    lines.push('');
+    lines.push('```');
+    lines.push(file.content.endsWith('\n') ? file.content.slice(0, -1) : file.content);
+    lines.push('```', '');
+  }
+  return lines;
+}
+
+/**
+ * 渲染脱敏自陈段（REQ-014 F3.3 / D216）。
+ * @param {object|null} redaction 报告的 `redaction` 段
+ * @returns {string[]} 文本行
+ */
+function renderRedaction(redaction) {
+  const lines = [];
+  lines.push('### 脱敏自陈（report.json 的 redaction 段）', '');
+  if (!redaction || typeof redaction !== 'object') {
+    lines.push('（本报告没有 redaction 段）', '');
+    return lines;
+  }
+  const rules = Array.isArray(redaction.rules_applied) ? redaction.rules_applied : [];
+  lines.push(`- 启用的规则：${rules.length === 0 ? '（无）' : rules.map((rule) => `\`${rule}\``).join('、')}`);
+  lines.push(`- 敏感字段名替换次数（redacted_fields）：${redaction.redacted_fields}`);
+  lines.push(`- 值模式与绝对路径替换次数（redacted_values）：${redaction.redacted_values}`);
+  lines.push('- 被测目标的地址、端口与业务账号**逐字保留**（它们是被测对象标识，不是凭证）。');
+  lines.push('');
+  return lines;
+}
+
+/**
  * 渲染完整的 markdown 报告。
  * @param {object} report 报告对象
  * @param {{needsReviewCaseIds?: string[]}} [options] 附加渲染输入（待复核用例 id —— 供 md 点名用）
@@ -183,8 +237,20 @@ function renderRegression(regression, needsReviewCaseIds) {
  */
 export function renderMarkdown(report, options = {}) {
   const { source, cases, verdict, failures, evidence, regression } = report;
+  const redaction = report.redaction && typeof report.redaction === 'object' ? report.redaction : null;
+  const files = evidence && Array.isArray(evidence.files) ? evidence.files : [];
   const needsReviewCaseIds = Array.isArray(options.needsReviewCaseIds) ? options.needsReviewCaseIds : [];
   const lines = [];
+  const NUMERALS = ['一', '二', '三', '四', '五', '六', '七', '八'];
+  let sectionNo = 0;
+  /**
+   * 取下一个章节序号。
+   * @returns {string} 中文序号
+   */
+  const nextNo = () => {
+    sectionNo += 1;
+    return NUMERALS[sectionNo - 1];
+  };
   lines.push('# 执行报告', '');
   lines.push(`- 运行标识：${source.run_id}`);
   lines.push(`- 套件标识：${source.suite}`);
@@ -198,7 +264,7 @@ export function renderMarkdown(report, options = {}) {
   lines.push(renderDigest(report));
   lines.push('');
 
-  lines.push('## 一、三层结论', '');
+  lines.push(`## ${nextNo()}、三层结论`, '');
   lines.push('| 层 | 结论 | 说明 |');
   lines.push('|---|---|---|');
   lines.push(`| 用例层 | ${verdict.case_layer} | ${caseLayerNote(cases)} |`);
@@ -207,7 +273,7 @@ export function renderMarkdown(report, options = {}) {
   lines.push(`| 总体结论 | ${verdict.overall} | 任一层不过，总体结论就不为通过 |`);
   lines.push('');
 
-  lines.push('## 二、用例计数', '');
+  lines.push(`## ${nextNo()}、用例计数`, '');
   lines.push('| 指标 | 数值 |');
   lines.push('|---|---|');
   lines.push(`| 用例总数 | ${cases.total} |`);
@@ -218,13 +284,14 @@ export function renderMarkdown(report, options = {}) {
   lines.push(`| 用例总耗时 | ${cases.duration_ms_total} 毫秒 |`);
   lines.push('');
 
-  lines.push('## 三、失败与阻塞用例', '');
+  lines.push(`## ${nextNo()}、失败与阻塞用例`, '');
   for (const line of renderFailures(failures)) lines.push(line);
 
-  lines.push('## 四、证据链核查', '');
+  lines.push(`## ${nextNo()}、证据链核查`, '');
   lines.push(`- 实查证据条目：${countClaimedEvidence(report)} 份`);
   lines.push(`- 实存证据文件：${evidence.files_present} 份`);
   lines.push(`- 缺失证据文件：${evidence.files_missing} 份`);
+  lines.push(`- 内联证据文件：${files.length} 份`);
   if (evidence.missing_paths.length === 0) {
     lines.push('- 缺失路径：（无）');
   } else {
@@ -244,12 +311,16 @@ export function renderMarkdown(report, options = {}) {
     lines.push('');
   }
 
+  lines.push(`## ${nextNo()}、证据内容（已内联，脱敏后）`, '');
+  for (const line of renderEvidenceContents(files)) lines.push(line);
+  for (const line of renderRedaction(redaction)) lines.push(line);
+
   if (regression !== null) {
-    lines.push('## 五、计划对账', '');
+    lines.push(`## ${nextNo()}、计划对账`, '');
     for (const line of renderRegression(regression, needsReviewCaseIds)) lines.push(line);
   }
 
-  lines.push(`## ${regression !== null ? '六' : '五'}、指纹`, '');
+  lines.push(`## ${nextNo()}、指纹`, '');
   lines.push(`- 输入 results_sha256：${source.results_sha256}`);
   lines.push(`- 输入 evidence_manifest_sha256：${source.evidence_manifest_sha256}`);
   lines.push(`- 报告 report_sha256：${report.report_sha256}`);
