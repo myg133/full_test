@@ -239,14 +239,20 @@ function write(file, text) {
 
 // ---------------------------------------------------------------- 证据内容（§0.3）
 
-// TC-001：passed，**完全无敏感内容** ⇒ 验证「脱敏器不误伤」
+// TC-001：passed，**无敏感内容** ⇒ 验证「脱敏器不误伤」+ **验证追踪标识豁免（D219）**
+// ⚠️ 故意放 32 位 hex（x-trace-id / trace_id / items[].id）：它们是业务标识，**不是**凭证，
+//    按 D219 必须原样保留 ⇒ 抹掉就判红（AC-011 + AC-013 双向探针）。
 const EV_TC001 = `${JSON.stringify({
   driver: 'api',
   request: { method: 'GET', path: '/api/v1/items', url: 'http://10.0.0.9:8080/api/v1/items', auth_mode: 'none' },
   response: {
     status_code: 200,
-    headers: { 'content-type': 'application/json' },
-    body: { code: 'OK', items: [{ id: 'i-1', name: '样例' }] },
+    headers: { 'content-type': 'application/json', 'x-trace-id': '0123456789abcdef0123456789abcdef' },
+    body: {
+      code: 'OK',
+      trace_id: '0123456789abcdef0123456789abcdef',
+      items: [{ id: 'fedcba9876543210fedcba9876543210', name: '样例' }],
+    },
   },
 }, null, 2)}\n`;
 
@@ -279,6 +285,9 @@ const EV_TC003 = `${JSON.stringify({
       access_token: 'tok_live_ABCDEF0123456789ABCDEF0123456789',
       must_change_password: 'PlainTextPwd123',
       env_hint: 'DEMO_TEST_TOKEN',
+      // ⚠️ **非豁免键**下的 32 位 hex ⇒ 属「疑似凭证」⇒ **必须被脱敏**（AC-014 的牙齿；
+      //    与 TC-001 豁免键下的同类 hex 形成对照 ⇒ 证明豁免不是「一律放过长 hex」）。
+      cache_key: 'aaaabbbbccccddddaaaabbbbccccdddd',
     },
   },
 }, null, 2)}\n`;
@@ -294,7 +303,15 @@ const EV_TC004 = `${JSON.stringify({
 const EV_NP001 = `${JSON.stringify({
   driver: 'api',
   request: { method: 'GET', path: '/api/v1/items', url: 'http://10.0.0.9:8080/api/v1/items', auth_mode: 'none' },
-  response: { status_code: 200, headers: { 'content-type': 'application/json' }, body: { code: 'OK', items: [{ id: 'i-1', name: '样例' }] } },
+  response: {
+    status_code: 200,
+    headers: { 'content-type': 'application/json', 'x-trace-id': '0123456789abcdef0123456789abcdef' },
+    body: {
+      code: 'OK',
+      trace_id: '0123456789abcdef0123456789abcdef',
+      items: [{ id: 'fedcba9876543210fedcba9876543210', name: '样例' }],
+    },
+  },
 }, null, 2)}\n`;
 const EV_NP002 = `${JSON.stringify({
   driver: 'api',
@@ -464,6 +481,8 @@ const truth = {
   placeholder_secret: '[REDACTED:secret]',
   business_permission: 'page.secrets.view',
   env_hint: 'DEMO_TEST_TOKEN',
+  trace_hex: '0123456789abcdef0123456789abcdef',
+  id_hex: 'fedcba9876543210fedcba9876543210',
   artifact_rel: '.test-artifacts/run-demo-0001',
   evidence: a.evidenceEntries.map((e) => ({
     case_id: e.case_id,
@@ -826,6 +845,24 @@ if (ctx.scenario === 'A') {
       reasons.push(`md 里没有 ${truth.env_hint}（环境变量引用被过度脱敏了）`);
     }
   }
+  // ⚠️ D219 追踪/业务标识豁免：TC-001 的三个 32 位 hex 必须逐字保留
+  const tc001 = parsed.get('TC-001');
+  if (!tc001 || !tc001.response) {
+    reasons.push('TC-001 的证据内容解析不出来');
+  } else {
+    const hdr = tc001.response.headers || {};
+    const body = tc001.response.body || {};
+    const item0 = Array.isArray(body.items) && body.items.length > 0 ? body.items[0] : {};
+    if (hdr['x-trace-id'] !== truth.trace_hex) {
+      reasons.push(`TC-001 的 headers.x-trace-id=${JSON.stringify(hdr['x-trace-id'])}，期望逐字保留 ${truth.trace_hex}（D219 豁免）`);
+    }
+    if (body.trace_id !== truth.trace_hex) {
+      reasons.push(`TC-001 的 body.trace_id=${JSON.stringify(body.trace_id)}，期望逐字保留 ${truth.trace_hex}（D219 豁免）`);
+    }
+    if (item0.id !== truth.id_hex) {
+      reasons.push(`TC-001 的 body.items[0].id=${JSON.stringify(item0.id)}，期望逐字保留 ${truth.id_hex}（D219 豁免）`);
+    }
+  }
   verdict('AC-013', reasons.length === 0, reasons);
 }
 
@@ -845,6 +882,24 @@ if (ctx.scenario === 'A') {
     }
   };
   collect(report);
+  // ⚠️ D219：追踪 / 业务标识**豁免**（trace_id / x-trace-id / id / uuid …）下的值
+  //    也算合法 —— 否则 AC-014 与 D219 互相矛盾（豁免要保留，AC-014 却要抹）。
+  const EXEMPT_KEY = /^(?:trace[_-]?id|x-trace-id|request[_-]?id|x-request-id|span[_-]?id|correlation[_-]?id|id|uuid)$/i;
+  const collectExempt = (node) => {
+    if (Array.isArray(node)) { for (const x of node) collectExempt(x); return; }
+    if (!node || typeof node !== 'object') return;
+    for (const [k, v] of Object.entries(node)) {
+      if (EXEMPT_KEY.test(k) && typeof v === 'string') allowed.add(v);
+      else collectExempt(v);
+    }
+  };
+  collectExempt(report);
+  // 内联证据的 content 是 JSON **文本** ⇒ 也要解析后收集豁免值
+  const files = report && report.evidence && Array.isArray(report.evidence.files) ? report.evidence.files : [];
+  for (const e of files) {
+    if (!e || typeof e.content !== 'string') continue;
+    try { collectExempt(JSON.parse(e.content)); } catch { /* 不是 JSON 就跳过 */ }
+  }
   const hexRe = /(?<![0-9a-fA-F])[0-9a-fA-F]{32,}(?![0-9a-fA-F])/g;
   const hits = combined.match(hexRe) || [];
   for (const h of hits) {
@@ -1018,6 +1073,7 @@ cat > "$WORK/mutant-shim.mjs" <<'FIXMUT'
 //   M5_abs_path    source.artifacts 保留绝对路径
 //   M6_no_redact   明文口令不脱敏
 //   M7_over_redact 脱敏器误伤（把业务权限点 / 环境变量引用也抹掉）
+//   M8_no_exempt  D219 豁免不生效（把追踪/业务标识的 32 位 hex 也当凭证抹掉）
 //   M0_neg        **负控**：顶层加一个无害字段（打不到任何判据）
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -1124,6 +1180,17 @@ try {
         .split('page.secrets.manage').join('[REDACTED:field]')
         .split('DEMO_TEST_TOKEN').join('[REDACTED:field]');
       fs.writeFileSync(reportMd, md, 'utf8');
+    }
+  }
+
+  if (TAG === 'M8_no_exempt') {
+    // D219 豁免不生效：把追踪/业务标识的 32 位 hex 也当凭证抹掉
+    textModified = true;
+    const text = fs.readFileSync(reportJson, 'utf8');
+    fs.writeFileSync(reportJson, text.split('0123456789abcdef0123456789abcdef').join('[REDACTED:secret]'), 'utf8');
+    if (fs.existsSync(reportMd)) {
+      const md = fs.readFileSync(reportMd, 'utf8');
+      fs.writeFileSync(reportMd, md.split('0123456789abcdef0123456789abcdef').join('[REDACTED:secret]'), 'utf8');
     }
   }
 
@@ -1384,6 +1451,7 @@ M4_bad_hash|AC-007
 M5_abs_path|AC-015
 M6_no_redact|AC-012
 M7_over_redact|AC-013
+M8_no_exempt|AC-011
 M0_neg|(负控)"
 
   while IFS='|' read -r tag target; do

@@ -2,7 +2,7 @@
 
 > **契约**：`BA/demands/REQ-002-suite-foundation/REQ-014-report-submittable/`
 > （`demand.md` / `acceptance.md`（20 条判据）/ `decisions.md`（D211~D218）/ `verify-acceptance.sh`）
-> **验收门 sha256**：`d07e810e904f7ad30c0fc567039881ea45e175936f342449069ab01e70142091`
+> **验收门 sha256**：`ecea18ed6c7e02187749e0a3ff8a84c8df911f5ecff0f6f515435755762cf871`
 > **被验包根**：你的 worktree 根（`skills/` `bin/` `README.md` `LICENSE` `package.json` `feature-meta/`）
 
 ---
@@ -35,6 +35,18 @@
 | ① | **输出位置**：默认输出到 `<项目根>/reports/<run_id>/`；`--project-root` 显式指定；从 run_dir 形态 `<root>/.test-artifacts/<id>` 反推；两条都不成立 ⇒ **报错退出 rc=1 并点名 `--project-root`（不许猜）**；`--out-dir` 仍能完全覆盖 | AC-001~AC-005 |
 | ② | **证据内联**：`report.json` 新增 `evidence.files[]`，每条 **8 个键**（`case_id`/`step`/`path`/`sha256`/`bytes`/`media_type`/`content`/`content_sha256`）；`content` = **脱敏后的原始文本**（不是解析后对象）；`path` **相对项目根**；`sha256` 是**实算**的原文件指纹；md 里也要**内联内容** | AC-006~AC-011 |
 | ③ | **一律脱敏**：敏感**字段名**整值替换 → `[REDACTED:field]`；**值模式**（内嵌 JSON 口令 / `Bearer xxx` / `user:pass@` / 长 hex）→ `[REDACTED:secret]`；**绝对路径** → 相对项目根；报告新增 `redaction` 段（`rules_applied` / `redacted_fields` / `redacted_values`）**如实计数** | AC-012~AC-017 |
+
+⚠️ **③ 里有一条「不脱敏」的例外（D219，务必实现）**：
+**追踪 / 业务标识豁免名单** —— `trace_id` / `x-trace-id` / `request_id` / `x-request-id` /
+`span_id` / `correlation_id` / `id` / `uuid` 这些**键名**下的值**原样保留**，不参与任何脱敏规则。
+
+**理由（真实数据实测，不是拍脑袋）**：用户 YF-test 的 58 份证据里，32 位 hex 出现的键**全是业务标识**
+—— `x-trace-id` 58 份 / `trace_id` 27 份 / `items[].id` 16 份 / `id` 4 份，**没有一条是真凭证**。
+抹掉 `trace_id` 会让报告失去查后端日志的能力；而且「长得像 hash」**不是**可靠的凭证信号
+（业务 id 与 token 同形）。真凭证的可靠信号是**键名**（token/secret/key/password）、`Bearer` 形态、
+URL userinfo 形态 —— 这三条由 ① 覆盖。
+
+⇒ 实测（加豁免后）：58/58 证据**逐字未变**，唯一的替换就是那个明文口令。
 
 ### 2.2 两条最容易做错的
 
@@ -74,6 +86,7 @@
 | D216 | `redaction` 计数**如实**填；产物无敏感内容时写 0，**不许虚报** |
 | D217 | **不改 `test-execute`**（根因在产物生成侧，已登记遗留项 L-01）；报告侧做纵深防御 |
 | D218 | **不跨 skill import** —— 脱敏器在 `test-report` 内**自包含**实现（REQ-010 的 AC-026 硬判据：相对 import 只许指向本 skill 内） |
+| D219 | **追踪 / 业务标识豁免名单**（**新增**）—— `trace_id` / `x-trace-id` / `request_id` / `x-request-id` / `span_id` / `correlation_id` / `id` / `uuid` 这些**键名**下的值**原样保留**，不参与任何脱敏规则。**理由（真实数据实测）**：用户 58 份证据里 32 位 hex 出现的键**全是业务标识**，抹掉 `trace_id` 会让报告失去查后端日志的能力 |
 
 ---
 
@@ -106,7 +119,7 @@ cd <worktree>/skills/test-report && node scripts/selftest-<你的名字>.mjs
 
 # ② 验收门（快跑）
 G=/home/myg133/Projects/full_test/BA/demands/REQ-002-suite-foundation/REQ-014-report-submittable/verify-acceptance.sh
-export QA014_SCRIPT_SHA=d07e810e904f7ad30c0fc567039881ea45e175936f342449069ab01e70142091
+export QA014_SCRIPT_SHA=ecea18ed6c7e02187749e0a3ff8a84c8df911f5ecff0f6f515435755762cf871
 export QA014_WORK_ROOT=~/.local/share/mavis-data/tmp/req014/dev-quick
 export REQ014_NO_MUT=1
 bash "$G" <你的 worktree 根>
@@ -117,7 +130,7 @@ unset REQ014_NO_MUT
 bash "$G" <你的 worktree 根>
 ```
 
-**门的目标数字**：**20 PASS / 0 FAIL / 0 不可判定** + 变异体 **7/7 检出** + **负控未检出**。
+**门的目标数字**：**20 PASS / 0 FAIL / 0 不可判定** + 变异体 **8/8 检出** + **负控未检出**。
 
 ⚠️ **不要用旧 sha**：门改过（自测时修了 5 处门侧缺陷），以本派单里的 sha 为准。
 门 sha 不匹配 ⇒ 门直接判红并中止（这是设计，不是 bug）。

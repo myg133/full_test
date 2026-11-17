@@ -60,15 +60,24 @@ $FX/                                  ← 项目根
 
 ### §0.3 四份证据文件的内容（**这是本 REQ 的核心夹具**）
 
-**TC-001（passed，无敏感内容）** —— 验证「脱敏器不误伤」：
+**TC-001（passed，无敏感内容）** —— 验证「脱敏器不误伤」+ **验证追踪标识豁免（D219）**：
 
 ```json
 {
   "driver": "api",
   "request": {"method": "GET", "path": "/api/v1/items", "url": "http://10.0.0.9:8080/api/v1/items", "auth_mode": "none"},
-  "response": {"status_code": 200, "headers": {"content-type": "application/json"}, "body": {"code": "OK", "items": [{"id": "i-1", "name": "样例"}]}}
+  "response": {
+    "status_code": 200,
+    "headers": {"content-type": "application/json", "x-trace-id": "0123456789abcdef0123456789abcdef"},
+    "body": {"code": "OK", "trace_id": "0123456789abcdef0123456789abcdef", "items": [{"id": "fedcba9876543210fedcba9876543210", "name": "样例"}]}
+  }
 }
 ```
+
+⚠️ **这里故意放了 32 位 hex**（`x-trace-id` / `trace_id` / `items[].id` 三处）：
+它们**不是**凭证（真实数据实测：业务标识全是这个形态），按 D219 **必须原样保留**。
+⇒ 若实现把它们当凭证抹掉，**AC-011 判红**（`content_sha256 != sha256`）**且** AC-013 判红
+（`trace_id` 没逐字保留）—— 这两条构成该豁免的**双向探针**。
 
 **TC-002（failed，含内嵌明文口令）** —— 验证「值模式能兜住口令」：
 
@@ -95,7 +104,7 @@ $FX/                                  ← 项目根
 }
 ```
 
-**TC-003（blocked，含敏感字段名 + 环境变量引用）** —— 验证「R1 换值但不动业务权限点 / 环境变量引用」：
+**TC-003（blocked，含敏感字段名 + 环境变量引用 + 非豁免键下的长 hex）** —— 验证「R1 换值但不动业务权限点 / 环境变量引用」**且**「非豁免键下的长 hex 仍被脱敏」：
 
 ```json
 {
@@ -113,11 +122,16 @@ $FX/                                  ← 项目根
       "code": "DEPENDENCY_UNAVAILABLE",
       "access_token": "tok_live_ABCDEF0123456789ABCDEF0123456789",
       "must_change_password": "PlainTextPwd123",
-      "env_hint": "DEMO_TEST_TOKEN"
+      "env_hint": "DEMO_TEST_TOKEN",
+      "cache_key": "aaaabbbbccccddddaaaabbbbccccdddd"
     }
   }
 }
 ```
+
+⚠️ `cache_key` 是**非豁免键**下的 32 位 hex ⇒ 属「疑似凭证」⇒ **必须被脱敏**（AC-014）；
+而 TC-001 豁免键下的同类 hex **必须保留**（AC-013）—— 两者形成对照，
+证明「豁免是**按键名**的，不是「一律放过长 hex」。
 
 **TC-004（skipped，完全无敏感内容）** —— 验证「`content_sha256 == sha256`」：
 
@@ -283,11 +297,14 @@ $FX2/ART/                     ← **不在** .test-artifacts/ 下 ⇒ 反推不�
 - **测试步骤**: 解析 `report.json` 里 TC-003 的 `content`（JSON 文本），
   取 `body.access_token` 与 `body.must_change_password` 的值；
   并检查 `body.permissions`（TC-002）与 `body.env_hint`（TC-003）；
-  **另检查 `report.md` 正文**里 `page.secrets.view` 与 `DEMO_TEST_TOKEN` 是否**逐字存在**。
+  **另检查 `report.md` 正文**里 `page.secrets.view` 与 `DEMO_TEST_TOKEN` 是否**逐字存在**；
+  **再检查 TC-001 的 `content`**：其 `response.headers.x-trace-id`、
+  `response.body.trace_id`、`response.body.items[0].id` 三个 32 位 hex 值是否**逐字保留**。
 - **预期结果**: `access_token` 与 `must_change_password` 的值是占位符（**不含**原值）；
   `permissions` 的两个元素**逐字保留**（`page.secrets.view` / `page.secrets.manage`）；
   `env_hint` **逐字保留** `DEMO_TEST_TOKEN`；
-  **md 里这两个值也逐字存在**（只看 json 会漏掉「md 侧过度脱敏」）。
+  **md 里这两个值也逐字存在**（只看 json 会漏掉「md 侧过度脱敏」）；
+  **TC-001 的三个 32 位 hex 逐字保留**（D219 豁免生效；它们是追踪/业务标识，不是凭证）。
 - **判据形式**: 查绝对事实（逐字段取值比对）；探针：让脱敏器按「包含敏感词」替换
   （把 `page.secrets.view` 整个抹掉）⇒ 本条判红
 
@@ -297,8 +314,12 @@ $FX2/ART/                     ← **不在** .test-artifacts/ 下 ⇒ 反推不�
 - **测试步骤**: 在 `report.json` + `report.md` 全文搜索：
   ① `Bearer ` 后跟 ≥16 位 token 形态；② URL 里的 `user:pass@` 形态；
   ③ ≥32 位的连续十六进制串（不含 `sha256` 字段值本身）。
-- **预期结果**: 上述形态 **0 命中**（`sha256` / `content_sha256` 字段值是**指纹**，
-  按 §0.4 口径**豁免**，不得被当成凭证抹掉）。
+  **豁免**：除 `sha256` 字段值外，**豁免键**（`trace_id` / `x-trace-id` / `request_id` /
+  `x-request-id` / `span_id` / `correlation_id` / `id` / `uuid`）下的值**也算合法**（D219）
+  —— 判定时按**结构**收集这些键下的值（内联证据的 `content` 是 JSON 文本，须解析后收集）。
+- **预期结果**: 上述形态 **0 命中**（`sha256` / `content_sha256` 字段值与**豁免键下的值**是合法的，
+  不得被当成凭证抹掉）；夹具里 TC-003 的 `cache_key`（**非豁免键**下的 32 位 hex）
+  **必须已被脱敏**（不得出现在报告里）。
 - **判据形式**: 查绝对事实（正则全文搜索）；探针：让脱敏器把 64 位 sha256 也抹掉 ⇒ 本条判红
 
 ### AC-015: 报告内不含任何绝对路径
