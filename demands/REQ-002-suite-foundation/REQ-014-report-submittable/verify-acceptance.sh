@@ -335,7 +335,8 @@ const EV_NP004 = EV_NP001;
  * @param {string[]} missingIds 声称有但文件故意缺失的 case_id
  * @returns {object} {meta, results, evidenceEntries}
  */
-function buildRun(runDir, runId, evMap, missingIds) {
+function buildRun(runDir, runId, evMap, missingIds, opts = {}) {
+  const negative = opts.negative === true;
   const evidenceEntries = [];
   const caseIds = ['TC-001', 'TC-002', 'TC-003', 'TC-004', 'TC-005'];
   const statusOf = {
@@ -354,11 +355,20 @@ function buildRun(runDir, runId, evMap, missingIds) {
     'TC-004': null,
     'TC-005': { type: 'assertion_failed', message: '产物缺证据' },
   };
+  // ⚠️ D220：负控夹具（§0.6）声明「所有内容均无敏感串」⇒ `reproduction.command` 里
+  //    **不得**出现敏感字段名（`password` 等）与内嵌明文口令。
+  //    原实现三份夹具硬编码了**同一条**带 `"password":"PlainTextPwd123"` 的 command
+  //    ⇒ 负控产物其实含敏感串，「脱敏器不凭空替换」这条判据根本无法成立
+  //    （且判定类型写错 ⇒ 该分支永不触发）。
+  //    按 §0.6 原文「口令改成 not-a-secret」保留一个**无害的**口令形态值，
+  //    但键名不是敏感字段名（`passwd_hint`）⇒ R1/R2 都不命中。
   const reproOf = {
     'TC-001': null,
     'TC-002': {
       steps: ['POST /api/v1/login'],
-      command: 'curl -X POST \'http://10.0.0.9:8080/api/v1/login\' -d \'{"username":"demo.user","password":"PlainTextPwd123","remember":false}\'',
+      command: negative
+        ? 'curl -X POST \'http://10.0.0.9:8080/api/v1/login\' -d \'{"username":"demo.user","passwd_hint":"not-a-secret","remember":false}\''
+        : 'curl -X POST \'http://10.0.0.9:8080/api/v1/login\' -d \'{"username":"demo.user","password":"PlainTextPwd123","remember":false}\'',
       expected: null,
     },
     'TC-003': null, 'TC-004': null, 'TC-005': null,
@@ -464,7 +474,7 @@ const b = buildRun(runB, 'run-demo-0002', {
 const runC = path.join(TPL3, '.test-artifacts', 'run-demo-0003');
 const c = buildRun(runC, 'run-demo-0003', {
   'TC-001': EV_NP001, 'TC-002': EV_NP002, 'TC-003': EV_NP003, 'TC-004': EV_NP004,
-}, ['TC-005']);
+}, ['TC-005'], { negative: true });
 
 // ---------------------------------------------------------------- 真值
 
@@ -894,6 +904,27 @@ if (ctx.scenario === 'A') {
     }
   };
   collectExempt(report);
+  // ⚠️ D222：本报告**自身算出的指纹**（findings 消息里会引用「meta.json 记 X，重算为 Y」）
+  //    也是**合法**的长 hex —— 否则 AC-014 与 D221 互相矛盾（D221 要保留指纹，AC-014 却要抹）。
+  //    口径：**从产物侧独立取**（读 meta.json / results.json，不抄报告里的值 ⇒ 判据保持独立），
+  //    再加上**实存证据文件**的字节指纹（实现里 evidence.files[].sha256 是实算的）。
+  const artDir = ctx.artifact_dir;
+  try {
+    const addHex = (v) => { if (typeof v === 'string' && /^[0-9a-f]{32,}$/i.test(v)) allowed.add(v); };
+    const metaRaw = JSON.parse(fs.readFileSync(path.join(artDir, 'meta.json'), 'utf8'));
+    addHex(metaRaw.results_sha256);
+    addHex(metaRaw.evidence_manifest_sha256);
+    const resRaw = JSON.parse(fs.readFileSync(path.join(artDir, 'results.json'), 'utf8'));
+    for (const e of resRaw) {
+      const ev = e && Array.isArray(e.evidence) ? e.evidence : [];
+      for (const it of ev) {
+        if (!it || typeof it.path !== 'string') continue;
+        addHex(it.sha256);
+        const abs = path.join(artDir, it.path);
+        if (fs.existsSync(abs) && fs.statSync(abs).isFile()) allowed.add(sha(fs.readFileSync(abs)));
+      }
+    }
+  } catch { /* 产物读不到就不补白名单，判据照常执行 */ }
   // 内联证据的 content 是 JSON **文本** ⇒ 也要解析后收集豁免值
   const files = report && report.evidence && Array.isArray(report.evidence.files) ? report.evidence.files : [];
   for (const e of files) {
@@ -967,7 +998,9 @@ if (ctx.scenario === 'A') {
     if (!combined.includes(truth.placeholder_secret)) {
       reasons.push(`报告里没有 ${truth.placeholder_secret}（值模式规则没生效 —— 内嵌明文口令只可能被值模式抓住）`);
     }
-    if (ctx.neg_redaction_zero === false) {
+    // ⚠️ D220：`ctx.neg_redaction_zero` 是**字符串**（'true' / 'false' / 'missing'）——
+    //    原判定写成 `=== false`（布尔）⇒ 该分支**永不触发**（形同虚设的判据，D45/D71）。
+    if (ctx.neg_redaction_zero === 'false') {
       reasons.push('负控夹具（全部无敏感串）仍报了非零替换计数 ⇒ 脱敏器凭空替换');
     } else if (ctx.neg_redaction_zero === 'missing') {
       reasons.push('负控夹具（全部无敏感串）没有 redaction 段 ⇒ 脱敏段缺失');
