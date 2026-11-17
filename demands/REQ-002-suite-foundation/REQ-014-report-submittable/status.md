@@ -136,11 +136,47 @@ AC-014 保住「疑似凭证必被抹」的牙齿，且与 D219 形成对照。
 
 ---
 
-## §5 待办
+### 4.9 验收阶段又抓到 **2 处门侧缺陷**（第 7/8 处）⇒ 并逼出**真实实现缺陷 D221**
+
+| # | 缺陷 | 后果 | 修法 |
+|---|---|---|---|
+| 7 | **负控判定写成了布尔比较**：`ctx.neg_redaction_zero` 是**字符串**（`'true'`/`'false'`/`'missing'`），判定却写成 `=== false` | 该分支**永不触发** ⇒ 一条**形同虚设**的判据（违反 D45/D71） | 改为 `=== 'false'` |
+| 8 | **负控夹具其实含明文口令**：`buildRun` 对三份产物硬编码了同一条带 `"password":"PlainTextPwd123"` 的 `reproduction.command` | 与 §0.6「所有内容均无敏感串」矛盾 ⇒ 「脱敏器不得凭空替换」这条判据根本无法成立 | 负控夹具改用 `{"username":"demo.user","passwd_hint":"not-a-secret",…}`（保留无害的口令形态值，**键名不是敏感字段名**）|
+
+⚠️ **第 8 处修好后，负控场景立刻转红** ⇒ 抓出**真实实现缺陷 D221**：
+`redacted_values:4`，4 处替换全部落在证据层 `findings[].message` 的**消息文本**里
+（「meta.json 记 `<sha>`，从 results.json 重算为 `<sha>`」）
+⇒ **报告自己算出的 sha256 指纹被「长 hex」规则当凭证抹掉**（键级豁免对自由文本无效）
+⇒ 对账信息全丢。已派 Dev 整改（`a8d7e7d`），并连带补 AC-014 的白名单（D222）。
+
+**门 sha 历史**（如实登记，原值不改写）：
+`ecea18ed6c7e02187749e0a3ff8a84c8df911f5ecff0f6f515435755762cf871`
+⇒ **`63e8ed8a4884ad95c924dd8675113c568475660fe93667053c7a17c99da55959`**（D220 + D222 后）
+
+---
+
+## §5 需求方独立验收（2026-11-17，全部由需求方自己跑）
+
+| 项 | 结果 |
+|---|---|
+| REQ-014 门**完整模式**（sha `63e8ed8a…`） | **20 PASS / 0 FAIL / 0 不可判定** · 变异体 **8/8 检出** · 负控**未检出** · **0 逃逸** · rc=0 |
+| REQ-010 门**完整模式**（sha `d5ca1ca8…`） | **29 PASS / 0 FAIL** · 基线全绿 · 变异体 4/4 · rc=0 |
+| 组合门 `bin/test-agent-skills.mjs verify` | 8 skill 装齐 · 依赖图通过 · **6 场景全过** · rc=0 |
+| 单元自测 `selftest-report-submittable.mjs` | **53 PASS / 0 FAIL** |
+| **真实 `YF-test` 产物重跑**（用户自己的 58 份证据） | **58/58 内联** · **58/58 `content_sha256 == sha256`** · `content_sha256` 可从 `content` 重算 · `sha256` 与真实文件指纹一致 · **明文口令 0 命中** · **本机绝对路径 0 命中** · Bearer / user:pass@ 各 0 命中 · `trace_id`/`x-trace-id` 保留（62 / 116 处）· `redaction` 如实计数（fields=0 / values=1，唯一一次替换是 `reproduction.command` 里的口令）· 报告体积 json 120KB / md 97KB |
+
+**验收期间修掉的自己的问题**：REQ-010 门首跑 28 PASS / 1 FAIL（唯一红 = AC-028）
+—— 根因是**认领副作用**（BA 分配 REQ-014 时把根 `feature-meta/manifest.json` 从 REQ-006 改写成 REQ-014）
+⇒ 已用 `a2b5c83` 还原 ⇒ 重跑 29/0。
+
+---
+
+## §6 待办
 
 - [x] 契约（demand / acceptance / decisions / DEV-BRIEF）
 - [x] 门 + D65 自测
-- [ ] **Dev 实现**（feature/REQ-014 worktree）
-- [ ] **REQ-010 的 AC-025 ① 同步改**（契约 + 门）⇒ 门 sha 变化如实登记 + 重跑 REQ-010 完整门
-- [ ] 需求方独立验收（门完整模式 + 真实 `YF-test` 产物重跑 + 重装核对）
-- [ ] 登记表登记 + 合并 develop + 推送
+- [x] **Dev 实现**（feature/REQ-014：`f614f85` + `a8d7e7d`）
+- [x] **REQ-010 的 AC-025 ① 同步改**（契约 + 门）⇒ 门 sha 变化如实登记 + 重跑 REQ-010 完整门
+- [x] 需求方独立验收（门完整模式 + 真实 `YF-test` 产物重跑 + 组合门）
+- [x] 登记表登记（REQ-014 条目 + L-01/L-02 + 门侧纪律）
+- [ ] 合并 develop + 推送 + **重装核对**（装到 `~/.agents/skills/` 后逐文件比对）
